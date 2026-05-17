@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box } from "ink";
 import { Header } from "./components/Header.js";
 import { WelcomeStep } from "./steps/WelcomeStep.js";
@@ -10,7 +10,7 @@ import { ByokStep } from "./steps/ByokStep.js";
 import { ValidateStep } from "./steps/ValidateStep.js";
 import { RepoStep } from "./steps/RepoStep.js";
 import { DoneStep } from "./steps/DoneStep.js";
-import type { OctopusConfig } from "./lib/config.js";
+import { loadConfig, type OctopusConfig } from "./lib/config.js";
 
 /**
  * Linear wizard with conditional skips via useMemo<StepKey[]>. Each step is
@@ -20,9 +20,13 @@ import type { OctopusConfig } from "./lib/config.js";
  * below, and (3) including/excluding it in the sequence useMemo based on
  * environment (self-hosted vs hosted, etc.).
  *
- * Real steps land progressively. Welcome → Auth → Org → Done is shipping now;
- * Provider / Model / BYOK / Validate / Repo install land in follow-up PRs
- * tracked under Workstream 7.
+ * Full flow: Welcome → Auth → Org → Provider → Model → BYOK → Validate →
+ * Repo → Done.
+ *
+ * When `reset` is true (invoked via `octp onboard --reset`) the wizard
+ * pre-seeds answers from the saved config so the user only fixes what's
+ * wrong instead of re-entering everything. Filesystem state (credentials,
+ * byok) is preserved — only prefs are re-prompted.
  */
 export type StepKey =
   | "welcome"
@@ -47,13 +51,30 @@ const STEPS: { key: StepKey; label: string }[] = [
   { key: "done", label: "Done" },
 ];
 
-export function OnboardWizard() {
+export type OnboardWizardProps = {
+  /** When true, pre-seed answers from the saved config. */
+  reset?: boolean;
+};
+
+export function OnboardWizard({ reset = false }: OnboardWizardProps = {}) {
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<Partial<OctopusConfig>>({});
+  const [seeded, setSeeded] = useState(!reset); // skip the seed effect when not in --reset mode
 
   // Conditional sequence. In later phases this returns a subset based on
   // hosted-vs-self-hosted, presence of an existing org, etc.
   const sequence = useMemo<StepKey[]>(() => STEPS.map((s) => s.key), []);
+
+  // One-shot: load existing config and use as initial answers (--reset).
+  useEffect(() => {
+    if (seeded) return;
+    (async () => {
+      const existing = await loadConfig();
+      const { version: _v, onboardedAt: _o, ...prefs } = existing;
+      setAnswers(prefs);
+      setSeeded(true);
+    })();
+  }, [seeded]);
 
   const activeKey = sequence[stepIndex];
   const headerSteps = useMemo(
@@ -66,7 +87,8 @@ export function OnboardWizard() {
     setStepIndex((i) => Math.min(i + 1, sequence.length - 1));
   };
 
-  // Jump back to a specific step key. Used by OrgStep → Auth ("switch org").
+  // Jump back to a specific step key. Used by OrgStep → Auth ("switch org")
+  // and ValidateStep → BYOK ("edit key").
   const jumpTo = (key: StepKey) => {
     const idx = sequence.indexOf(key);
     if (idx >= 0) setStepIndex(idx);

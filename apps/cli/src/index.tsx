@@ -82,11 +82,11 @@ async function main(argv: string[]): Promise<number> {
       console.log("You're set. Try `octp --help` for available commands.");
       return 0;
     }
-    return await renderWizard();
+    return await renderWizard(argv.includes("--reset"));
   }
 
   if (first === "onboard") {
-    return await renderWizard();
+    return await renderWizard(argv.includes("--reset"));
   }
 
   if (KNOWN_SUBCOMMANDS.has(first)) {
@@ -100,9 +100,9 @@ async function main(argv: string[]): Promise<number> {
   return 2;
 }
 
-async function renderWizard(): Promise<number> {
+async function renderWizard(reset = false): Promise<number> {
   await new Promise<void>((resolve) => {
-    const { waitUntilExit } = render(<OnboardWizard />);
+    const { waitUntilExit } = render(<OnboardWizard reset={reset} />);
     waitUntilExit().then(() => resolve());
   });
   return 0;
@@ -114,10 +114,11 @@ export async function ensureOnboardCompleted(argv: string[] = process.argv.slice
   if (process.env.OCTOPUS_NO_ONBOARD === "1") return;
   if (!process.stdin.isTTY) return;
 
+  const reset = argv.includes("--reset") || argv.includes("--reset-onboard");
   const config = await loadConfig();
-  if (isOnboarded(config) && !argv.includes("--reset") && !argv.includes("--reset-onboard")) return;
+  if (isOnboarded(config) && !reset) return;
 
-  await renderWizard();
+  await renderWizard(reset);
 }
 
 // When invoked directly (octp binary), parse argv and dispatch.
