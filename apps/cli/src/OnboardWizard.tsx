@@ -8,6 +8,7 @@ import { ProviderStep } from "./steps/ProviderStep.js";
 import { ModelStep } from "./steps/ModelStep.js";
 import { ByokStep } from "./steps/ByokStep.js";
 import { ValidateStep } from "./steps/ValidateStep.js";
+import { RepoStep } from "./steps/RepoStep.js";
 import { DoneStep } from "./steps/DoneStep.js";
 import type { OctopusConfig } from "./lib/config.js";
 
@@ -31,6 +32,7 @@ export type StepKey =
   | "model"
   | "byok"
   | "validate"
+  | "repo"
   | "done";
 
 const STEPS: { key: StepKey; label: string }[] = [
@@ -41,6 +43,7 @@ const STEPS: { key: StepKey; label: string }[] = [
   { key: "model", label: "Model" },
   { key: "byok", label: "BYOK" },
   { key: "validate", label: "Validate" },
+  { key: "repo", label: "Repo" },
   { key: "done", label: "Done" },
 ];
 
@@ -89,6 +92,7 @@ export function OnboardWizard() {
           onEditKey={() => jumpTo("byok")}
         />
       )}
+      {activeKey === "repo" && <RepoStep onNext={() => next()} />}
       {activeKey === "done" && <DoneStep answers={answers} />}
     </Box>
   );
