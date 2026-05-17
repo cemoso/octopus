@@ -3,6 +3,8 @@
  * (reviewer.ts) and the review lifecycle simulator.
  */
 
+import { extractJson } from "./extract-json";
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type InlineFinding = {
@@ -48,53 +50,47 @@ export function parseFindingsFromJson(reviewBody: string): InlineFinding[] | nul
   const endIdx = reviewBody.indexOf(FINDINGS_END_MARKER);
   if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) return null;
 
-  let block = reviewBody.slice(startIdx + FINDINGS_START_MARKER.length, endIdx).trim();
+  const block = reviewBody.slice(startIdx + FINDINGS_START_MARKER.length, endIdx);
 
-  // Strip markdown code fences if present
-  const fenceMatch = block.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-  if (fenceMatch) {
-    block = fenceMatch[1].trim();
-  }
-
-  try {
-    const parsed = JSON.parse(block);
-    if (!Array.isArray(parsed)) return null;
-
-    const findings: InlineFinding[] = [];
-    for (const item of parsed) {
-      if (
-        typeof item.severity !== "string" ||
-        typeof item.title !== "string" ||
-        typeof item.filePath !== "string" ||
-        typeof item.startLine !== "number" ||
-        typeof item.description !== "string"
-      ) {
-        continue;
-      }
-
-      findings.push({
-        severity: item.severity,
-        title: item.title,
-        filePath: item.filePath.replace(/^`|`$/g, "").replace(/:L\d+.*$/, ""),
-        startLine: item.startLine,
-        endLine: typeof item.endLine === "number" ? item.endLine : item.startLine,
-        category: item.category ?? "",
-        description: item.description,
-        suggestion: item.suggestion ?? "",
-        confidence:
-          typeof item.confidence === "number"
-            ? item.confidence
-            : item.confidence === "HIGH"
-              ? 90
-              : 70,
-      });
+  const parsed = extractJson(block);
+  if (!Array.isArray(parsed)) {
+    if (parsed === null && block.trim().length > 0) {
+      console.warn("[review-dedup] JSON findings block found but failed to parse");
     }
-
-    return findings.length > 0 ? findings : null;
-  } catch {
-    console.warn("[review-dedup] JSON findings block found but failed to parse");
     return null;
   }
+
+  const findings: InlineFinding[] = [];
+  for (const item of parsed) {
+    if (
+      typeof item.severity !== "string" ||
+      typeof item.title !== "string" ||
+      typeof item.filePath !== "string" ||
+      typeof item.startLine !== "number" ||
+      typeof item.description !== "string"
+    ) {
+      continue;
+    }
+
+    findings.push({
+      severity: item.severity,
+      title: item.title,
+      filePath: item.filePath.replace(/^`|`$/g, "").replace(/:L\d+.*$/, ""),
+      startLine: item.startLine,
+      endLine: typeof item.endLine === "number" ? item.endLine : item.startLine,
+      category: item.category ?? "",
+      description: item.description,
+      suggestion: item.suggestion ?? "",
+      confidence:
+        typeof item.confidence === "number"
+          ? item.confidence
+          : item.confidence === "HIGH"
+            ? 90
+            : 70,
+    });
+  }
+
+  return findings.length > 0 ? findings : null;
 }
 
 /** Parse findings from legacy markdown format (#### emoji headings). */
