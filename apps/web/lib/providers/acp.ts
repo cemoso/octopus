@@ -42,12 +42,12 @@ function stripTrailingSlash(s: string): string {
 export const acpProvider: Provider = {
   name: "acp" as never,
   supportsJsonSchema: true,
-  async create(params: AiCreateParams, _apiKey?: string | null): Promise<AiResponse> {
-    // We need an orgId to look up the per-org base URL; ai-router doesn't
-    // currently thread it through. Fall back to env-only config for now;
-    // when ai-router learns to pass orgId to providers, resolveConfig() can
-    // honor it. (See WS5 follow-up.)
-    const config = await resolveConfig(null);
+  async create(
+    params: AiCreateParams,
+    _apiKey?: string | null,
+    orgId?: string,
+  ): Promise<AiResponse> {
+    const config = await resolveConfig(orgId ?? null);
     if (!config) {
       throw new Error(
         "ACPX is not configured. Set ACP_BASE_URL + ACP_API_KEY env vars, or " +

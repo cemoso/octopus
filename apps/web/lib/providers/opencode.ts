@@ -39,8 +39,12 @@ function stripTrailingSlash(s: string): string {
 export const opencodeProvider: Provider = {
   name: "opencode" as never,
   supportsJsonSchema: true,
-  async create(params: AiCreateParams, _apiKey?: string | null): Promise<AiResponse> {
-    const config = await resolveConfig(null);
+  async create(
+    params: AiCreateParams,
+    _apiKey?: string | null,
+    orgId?: string,
+  ): Promise<AiResponse> {
+    const config = await resolveConfig(orgId ?? null);
     if (!config) {
       throw new Error(
         "OpenCode is not configured. Set OPENCODE_BASE_URL + OPENCODE_API_KEY env vars, " +

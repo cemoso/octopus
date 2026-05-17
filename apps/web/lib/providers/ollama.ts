@@ -37,19 +37,17 @@ function stripTrailingSlash(s: string): string {
   return s.replace(/\/+$/, "");
 }
 
-/**
- * The Ollama provider takes an optional second arg for the org id — needed
- * to look up the per-org base URL override. Other providers ignore the
- * second arg; the Provider interface allows callers to pass it conditionally.
- *
- * For callers using the standard Provider#create signature (no orgId arg),
- * the base URL falls back to env / default.
- */
 export const ollamaProvider: Provider = {
   name: "ollama" as never, // widen via the AiProvider union extension below
   supportsJsonSchema: false, // Ollama models can be asked for JSON but don't enforce schema yet
-  async create(params: AiCreateParams, _apiKey?: string | null): Promise<AiResponse> {
-    const baseURL = `${await resolveBaseUrl(null)}/v1`;
+  async create(
+    params: AiCreateParams,
+    _apiKey?: string | null,
+    orgId?: string,
+  ): Promise<AiResponse> {
+    // Honor per-org base URL when ai-router passed the orgId; otherwise
+    // fall back to env / default. Self-hosted often uses the env var.
+    const baseURL = `${await resolveBaseUrl(orgId ?? null)}/v1`;
     const client = new OpenAI({ apiKey: "ollama", baseURL });
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];

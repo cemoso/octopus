@@ -9,13 +9,12 @@ import type { Provider, AiCreateParams, AiResponse } from "./index";
  * subscription-mode Claude Code CLI, or anything else the agent can run.
  *
  * Model ID convention: `local:<actual-model-id>`. The local agent
- * receives the full id and decides how to handle it (typically by
+ * receives the inner id and decides how to handle it (typically by
  * delegating to its own local provider router).
  *
  * Cloud caveat: at least one online agent must be registered for the
- * organisation. If no agent is online, this provider times out and
- * surfaces "no agent available" so the user knows to start `octp agent
- * serve`.
+ * organisation. If no agent is online, this provider fails fast with
+ * "no agent available" so the user knows to start `octp agent serve`.
  */
 
 const POLL_INTERVAL_MS = 2000;
@@ -24,11 +23,14 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 export const localProvider: Provider = {
   name: "local" as never,
   supportsJsonSchema: false, // depends on the agent's underlying provider; advertise conservatively
-  async create(params: AiCreateParams, _apiKey?: string | null): Promise<AiResponse> {
-    const orgId = await getCurrentOrgId();
+  async create(
+    params: AiCreateParams,
+    _apiKey?: string | null,
+    orgId?: string,
+  ): Promise<AiResponse> {
     if (!orgId) {
       throw new Error(
-        "local provider needs an organisation context. ai-router does not yet thread orgId into provider.create(); the local provider can't dispatch without it.",
+        "local provider needs an organisation context. ai-router must pass orgId into provider.create().",
       );
     }
 
@@ -103,14 +105,4 @@ async function pollUntilTerminal(taskId: string, timeoutMs: number) {
     resultUsage: null,
     errorMessage: `Polling timed out after ${timeoutMs}ms`,
   };
-}
-
-/**
- * Placeholder — ai-router does not yet thread orgId into provider.create().
- * Until it does, this provider cannot operate. The throw in create() above
- * is the user-facing message. Threading orgId through is a small follow-up
- * in ai-router.ts (one extra arg per provider call).
- */
-async function getCurrentOrgId(): Promise<string | null> {
-  return null;
 }

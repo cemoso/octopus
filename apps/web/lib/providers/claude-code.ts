@@ -53,8 +53,12 @@ let platformAnthropic: Anthropic | null = null;
 export const claudeCodeProvider: Provider = {
   name: "claude-code" as never,
   supportsJsonSchema: true, // via Anthropic tool-use in api-key mode; subscription mode emits text
-  async create(params: AiCreateParams, _apiKey?: string | null): Promise<AiResponse> {
-    const config = await loadOrgConfig(null);
+  async create(
+    params: AiCreateParams,
+    _apiKey?: string | null,
+    orgId?: string,
+  ): Promise<AiResponse> {
+    const config = await loadOrgConfig(orgId ?? null);
     if (!config) {
       throw new Error(
         "Claude Code is not configured. Set Organization.claudeCodeAuthMode " +
