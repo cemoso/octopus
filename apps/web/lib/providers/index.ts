@@ -3,8 +3,20 @@ import { anthropicProvider } from "./anthropic";
 import { openaiProvider } from "./openai";
 import { googleProvider } from "./google";
 import { ollamaProvider } from "./ollama";
+import { grokProvider } from "./grok";
+import { openrouterProvider } from "./openrouter";
+import { mockProvider } from "./mock";
+import { mockFailProvider } from "./mock-fail";
 
-export type AiProvider = "anthropic" | "openai" | "google" | "ollama";
+export type AiProvider =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "ollama"
+  | "grok"
+  | "openrouter"
+  | "mock"
+  | "mock-fail";
 
 export type AiMessage = {
   role: "user" | "assistant";
@@ -56,6 +68,10 @@ const PROVIDERS: Record<AiProvider, Provider> = {
   openai: openaiProvider,
   google: googleProvider,
   ollama: ollamaProvider,
+  grok: grokProvider,
+  openrouter: openrouterProvider,
+  mock: mockProvider,
+  "mock-fail": mockFailProvider,
 };
 
 export function getProvider(name: AiProvider): Provider {

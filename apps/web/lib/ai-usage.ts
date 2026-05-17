@@ -3,9 +3,18 @@ import { calcCost, getModelPricing } from "./cost";
 import { deductCredits } from "./credits";
 
 type LogAiUsageParams = {
-  // ollama runs locally — zero cost, but logged for visibility and operation
-  // counts. Add new providers here as they land.
-  provider: "anthropic" | "openai" | "google" | "cohere" | "ollama";
+  // ollama runs locally — zero cost. grok / openrouter are BYOK like openai.
+  // mock / mock-fail are test doubles. Add new providers here as they land.
+  provider:
+    | "anthropic"
+    | "openai"
+    | "google"
+    | "cohere"
+    | "ollama"
+    | "grok"
+    | "openrouter"
+    | "mock"
+    | "mock-fail";
   model: string;
   operation: string;
   inputTokens: number;
@@ -20,7 +29,14 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
     // Determine key ownership before recording usage
     const org = await prisma.organization.findUnique({
       where: { id: params.organizationId },
-      select: { anthropicApiKey: true, openaiApiKey: true, cohereApiKey: true, googleApiKey: true },
+      select: {
+        anthropicApiKey: true,
+        openaiApiKey: true,
+        cohereApiKey: true,
+        googleApiKey: true,
+        grokApiKey: true,
+        openrouterApiKey: true,
+      },
     });
 
     if (!org) {
@@ -33,9 +49,13 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
       (params.provider === "openai" && !!org.openaiApiKey) ||
       (params.provider === "google" && !!org.googleApiKey) ||
       (params.provider === "cohere" && !!org.cohereApiKey) ||
-      // Ollama runs on the user's own infrastructure — always "own key" from
-      // a billing perspective, never costs the platform.
-      params.provider === "ollama";
+      (params.provider === "grok" && !!org.grokApiKey) ||
+      (params.provider === "openrouter" && !!org.openrouterApiKey) ||
+      // Ollama / mock / mock-fail never bill the platform: ollama runs on
+      // user infra; mocks are tests.
+      params.provider === "ollama" ||
+      params.provider === "mock" ||
+      params.provider === "mock-fail";
 
     await prisma.aiUsage.create({
       data: {
