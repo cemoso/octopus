@@ -3,6 +3,7 @@ import { Box } from "ink";
 import { Header } from "./components/Header.js";
 import { WelcomeStep } from "./steps/WelcomeStep.js";
 import { AuthStep } from "./steps/AuthStep.js";
+import { OrgStep } from "./steps/OrgStep.js";
 import { DoneStep } from "./steps/DoneStep.js";
 import type { OctopusConfig } from "./lib/config.js";
 
@@ -14,15 +15,16 @@ import type { OctopusConfig } from "./lib/config.js";
  * below, and (3) including/excluding it in the sequence useMemo based on
  * environment (self-hosted vs hosted, etc.).
  *
- * Real steps land progressively. Welcome → Auth → Done is shipping now;
- * Org / Provider / Model / BYOK / Validate / Repo install land in follow-up
- * PRs tracked under Workstream 7.
+ * Real steps land progressively. Welcome → Auth → Org → Done is shipping now;
+ * Provider / Model / BYOK / Validate / Repo install land in follow-up PRs
+ * tracked under Workstream 7.
  */
-export type StepKey = "welcome" | "auth" | "done";
+export type StepKey = "welcome" | "auth" | "org" | "done";
 
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "welcome", label: "Welcome" },
   { key: "auth", label: "Auth" },
+  { key: "org", label: "Org" },
   { key: "done", label: "Done" },
 ];
 
@@ -45,11 +47,18 @@ export function OnboardWizard() {
     setStepIndex((i) => Math.min(i + 1, sequence.length - 1));
   };
 
+  // Jump back to a specific step key. Used by OrgStep → Auth ("switch org").
+  const jumpTo = (key: StepKey) => {
+    const idx = sequence.indexOf(key);
+    if (idx >= 0) setStepIndex(idx);
+  };
+
   return (
     <Box flexDirection="column" paddingY={1}>
       <Header steps={headerSteps} activeKey={activeKey} />
       {activeKey === "welcome" && <WelcomeStep onNext={() => next()} />}
       {activeKey === "auth" && <AuthStep onNext={(p) => next(p)} />}
+      {activeKey === "org" && <OrgStep onNext={() => next()} onSwitchOrg={() => jumpTo("auth")} />}
       {activeKey === "done" && <DoneStep answers={answers} />}
     </Box>
   );
