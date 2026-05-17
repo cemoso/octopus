@@ -113,6 +113,13 @@ model Organization {
   acpApiKey            String?
   opencodeBaseUrl      String?
   opencodeApiKey       String?
+  // Claude Code — Anthropic's coding-agent CLI. Two auth modes:
+  //   "subscription" — Octopus shells out to `claude`; auth lives in the CLI
+  //   "api-key"      — Octopus calls the Anthropic API with claudeCodeApiKey
+  // anthropicApiKey is the fallback when claudeCodeApiKey is null in api-key mode.
+  // Migration: 20260517040000_add_claude_code_config.
+  claudeCodeAuthMode   String?  // "subscription" | "api-key"
+  claudeCodeApiKey     String?
   defaultModelId       String?
   defaultEmbedModelId  String?
   monthlySpendLimitUsd    Float?

@@ -16,6 +16,7 @@ type LogAiUsageParams = {
     | "openrouter"
     | "acp"
     | "opencode"
+    | "claude-code"
     | "mock"
     | "mock-fail";
   model: string;
@@ -58,6 +59,9 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
       (params.provider === "openrouter" && !!org.openrouterApiKey) ||
       (params.provider === "acp" && !!org.acpApiKey) ||
       (params.provider === "opencode" && !!org.opencodeApiKey) ||
+      // Claude Code in api-key mode: own key. In subscription mode the CLI
+      // carries its own auth — also counts as own-key (never bills platform).
+      params.provider === "claude-code" ||
       // Ollama / mock / mock-fail never bill the platform: ollama runs on
       // user infra; mocks are tests.
       params.provider === "ollama" ||

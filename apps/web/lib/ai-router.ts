@@ -20,6 +20,7 @@ const PROVIDER_FALLBACK: Record<string, AiProvider> = {
   "openrouter/": "openrouter", // OpenRouter uses vendor/model IDs (e.g. openai/gpt-4o)
   "acp:": "acp",
   "opencode:": "opencode",
+  "claude-code:": "claude-code",
   "mock-fail-": "mock-fail",
   "mock-": "mock",
 };
@@ -107,6 +108,7 @@ function getOrgKeyForProvider(keys: OrgKeys, provider: AiProvider): string | nul
     // call; the apiKey arg here would be redundant, so null.
     case "acp":
     case "opencode":
+    case "claude-code":
       return null;
     // Test doubles take no key.
     case "mock":
