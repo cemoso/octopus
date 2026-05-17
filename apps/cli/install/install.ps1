@@ -1,14 +1,16 @@
-# Octopus onboarding installer (Windows / PowerShell).
+# Octopus CLI installer (Windows / PowerShell).
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli-onboard/install/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.ps1 | iex
 #
 # What it does:
 #   1. Detects your CPU architecture
-#   2. Fetches the latest octp-onboard release from GitHub
+#   2. Fetches the latest `octp-v*` release from GitHub
 #   3. Downloads the matching native .exe
-#   4. Installs it to $env:USERPROFILE\.octopus\bin (or $env:OCTOPUS_INSTALL_DIR)
+#   4. Installs it to $env:USERPROFILE\.octopus\bin\octp.exe (or $env:OCTOPUS_INSTALL_DIR)
 #   5. Adds the install directory to your user PATH (idempotent)
+#
+# After install, run `octp` to launch the first-run onboarding wizard.
 #
 # Environment variables:
 #   $env:OCTOPUS_INSTALL_DIR   Override install directory
@@ -19,14 +21,14 @@ $ErrorActionPreference = "Stop"
 
 $Repo        = if ($env:OCTOPUS_INSTALL_REPO) { $env:OCTOPUS_INSTALL_REPO } else { "octopusreview/octopus" }
 $InstallDir  = if ($env:OCTOPUS_INSTALL_DIR)  { $env:OCTOPUS_INSTALL_DIR }  else { Join-Path $env:USERPROFILE ".octopus\bin" }
-$BinaryName  = "octp-onboard.exe"
+$BinaryName  = "octp.exe"
 
 # ── Step 1: arch ─────────────────────────────────────────────────────────────
 
 # We only ship x64 today. ARM64 Windows can fall back to x64 emulation; if a
 # native ARM64 build is added later, expand this map.
 $arch = "x64"
-$asset = "octp-onboard-windows-${arch}.exe"
+$asset = "octp-windows-${arch}.exe"
 
 # ── Step 2: resolve release tag ──────────────────────────────────────────────
 
@@ -34,11 +36,11 @@ if ($env:OCTOPUS_INSTALL_TAG) {
   $tag = $env:OCTOPUS_INSTALL_TAG
   Write-Host "Installing pinned version: $tag"
 } else {
-  Write-Host "Looking up latest octp-onboard release on $Repo ..."
-  $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=20" -Headers @{ "User-Agent" = "octp-onboard-installer" }
-  $tag = ($releases | Where-Object { $_.tag_name -like "cli-onboard-v*" } | Select-Object -First 1).tag_name
+  Write-Host "Looking up latest octp release on $Repo ..."
+  $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=20" -Headers @{ "User-Agent" = "octp-installer" }
+  $tag = ($releases | Where-Object { $_.tag_name -like "octp-v*" } | Select-Object -First 1).tag_name
   if (-not $tag) {
-    Write-Error "Could not find any cli-onboard-v* release on $Repo. Pin a tag with `$env:OCTOPUS_INSTALL_TAG = 'cli-onboard-v0.X.Y'`."
+    Write-Error "Could not find any octp-v* release on $Repo. Pin a tag with `$env:OCTOPUS_INSTALL_TAG = 'octp-v0.X.Y'`."
     exit 1
   }
   Write-Host "Latest release: $tag"
@@ -60,7 +62,7 @@ try {
 }
 
 Write-Host ""
-Write-Host "Installed octp-onboard → $target"
+Write-Host "Installed octp → $target"
 
 # ── Step 4: PATH ─────────────────────────────────────────────────────────────
 
@@ -71,9 +73,9 @@ if ($pathEntries -notcontains $InstallDir) {
   [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
   Write-Host "Added $InstallDir to your user PATH."
   Write-Host ""
-  Write-Host "Open a new PowerShell window, then run: octp-onboard"
+  Write-Host "Open a new PowerShell window, then run: octp"
 } else {
   Write-Host "$InstallDir is already on your PATH."
   Write-Host ""
-  Write-Host "Get started: octp-onboard"
+  Write-Host "Get started: octp"
 }
