@@ -16,6 +16,11 @@ export async function register() {
       await recoverCommunityReviewJobs();
       await cleanupExpiredCommunityReviewJobs();
 
+      // Daily release-cache refresh (self-hosted update page reads from this).
+      // Cron 04:00 UTC — well after typical release windows but before most
+      // working hours so users see fresh data when they check their settings.
+      await boss.schedule("refresh-release-cache", "0 4 * * *");
+
       // Periodic TTL cleanup (every hour)
       const cleanupTimer = setInterval(() => {
         cleanupExpiredCommunityReviewJobs().catch((err) =>

@@ -6,6 +6,8 @@ import {
   type LargeReviewResultJob,
 } from "./large-review-result";
 import { processCommunityReview, type CommunityReviewJobData } from "./community-review";
+import { fetchLatest } from "@/app/api/releases/latest/route";
+import { prisma } from "@octopus/db";
 import type { QueueConfig } from "./queue";
 
 export interface WelcomeEmailJob {
@@ -75,5 +77,30 @@ export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promis
     },
   );
 
-  console.log("[queue] Workers registered: welcome-email, process-review, post-large-review-result, community-review");
+  // Daily release-cache refresh. The /api/releases/latest route reads
+  // SystemConfig.latestRelease; this worker keeps it warm so the self-hosted
+  // Updates page is a sub-millisecond local lookup instead of a rate-limited
+  // GitHub API call on every render.
+  await boss.work("refresh-release-cache", async (jobs) => {
+    for (const job of jobs) {
+      try {
+        const fresh = await fetchLatest();
+        if (!fresh) {
+          console.warn(`[queue] refresh-release-cache ${job.id}: fetch returned null`);
+          continue;
+        }
+        await prisma.systemConfig.upsert({
+          where: { id: "singleton" },
+          create: { id: "singleton", latestRelease: fresh as unknown as object },
+          update: { latestRelease: fresh as unknown as object },
+        });
+        console.log(`[queue] refresh-release-cache ${job.id}: cached ${fresh.tagName}`);
+      } catch (err) {
+        console.error(`[queue] refresh-release-cache failed (job ${job.id}):`, err);
+        throw err;
+      }
+    }
+  });
+
+  console.log("[queue] Workers registered: welcome-email, process-review, post-large-review-result, community-review, refresh-release-cache");
 }
