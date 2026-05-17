@@ -6,6 +6,7 @@ import { AuthStep } from "./steps/AuthStep.js";
 import { OrgStep } from "./steps/OrgStep.js";
 import { ProviderStep } from "./steps/ProviderStep.js";
 import { ModelStep } from "./steps/ModelStep.js";
+import { ByokStep } from "./steps/ByokStep.js";
 import { DoneStep } from "./steps/DoneStep.js";
 import type { OctopusConfig } from "./lib/config.js";
 
@@ -21,7 +22,7 @@ import type { OctopusConfig } from "./lib/config.js";
  * Provider / Model / BYOK / Validate / Repo install land in follow-up PRs
  * tracked under Workstream 7.
  */
-export type StepKey = "welcome" | "auth" | "org" | "provider" | "model" | "done";
+export type StepKey = "welcome" | "auth" | "org" | "provider" | "model" | "byok" | "done";
 
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "welcome", label: "Welcome" },
@@ -29,6 +30,7 @@ const STEPS: { key: StepKey; label: string }[] = [
   { key: "org", label: "Org" },
   { key: "provider", label: "Provider" },
   { key: "model", label: "Model" },
+  { key: "byok", label: "BYOK" },
   { key: "done", label: "Done" },
 ];
 
@@ -66,6 +68,9 @@ export function OnboardWizard() {
       {activeKey === "provider" && <ProviderStep onNext={(p) => next(p)} />}
       {activeKey === "model" && (
         <ModelStep provider={answers.provider ?? ""} onNext={(p) => next(p)} />
+      )}
+      {activeKey === "byok" && (
+        <ByokStep provider={answers.provider ?? ""} onNext={() => next()} />
       )}
       {activeKey === "done" && <DoneStep answers={answers} />}
     </Box>
