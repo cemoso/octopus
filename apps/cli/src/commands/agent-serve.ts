@@ -77,12 +77,26 @@ export async function agentServeCommand(argv: string[]): Promise<number> {
   const { agentId } = reg.data;
   console.log(`✓ Registered as agent ${agentId}`);
 
-  // Cleanup on SIGINT
+  // Shutdown: clear timers, wait briefly for any in-flight task to post its
+  // result so the server doesn't see a hung "claimed" task, then disconnect.
+  // The shuttingDown flag is checked inside the poll/heartbeat loops so they
+  // exit before this function calls process.exit().
   let shuttingDown = false;
+  let inFlightTask: Promise<void> | null = null;
+  const SHUTDOWN_GRACE_MS = 5000;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.log("\nShutting down — sending disconnect …");
+    if (heartbeat) clearInterval(heartbeat);
+    // Give the in-flight task up to SHUTDOWN_GRACE_MS to post its result.
+    if (inFlightTask) {
+      await Promise.race([
+        inFlightTask,
+        sleep(SHUTDOWN_GRACE_MS),
+      ]).catch(() => {});
+    }
     await postJson(`${creds.baseUrl}/api/agent/disconnect`, { agentId }, creds.token).catch(() => {});
     process.exit(0);
   };
@@ -90,7 +104,7 @@ export async function agentServeCommand(argv: string[]): Promise<number> {
   process.on("SIGTERM", shutdown);
 
   // Heartbeat loop
-  const heartbeat = setInterval(async () => {
+  heartbeat = setInterval(async () => {
     if (shuttingDown) return;
     await postJson(`${creds.baseUrl}/api/agent/heartbeat`, { agentId }, creds.token).catch((e) => {
       if (verbose) console.error("[heartbeat]", e instanceof Error ? e.message : String(e));
@@ -104,13 +118,20 @@ export async function agentServeCommand(argv: string[]): Promise<number> {
     try {
       const tasks = await fetchTasks(creds, agentId);
       for (const task of tasks) {
+        if (shuttingDown) break;
         if (verbose) console.log(`  task ${task.id} model=${task.modelId}`);
-        await runOneTask(creds, task, verbose);
+        // Track the in-flight task so shutdown can await it.
+        inFlightTask = runOneTask(creds, agentId, task, verbose);
+        try {
+          await inFlightTask;
+        } finally {
+          inFlightTask = null;
+        }
       }
     } catch (e) {
       if (verbose) console.error("[poll]", e instanceof Error ? e.message : String(e));
     }
-    await sleep(POLL_INTERVAL_MS);
+    if (!shuttingDown) await sleep(POLL_INTERVAL_MS);
   }
 
   return 0;
@@ -150,7 +171,12 @@ async function fetchTasks(creds: Credentials, agentId: string): Promise<LlmTask[
   return res.data.tasks;
 }
 
-async function runOneTask(creds: Credentials, task: LlmTask, verbose: boolean): Promise<void> {
+async function runOneTask(
+  creds: Credentials,
+  agentId: string,
+  task: LlmTask,
+  verbose: boolean,
+): Promise<void> {
   const completeUrl = `${creds.baseUrl}/api/agent/llm-tasks/${task.id}/complete`;
   try {
     if (!task.modelId.startsWith("ollama:") && !task.modelId.includes(":")) {
@@ -175,9 +201,14 @@ async function runOneTask(creds: Credentials, task: LlmTask, verbose: boolean): 
     const body = (await response.json()) as OllamaResponse;
     const text = body.choices?.[0]?.message?.content ?? "";
 
+    // agentId is REQUIRED by the server's /complete endpoint: it verifies
+    // the caller is the agent that originally claimed the task and returns
+    // 403 on mismatch, preventing one agent from overwriting another's
+    // in-flight result.
     await postJson(
       completeUrl,
       {
+        agentId,
         text,
         usage: {
           inputTokens: body.usage?.prompt_tokens ?? 0,
@@ -190,7 +221,7 @@ async function runOneTask(creds: Credentials, task: LlmTask, verbose: boolean): 
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`  ✗ failed ${task.id}: ${msg}`);
-    await postJson(completeUrl, { error: msg }, creds.token).catch(() => {});
+    await postJson(completeUrl, { agentId, error: msg }, creds.token).catch(() => {});
   }
 }
 
