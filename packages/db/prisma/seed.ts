@@ -725,7 +725,7 @@ async function main() {
     { modelId: "o3", displayName: "OpenAI o3", provider: "openai", category: "llm", inputPrice: 10, outputPrice: 40, sortOrder: 9 },
     { modelId: "o3-mini", displayName: "OpenAI o3 Mini", provider: "openai", category: "llm", inputPrice: 1.1, outputPrice: 4.4, sortOrder: 10 },
     { modelId: "o4-mini", displayName: "OpenAI o4 Mini", provider: "openai", category: "llm", inputPrice: 1.1, outputPrice: 4.4, sortOrder: 11 },
-    { modelId: "codex-mini-latest", displayName: "Codex Mini", provider: "openai", category: "llm", inputPrice: 1.5, outputPrice: 6, sortOrder: 12 },
+    { modelId: "codex-mini-latest", displayName: "Codex Mini", provider: "openai", category: "llm", inputPrice: 1.5, outputPrice: 6, sortOrder: 12, isPlatformDefault: true },
     // Ollama (local — runs on the user's machine, zero cost)
     { modelId: "ollama:qwen2.5-coder:32b", displayName: "Qwen 2.5 Coder 32B (Ollama)", provider: "ollama", category: "llm", inputPrice: 0, outputPrice: 0, sortOrder: 20 },
     { modelId: "ollama:llama3.3", displayName: "Llama 3.3 (Ollama)", provider: "ollama", category: "llm", inputPrice: 0, outputPrice: 0, sortOrder: 21 },
