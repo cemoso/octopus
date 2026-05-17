@@ -94,6 +94,7 @@ import { logAiUsage } from "@/lib/ai-usage";
 import { getReviewModel } from "@/lib/ai-client";
 import { createAiMessage } from "@/lib/ai-router";
 import { isOrgOverSpendLimit } from "@/lib/cost";
+import { findingSignature, mergeFindingsBySignature } from "@/lib/finding-merge";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -2159,12 +2160,12 @@ Rules:
     }
 
     // Step 6: Persist parsed findings as ReviewIssue records (ALL findings, not just capped/inline)
-    // Clear previous findings first (re-review idempotency)
-    await prisma.reviewIssue.deleteMany({
-      where: { pullRequestId: pr.id },
-    });
-
-    // Persist all parsed findings (pre-filter) for dashboard/scoring
+    //
+    // Cross-review merge: before wiping prior rows, snapshot any user-triage
+    // state (acknowledgedAt, feedback*, tracker IDs, original createdAt) and
+    // re-apply it to the new rows whose content-derived signature matches.
+    // Without this, every re-review on a PR loses the developer's "I already
+    // looked at this" state and reopens findings they previously triaged.
     const allPersistFindings = allParsedFindings;
     if (allPersistFindings.length > 0) {
       const severityMap: Record<string, string> = {
@@ -2175,18 +2176,125 @@ Rules:
         "💡": "low",
       };
 
+      // Load prior issues + their inherited fields.
+      const priors = await prisma.reviewIssue.findMany({
+        where: { pullRequestId: pr.id },
+        select: {
+          signature: true,
+          acknowledgedAt: true,
+          feedback: true,
+          feedbackAt: true,
+          feedbackBy: true,
+          linearIssueId: true,
+          linearIssueUrl: true,
+          jiraIssueKey: true,
+          jiraIssueUrl: true,
+          githubIssueNumber: true,
+          githubIssueUrl: true,
+          githubCommentId: true,
+          createdAt: true,
+        },
+      });
+
+      // Project new findings into the shape we'll persist. Signature is
+      // computed from filePath + category + title (see lib/finding-merge.ts
+      // for the canonical hashing rule).
+      type PersistRow = {
+        signature: string | null;
+        title: string;
+        description: string;
+        severity: string;
+        filePath: string | null;
+        lineNumber: number | null;
+        confidence: string | null;
+        // Inherited fields (default to null/undefined; merge fills them in)
+        acknowledgedAt?: Date | null;
+        feedback?: string | null;
+        feedbackAt?: Date | null;
+        feedbackBy?: string | null;
+        linearIssueId?: string | null;
+        linearIssueUrl?: string | null;
+        jiraIssueKey?: string | null;
+        jiraIssueUrl?: string | null;
+        githubIssueNumber?: number | null;
+        githubIssueUrl?: string | null;
+        githubCommentId?: bigint | null;
+        createdAt?: Date;
+      };
+
+      const current: PersistRow[] = allPersistFindings.map((f) => ({
+        signature: findingSignature({
+          filePath: f.filePath || "",
+          category: f.category || "",
+          title: f.title || "",
+        }),
+        title: f.title.replace(/^(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*—\s*/i, "").trim(),
+        description: f.description || f.category,
+        severity: severityMap[f.severity] ?? "medium",
+        filePath: f.filePath || null,
+        lineNumber: f.startLine || null,
+        confidence: f.confidence ? String(f.confidence) : null,
+      }));
+
+      const { merged, inherited, added, obsoleted } = mergeFindingsBySignature({
+        prior: priors as PersistRow[],
+        current,
+        inherit: (next, prior) => ({
+          ...next,
+          acknowledgedAt: prior.acknowledgedAt,
+          feedback: prior.feedback,
+          feedbackAt: prior.feedbackAt,
+          feedbackBy: prior.feedbackBy,
+          linearIssueId: prior.linearIssueId,
+          linearIssueUrl: prior.linearIssueUrl,
+          jiraIssueKey: prior.jiraIssueKey,
+          jiraIssueUrl: prior.jiraIssueUrl,
+          githubIssueNumber: prior.githubIssueNumber,
+          githubIssueUrl: prior.githubIssueUrl,
+          githubCommentId: prior.githubCommentId,
+          createdAt: prior.createdAt,
+        }),
+      });
+
+      // Delete + insert is preserved (Prisma `createMany` does not honor
+      // composite uniques across upsert). The inheritance is now baked into
+      // the new rows, so the row IDs change but the user-visible state
+      // persists.
+      await prisma.reviewIssue.deleteMany({ where: { pullRequestId: pr.id } });
+
       await prisma.reviewIssue.createMany({
-        data: allPersistFindings.map((f) => ({
-          title: f.title.replace(/^(CRITICAL|HIGH|MEDIUM|LOW|INFO)\s*—\s*/i, "").trim(),
-          description: f.description || f.category,
-          severity: severityMap[f.severity] ?? "medium",
-          filePath: f.filePath || null,
-          lineNumber: f.startLine || null,
-          confidence: f.confidence ? String(f.confidence) : null,
+        data: merged.map((row) => ({
+          title: row.title,
+          description: row.description,
+          severity: row.severity,
+          filePath: row.filePath,
+          lineNumber: row.lineNumber,
+          confidence: row.confidence,
+          signature: row.signature,
+          // Inherited (will be undefined on first-review findings; Prisma
+          // treats undefined as "not set" so defaults take over)
+          acknowledgedAt: row.acknowledgedAt ?? undefined,
+          feedback: row.feedback ?? undefined,
+          feedbackAt: row.feedbackAt ?? undefined,
+          feedbackBy: row.feedbackBy ?? undefined,
+          linearIssueId: row.linearIssueId ?? undefined,
+          linearIssueUrl: row.linearIssueUrl ?? undefined,
+          jiraIssueKey: row.jiraIssueKey ?? undefined,
+          jiraIssueUrl: row.jiraIssueUrl ?? undefined,
+          githubIssueNumber: row.githubIssueNumber ?? undefined,
+          githubIssueUrl: row.githubIssueUrl ?? undefined,
+          githubCommentId: row.githubCommentId ?? undefined,
+          createdAt: row.createdAt ?? undefined,
           pullRequestId: pr.id,
         })),
       });
-      console.log(`[reviewer] Saved ${allPersistFindings.length} review issues to DB`);
+      console.log(
+        `[reviewer] Saved ${merged.length} review issues to DB ` +
+          `(inherited=${inherited} added=${added} obsoleted=${obsoleted})`,
+      );
+    } else {
+      // Empty current findings: wipe priors (zero findings means the review is clean).
+      await prisma.reviewIssue.deleteMany({ where: { pullRequestId: pr.id } });
     }
 
     // Step 7: Mark as completed + update check run
