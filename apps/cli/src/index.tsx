@@ -121,11 +121,22 @@ export async function ensureOnboardCompleted(argv: string[] = process.argv.slice
 }
 
 // When invoked directly (octp binary), parse argv and dispatch.
+// Path-suffix sniffing was fragile across platforms (Windows backslash,
+// .exe vs no .exe, custom rename, install path). The ES-module-standard
+// `import.meta.url` equality check works the same way on every platform
+// and correctly distinguishes "this file is the entrypoint" from "this
+// file was imported by something else."
+//
+// On Bun's --compile binary, `import.meta.url` is a file://... URL pointing
+// at the compiled entry; comparing against pathToFileURL(process.argv[1])
+// (the executable Node-style first arg) matches when invoked directly and
+// not when imported as a library.
+import { pathToFileURL } from "node:url";
+
 const isDirectInvocation =
   typeof process !== "undefined" &&
-  (process.argv[1]?.endsWith("cli/dist/index.js") ||
-    process.argv[1]?.endsWith("/octp") ||
-    process.argv[1]?.endsWith("\\octp.exe"));
+  typeof process.argv?.[1] === "string" &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isDirectInvocation) {
   main(process.argv.slice(2))

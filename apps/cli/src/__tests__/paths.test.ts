@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   ensureOctopusHome,
   getByokPath,
@@ -30,7 +30,9 @@ describe("getOctopusHome", () => {
   it("falls back to ~/.octopus when OCTOPUS_HOME is unset", () => {
     delete process.env.OCTOPUS_HOME;
     const home = getOctopusHome();
-    expect(home.endsWith("/.octopus")).toBe(true);
+    // Use platform-aware separator instead of "/.octopus" so the test
+    // also passes on Windows where path.join produces "\.octopus".
+    expect(home.endsWith(`${sep}.octopus`)).toBe(true);
   });
 });
 
