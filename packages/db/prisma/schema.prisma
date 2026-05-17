@@ -107,6 +107,12 @@ model Organization {
   // BYOK keys for the new providers added alongside the registry refactor.
   grokApiKey           String?
   openrouterApiKey     String?
+  // ACPX and OpenCode are self-hosted gateways — need both a base URL and
+  // a bearer token. Migration: 20260517030000_add_acp_opencode_config.
+  acpBaseUrl           String?
+  acpApiKey            String?
+  opencodeBaseUrl      String?
+  opencodeApiKey       String?
   defaultModelId       String?
   defaultEmbedModelId  String?
   monthlySpendLimitUsd    Float?
