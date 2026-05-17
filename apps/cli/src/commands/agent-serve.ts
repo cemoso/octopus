@@ -23,6 +23,10 @@ import { getJson, postJson } from "../lib/api.js";
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const POLL_INTERVAL_MS = 2000;
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+// Bound Ollama calls — without this a stuck model load or hung GPU hangs the
+// agent indefinitely, which then misses heartbeats. Override via
+// OCTP_OLLAMA_TIMEOUT_MS for large models that legitimately need more time.
+const OLLAMA_TIMEOUT_MS = Number(process.env.OCTP_OLLAMA_TIMEOUT_MS ?? 5 * 60_000);
 
 type AgentRegisterResponse = {
   agentId: string;
@@ -114,6 +118,7 @@ export async function agentServeCommand(argv: string[]): Promise<number> {
 
   // Polling loop
   console.log(`Polling for tasks every ${POLL_INTERVAL_MS / 1000}s. Ctrl+C to stop.`);
+  let exitCode = 0;
   while (!shuttingDown) {
     try {
       const tasks = await fetchTasks(creds, agentId);
@@ -129,12 +134,22 @@ export async function agentServeCommand(argv: string[]): Promise<number> {
         }
       }
     } catch (e) {
+      // Auth failure won't recover by retrying — surface and exit so a
+      // revoked or expired token doesn't generate an endless 401 stream.
+      if (e instanceof AuthError) {
+        console.error(`\nAuthentication rejected (HTTP ${e.status}): ${e.message}`);
+        console.error("Run `octp` to re-authenticate, then start the agent again.");
+        exitCode = 2;
+        break;
+      }
       if (verbose) console.error("[poll]", e instanceof Error ? e.message : String(e));
     }
     if (!shuttingDown) await sleep(POLL_INTERVAL_MS);
   }
 
-  return 0;
+  if (heartbeat) clearInterval(heartbeat);
+  await postJson(`${creds.baseUrl}/api/agent/disconnect`, { agentId }, creds.token).catch(() => {});
+  return exitCode;
 }
 
 async function checkOllama(): Promise<boolean> {
@@ -162,12 +177,26 @@ async function registerAgent(creds: Credentials, agentName: string) {
   );
 }
 
+// Raised by fetchTasks on auth failure (401/403). The polling loop checks
+// for this and exits — retrying a revoked or expired token would never
+// recover and would spam the server indefinitely.
+class AuthError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(message);
+  }
+}
+
 async function fetchTasks(creds: Credentials, agentId: string): Promise<LlmTask[]> {
   const res = await getJson<{ tasks: LlmTask[] }>(
     `${creds.baseUrl}/api/agent/llm-tasks?agentId=${encodeURIComponent(agentId)}`,
     { headers: { authorization: `Bearer ${creds.token}` } },
   );
-  if (!res.ok) throw new Error(res.error);
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      throw new AuthError(res.status, res.error);
+    }
+    throw new Error(res.error);
+  }
   return res.data.tasks;
 }
 
@@ -190,11 +219,24 @@ async function runOneTask(
     if (task.system) messages.push({ role: "system", content: task.system });
     for (const m of task.messages) messages.push({ role: m.role, content: m.content });
 
-    const response = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: "Bearer ollama" },
-      body: JSON.stringify({ model, max_tokens: task.maxTokens, messages, stream: false }),
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(`${OLLAMA_BASE_URL}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer ollama" },
+        body: JSON.stringify({ model, max_tokens: task.maxTokens, messages, stream: false }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (controller.signal.aborted) {
+        throw new Error(`Ollama timed out after ${Math.round(OLLAMA_TIMEOUT_MS / 1000)}s`);
+      }
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) {
       throw new Error(`Ollama returned ${response.status}: ${(await response.text()).slice(0, 200)}`);
     }
