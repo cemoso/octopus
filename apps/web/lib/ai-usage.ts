@@ -3,8 +3,9 @@ import { calcCost, getModelPricing } from "./cost";
 import { deductCredits } from "./credits";
 
 type LogAiUsageParams = {
-  // ollama runs locally — zero cost. grok / openrouter are BYOK like openai.
-  // mock / mock-fail are test doubles. Add new providers here as they land.
+  // ollama runs locally — zero cost. grok / openrouter / acp / opencode are
+  // BYOK like openai. mock / mock-fail are test doubles. Add new providers
+  // here as they land.
   provider:
     | "anthropic"
     | "openai"
@@ -13,6 +14,8 @@ type LogAiUsageParams = {
     | "ollama"
     | "grok"
     | "openrouter"
+    | "acp"
+    | "opencode"
     | "mock"
     | "mock-fail";
   model: string;
@@ -36,6 +39,8 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
         googleApiKey: true,
         grokApiKey: true,
         openrouterApiKey: true,
+        acpApiKey: true,
+        opencodeApiKey: true,
       },
     });
 
@@ -51,6 +56,8 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
       (params.provider === "cohere" && !!org.cohereApiKey) ||
       (params.provider === "grok" && !!org.grokApiKey) ||
       (params.provider === "openrouter" && !!org.openrouterApiKey) ||
+      (params.provider === "acp" && !!org.acpApiKey) ||
+      (params.provider === "opencode" && !!org.opencodeApiKey) ||
       // Ollama / mock / mock-fail never bill the platform: ollama runs on
       // user infra; mocks are tests.
       params.provider === "ollama" ||

@@ -7,6 +7,8 @@ import { grokProvider } from "./grok";
 import { openrouterProvider } from "./openrouter";
 import { mockProvider } from "./mock";
 import { mockFailProvider } from "./mock-fail";
+import { acpProvider } from "./acp";
+import { opencodeProvider } from "./opencode";
 
 export type AiProvider =
   | "anthropic"
@@ -15,6 +17,8 @@ export type AiProvider =
   | "ollama"
   | "grok"
   | "openrouter"
+  | "acp"
+  | "opencode"
   | "mock"
   | "mock-fail";
 
@@ -70,6 +74,8 @@ const PROVIDERS: Record<AiProvider, Provider> = {
   ollama: ollamaProvider,
   grok: grokProvider,
   openrouter: openrouterProvider,
+  acp: acpProvider,
+  opencode: opencodeProvider,
   mock: mockProvider,
   "mock-fail": mockFailProvider,
 };

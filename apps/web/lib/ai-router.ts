@@ -18,6 +18,8 @@ const PROVIDER_FALLBACK: Record<string, AiProvider> = {
   "ollama:": "ollama", // namespaced models like "ollama:qwen2.5-coder:32b"
   "grok-": "grok",
   "openrouter/": "openrouter", // OpenRouter uses vendor/model IDs (e.g. openai/gpt-4o)
+  "acp:": "acp",
+  "opencode:": "opencode",
   "mock-fail-": "mock-fail",
   "mock-": "mock",
 };
@@ -100,6 +102,12 @@ function getOrgKeyForProvider(keys: OrgKeys, provider: AiProvider): string | nul
     // Ollama runs locally — no API key. The base URL override is read by
     // the provider itself from prisma; we just pass null here.
     case "ollama": return null;
+    // ACPX and OpenCode are gateway providers that read both their base
+    // URL and API key from prisma directly inside the provider.create()
+    // call; the apiKey arg here would be redundant, so null.
+    case "acp":
+    case "opencode":
+      return null;
     // Test doubles take no key.
     case "mock":
     case "mock-fail":
