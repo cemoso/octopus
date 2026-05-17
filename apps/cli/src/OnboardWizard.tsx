@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { Box } from "ink";
 import { Header } from "./components/Header.js";
 import { WelcomeStep } from "./steps/WelcomeStep.js";
+import { AuthStep } from "./steps/AuthStep.js";
 import { DoneStep } from "./steps/DoneStep.js";
 import type { OctopusConfig } from "./lib/config.js";
 
@@ -13,12 +14,15 @@ import type { OctopusConfig } from "./lib/config.js";
  * below, and (3) including/excluding it in the sequence useMemo based on
  * environment (self-hosted vs hosted, etc.).
  *
- * Phase 1: just Welcome → Done. Real steps land in follow-up PRs.
+ * Real steps land progressively. Welcome → Auth → Done is shipping now;
+ * Org / Provider / Model / BYOK / Validate / Repo install land in follow-up
+ * PRs tracked under Workstream 7.
  */
-export type StepKey = "welcome" | "done";
+export type StepKey = "welcome" | "auth" | "done";
 
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "welcome", label: "Welcome" },
+  { key: "auth", label: "Auth" },
   { key: "done", label: "Done" },
 ];
 
@@ -45,6 +49,7 @@ export function OnboardWizard() {
     <Box flexDirection="column" paddingY={1}>
       <Header steps={headerSteps} activeKey={activeKey} />
       {activeKey === "welcome" && <WelcomeStep onNext={() => next()} />}
+      {activeKey === "auth" && <AuthStep onNext={(p) => next(p)} />}
       {activeKey === "done" && <DoneStep answers={answers} />}
     </Box>
   );
