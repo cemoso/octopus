@@ -10,6 +10,7 @@ import { mockFailProvider } from "./mock-fail";
 import { acpProvider } from "./acp";
 import { opencodeProvider } from "./opencode";
 import { claudeCodeProvider } from "./claude-code";
+import { localProvider } from "./local";
 
 export type AiProvider =
   | "anthropic"
@@ -21,6 +22,7 @@ export type AiProvider =
   | "acp"
   | "opencode"
   | "claude-code"
+  | "local"
   | "mock"
   | "mock-fail";
 
@@ -79,6 +81,7 @@ const PROVIDERS: Record<AiProvider, Provider> = {
   acp: acpProvider,
   opencode: opencodeProvider,
   "claude-code": claudeCodeProvider,
+  local: localProvider,
   mock: mockProvider,
   "mock-fail": mockFailProvider,
 };

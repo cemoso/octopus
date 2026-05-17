@@ -17,6 +17,7 @@ type LogAiUsageParams = {
     | "acp"
     | "opencode"
     | "claude-code"
+    | "local"
     | "mock"
     | "mock-fail";
   model: string;
@@ -62,8 +63,9 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
       // Claude Code in api-key mode: own key. In subscription mode the CLI
       // carries its own auth — also counts as own-key (never bills platform).
       params.provider === "claude-code" ||
-      // Ollama / mock / mock-fail never bill the platform: ollama runs on
-      // user infra; mocks are tests.
+      // Local-agent bridge dispatches to user infrastructure — never bills
+      // the platform. Ollama / mock / mock-fail same reasoning.
+      params.provider === "local" ||
       params.provider === "ollama" ||
       params.provider === "mock" ||
       params.provider === "mock-fail";

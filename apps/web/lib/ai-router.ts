@@ -21,6 +21,7 @@ const PROVIDER_FALLBACK: Record<string, AiProvider> = {
   "acp:": "acp",
   "opencode:": "opencode",
   "claude-code:": "claude-code",
+  "local:": "local",
   "mock-fail-": "mock-fail",
   "mock-": "mock",
 };
@@ -109,6 +110,7 @@ function getOrgKeyForProvider(keys: OrgKeys, provider: AiProvider): string | nul
     case "acp":
     case "opencode":
     case "claude-code":
+    case "local":
       return null;
     // Test doubles take no key.
     case "mock":
