@@ -40,10 +40,13 @@ export default function SelfHostingPage() {
         </div>
         <CodeBlock>{`git clone https://github.com/octopusreview/octopus.git
 cd octopus
-docker compose up -d`}</CodeBlock>
+docker compose up -d
+docker compose exec web bun run db:migrate`}</CodeBlock>
         <Paragraph>
-          Visit <Mono>http://localhost:3000</Mono> when the containers report
-          healthy. The first run pulls images and runs migrations automatically.
+          The first run pulls images and starts Postgres, Qdrant, and the web
+          app. <Mono>bun run db:migrate</Mono> applies the Prisma schema —
+          re-run after every upgrade. Visit{" "}
+          <Mono>http://localhost:3000</Mono> when the containers report healthy.
         </Paragraph>
         <Paragraph>
           You&apos;ll still need to drop a <Mono>.env</Mono> in the repo root
@@ -220,7 +223,7 @@ docker compose up -d`}</CodeBlock>
         </Paragraph>
         <CodeBlock>{`docker compose pull
 docker compose up -d
-docker compose exec web bunx prisma migrate deploy`}</CodeBlock>
+docker compose exec web bun run db:migrate`}</CodeBlock>
       </Section>
 
       {/* Production tips */}
@@ -259,7 +262,7 @@ docker compose exec web bunx prisma migrate deploy`}</CodeBlock>
         <div className="mb-4 grid gap-3 sm:grid-cols-2">
           <RequirementCard title="PostgreSQL 17+" description="Primary database for all application data." />
           <RequirementCard title="Qdrant" description="Vector database for code embeddings and search." />
-          <RequirementCard title="Bun 1.3+" description="Runtime for the Next.js application." />
+          <RequirementCard title="Bun" description="Runtime for the Next.js application. See `bun.lock` for the version pinned by the repo." />
           <RequirementCard title="An AI provider" description="Any of the options listed above — at least one." />
         </div>
         <CodeBlock>{`git clone https://github.com/octopusreview/octopus.git
@@ -267,7 +270,7 @@ cd octopus
 bun install
 # Point DATABASE_URL / QDRANT_URL in .env at your own instances
 bun run db:generate
-bunx prisma migrate deploy --schema packages/db/prisma/schema.prisma
+bun run db:migrate
 bun run build
 bun run start`}</CodeBlock>
         <Paragraph>
