@@ -1,29 +1,29 @@
 import { spawnSync } from "node:child_process";
 import { loadCredentials } from "../lib/credentials.js";
-import { postJson } from "../lib/api.js";
+import { getJson, postJson } from "../lib/api.js";
 
 /**
  * `octp review` — pre-PR review of local changes.
  *
- * Computes a diff of your working tree (or staged-only, or since-ref) and
- * sends it to the Octopus server for review against your org's configured
- * model. Prints findings in the terminal. Optionally exits non-zero so it
- * can plug into pre-commit / lefthook / CI before the PR is even created.
+ * Computes a diff of your working tree (or staged-only, or since-ref),
+ * resolves the current git remote to a registered Octopus repository,
+ * and posts the diff to the existing /api/cli/repos/<id>/local-review
+ * endpoint — the same one the canonical review pipeline uses. The
+ * server runs the diff through `generateLocalReview` which includes
+ * context search against the indexed repo, two-pass review, finding
+ * capping, and the operation-tagged ai_usage row.
  *
- * This is additive to the cloud PR review — the cloud review still runs
- * for everyone when the PR opens, so coverage isn't gated on a developer
- * having the CLI installed. The local review just cuts the feedback loop
- * for people who do.
+ * Local-only mode (no registered repo) is intentionally NOT supported:
+ * the review quality without indexed context is materially worse and
+ * we don't want a feature with two reliability tiers. If the repo
+ * isn't registered, surface a clear "register it first" message.
  *
- * Lifecycle:
- *   1. Load ~/.octopus/credentials. Exit 2 with hint if not signed in.
- *   2. Compute the diff via `git diff …`. Exit 2 if not a git repo.
- *   3. POST to /api/cli/review-local. Server runs the diff through the
- *      same review pipeline cloud reviews use.
- *   4. Print findings; exit 0 (or 1 if --strict and any critical).
+ * Additive to the cloud PR review — the cloud review still runs on
+ * every PR when it opens, so coverage isn't gated on the CLI being
+ * installed. This is just the fast individual-dev feedback loop.
  */
 
-const MAX_DIFF_BYTES = 200 * 1024;
+const MAX_DIFF_BYTES = 500 * 1024; // matches the server cap on /local-review
 
 type Finding = {
   severity: string;
@@ -42,11 +42,12 @@ type Finding = {
 
 type ReviewResponse = {
   findings: Finding[];
+  summary?: string;
   model: string;
-  provider: string;
   usage: { inputTokens: number; outputTokens: number };
-  truncated?: boolean;
 };
+
+type RepoMatch = { id: string; fullName: string; provider: string };
 
 type ReviewMode =
   | { kind: "default" } // upstream..HEAD plus uncommitted
@@ -100,36 +101,63 @@ export async function reviewCommand(argv: string[]): Promise<number> {
     return 0;
   }
 
-  // Send to server
+  // Resolve the git remote → Octopus repo id
+  const remoteUrl = gitRemoteUrl();
+  if (!remoteUrl) {
+    console.error(
+      "No git remote configured. Add a remote (`git remote add origin <url>`) and push the repo to GitHub/GitLab/Bitbucket first, then connect it via /settings/integrations.",
+    );
+    return 2;
+  }
+  if (verbose) console.error(`Resolving repo for ${remoteUrl}…`);
+  const resolveRes = await getJson<RepoMatch>(
+    `${creds.baseUrl}/api/cli/repos/by-remote?url=${encodeURIComponent(remoteUrl)}`,
+    { headers: { authorization: `Bearer ${creds.token}` } },
+  );
+  if (!resolveRes.ok) {
+    if (resolveRes.status === 404) {
+      console.error(
+        `${remoteUrl} isn't registered with Octopus in org "${creds.orgName}". ` +
+          `Open /settings/integrations on ${creds.baseUrl} and connect the repo first.`,
+      );
+    } else {
+      console.error(`Could not resolve repo: ${resolveRes.error}`);
+    }
+    return 1;
+  }
   if (verbose) {
     const sizeKb = (diff.length / 1024).toFixed(1);
-    console.error(`Reviewing ${sizeKb} KB of diff via ${creds.baseUrl} (${creds.orgName})…`);
+    console.error(`Reviewing ${sizeKb} KB of diff against ${resolveRes.data.fullName}…`);
   }
 
+  // Hit the canonical local-review endpoint
   const res = await postJson<ReviewResponse>(
-    `${creds.baseUrl}/api/cli/review-local`,
+    `${creds.baseUrl}/api/cli/repos/${encodeURIComponent(resolveRes.data.id)}/local-review`,
     {
       diff,
-      context: {
-        branch: gitBranch() ?? undefined,
-        baseRef: mode.kind === "since" ? mode.ref : undefined,
-      },
+      title: commitSubject() ?? undefined,
+      author: gitAuthorName() ?? undefined,
     },
     creds.token,
   );
   if (!res.ok) {
-    console.error(`Review request failed: ${res.error}`);
+    if (res.status === 402) {
+      console.error(
+        "Monthly spend limit reached for this org. Adjust in /settings/billing or wait until next cycle.",
+      );
+    } else {
+      console.error(`Review request failed (HTTP ${res.status}): ${res.error}`);
+    }
     return 1;
   }
   const data = { ...res.data, truncated };
 
-  // Output
   if (format === "json") {
     console.log(JSON.stringify(data, null, 2));
   } else if (format === "markdown") {
     console.log(renderMarkdown(data));
   } else {
-    renderHuman(data);
+    renderHuman(data, resolveRes.data.fullName);
   }
 
   if (strict) {
@@ -182,7 +210,6 @@ function computeDiff(mode: ReviewMode): { ok: true; diff: string } | { ok: false
     git(["rev-parse", "--abbrev-ref", "main"]) ??
     git(["rev-parse", "--abbrev-ref", "master"]);
   if (!upstream) {
-    // No upstream and no main/master — just review the working tree changes.
     return { ok: true, diff: git(["diff", "HEAD"]) ?? "" };
   }
   const base = git(["merge-base", upstream.trim(), "HEAD"]);
@@ -211,9 +238,22 @@ function git(args: string[]): string | null {
   return r.stdout;
 }
 
-function gitBranch(): string | null {
-  const r = git(["rev-parse", "--abbrev-ref", "HEAD"]);
-  return r ? r.trim() : null;
+function gitRemoteUrl(): string | null {
+  // Prefer "origin"; fall back to the first remote we can find.
+  const origin = git(["remote", "get-url", "origin"]);
+  if (origin) return origin.trim();
+  const remotes = git(["remote"]);
+  const first = remotes?.split("\n").map((s) => s.trim()).filter(Boolean)[0];
+  if (!first) return null;
+  return git(["remote", "get-url", first])?.trim() ?? null;
+}
+
+function commitSubject(): string | null {
+  return git(["log", "-1", "--pretty=%s"])?.trim() ?? null;
+}
+
+function gitAuthorName(): string | null {
+  return git(["config", "user.name"])?.trim() ?? null;
 }
 
 // ── Output renderers ─────────────────────────────────────────────────────────
@@ -226,7 +266,6 @@ const COLOR = {
   yellow: "\x1b[33m",
   cyan: "\x1b[36m",
   green: "\x1b[32m",
-  magenta: "\x1b[35m",
 };
 
 function isCritical(severity: string): boolean {
@@ -242,10 +281,12 @@ function severityGlyph(severity: string): string {
   return "💡";
 }
 
-function renderHuman(data: ReviewResponse): void {
-  const { findings, model, provider, usage } = data;
+type RenderedData = ReviewResponse & { truncated?: boolean };
+
+function renderHuman(data: RenderedData, repoFullName: string): void {
+  const { findings, model, usage } = data;
   console.log(
-    `${COLOR.bold}🐙 octp review${COLOR.reset}  ${COLOR.dim}${provider}:${model}  ${usage.inputTokens}→${usage.outputTokens} tokens${COLOR.reset}`,
+    `${COLOR.bold}🐙 octp review${COLOR.reset}  ${COLOR.dim}${repoFullName} · ${model} · ${usage.inputTokens}→${usage.outputTokens} tokens${COLOR.reset}`,
   );
   if (data.truncated) {
     console.log(
@@ -276,15 +317,21 @@ function renderHuman(data: ReviewResponse): void {
   const summary = Object.entries(buckets)
     .map(([g, n]) => `${n} ${g}`)
     .join(" · ");
-  console.log(`${COLOR.bold}${findings.length} finding${findings.length === 1 ? "" : "s"}${COLOR.reset}  ${COLOR.dim}${summary}${COLOR.reset}`);
+  console.log(
+    `${COLOR.bold}${findings.length} finding${findings.length === 1 ? "" : "s"}${COLOR.reset}  ${COLOR.dim}${summary}${COLOR.reset}`,
+  );
 }
 
-function renderMarkdown(data: ReviewResponse): string {
+function renderMarkdown(data: RenderedData): string {
   const lines: string[] = [];
   lines.push(`# octp review`);
   lines.push("");
-  lines.push(`Model: \`${data.provider}:${data.model}\``);
+  lines.push(`Model: \`${data.model}\``);
   if (data.truncated) lines.push(`> ⚠ diff was truncated — findings may be incomplete`);
+  if (data.summary) {
+    lines.push("");
+    lines.push(data.summary);
+  }
   lines.push("");
   if (data.findings.length === 0) {
     lines.push("✓ no findings");
@@ -328,9 +375,12 @@ Flags:
   --help, -h                         This help
 
 Notes:
-  • Reviews use your org's configured default model (Settings → Models).
-  • The cloud PR review still runs on every PR — this is additive feedback for
-    individual developers before they push. Coverage isn't gated on the CLI.
-  • Hard cap of 200 KB diff. Larger diffs get truncated with a warning.
+  • Uses the same review pipeline as cloud PR reviews — context search,
+    finding capping, your repo's reviewConfig, the works.
+  • Requires the repo to be connected to Octopus (Settings → Integrations).
+  • The cloud PR review still runs on every PR — this is additive feedback
+    for individual developers before they push. Coverage isn't gated on
+    the CLI being installed.
+  • Hard cap of 500 KB diff. Larger diffs get truncated with a warning.
 `);
 }
