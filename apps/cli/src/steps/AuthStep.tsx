@@ -57,15 +57,22 @@ export function AuthStep({ onNext }: AuthStepProps) {
   const [error, setError] = useState<string>("");
 
   // Global Esc → skip the whole step (user can configure auth later).
-  useInput((_input, key) => {
+  // From the failed phase: Enter retries with the current URL, `b` (or
+  // backspace) jumps back to URL entry so the user can fix a typo /
+  // re-point at the right host without bouncing through the whole step.
+  useInput((input, key) => {
     if (key.escape && mode !== "approved" && mode !== "requesting" && mode !== "waiting") {
       setMode("skipped");
       onNext(buildPatch(baseUrl || HOSTED_BASE_URL));
     }
-    if (key.return && mode === "failed") {
-      // Retry from the beginning of the network sequence.
-      setError("");
-      setMode("requesting");
+    if (mode === "failed") {
+      if (key.return) {
+        setError("");
+        setMode("requesting");
+      } else if (input === "b" || input === "B" || key.backspace || key.delete) {
+        setError("");
+        setMode("self-hosted-url");
+      }
     }
   });
 
@@ -241,8 +248,11 @@ export function AuthStep({ onNext }: AuthStepProps) {
       <Box flexDirection="column">
         <Text color="red" bold>Sign-in failed.</Text>
         <Text color="red">{error}</Text>
+        {baseUrl ? (
+          <Text dimColor>Base URL: {baseUrl}</Text>
+        ) : null}
         <Text> </Text>
-        <Text dimColor>Enter to retry · Esc to skip</Text>
+        <Text dimColor>Enter: retry · B: edit URL · Esc: skip</Text>
       </Box>
     );
   }
