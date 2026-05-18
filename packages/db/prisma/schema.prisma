@@ -759,6 +759,12 @@ model SystemConfig {
   blockedAuthors      Json @default("[]") // string[] of globally blocked PR author usernames
   queueConfig         Json @default("{}") // { reviewTimeoutSeconds, reviewConcurrency }
   announcements       Json @default("[]") // landing-page announcement bar entries (see lib/announcements types)
+  // Cached latest-release info for the self-hosted Updates page. Refreshed
+  // daily by the refresh-release-cache pg-boss worker. Shape:
+  //   { tagName, htmlUrl, publishedAt, body, fetchedAt }
+  // Null when no fetch has succeeded yet — the page surfaces a
+  // "couldn't check for updates" panel in that case.
+  latestRelease       Json?
   updatedAt DateTime @updatedAt
 
   @@map("system_config")

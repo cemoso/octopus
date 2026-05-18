@@ -7,6 +7,7 @@ import {
 } from "./large-review-result";
 import { processCommunityReview, type CommunityReviewJobData } from "./community-review";
 import { enforceAuditLogRetention } from "./audit";
+import { fetchLatestRelease, writeReleaseCache } from "./releases";
 import type { QueueConfig } from "./queue";
 
 export interface WelcomeEmailJob {
@@ -92,5 +93,27 @@ export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promis
     }
   });
 
-  console.log("[queue] Workers registered: welcome-email, process-review, post-large-review-result, community-review, enforce-audit-retention");
+  // Daily release-cache refresh. /api/releases/latest reads
+  // SystemConfig.latestRelease; this worker keeps it warm so the self-hosted
+  // Updates page is a sub-millisecond local lookup instead of a rate-limited
+  // GitHub API call on every render. Fetch + write live in lib/releases.ts —
+  // single source of truth, no duplicate upsert path.
+  await boss.work("refresh-release-cache", async (jobs) => {
+    for (const job of jobs) {
+      try {
+        const fresh = await fetchLatestRelease();
+        if (!fresh) {
+          console.warn(`[queue] refresh-release-cache ${job.id}: fetch returned null`);
+          continue;
+        }
+        await writeReleaseCache(fresh);
+        console.log(`[queue] refresh-release-cache ${job.id}: cached ${fresh.tagName}`);
+      } catch (err) {
+        console.error(`[queue] refresh-release-cache failed (job ${job.id}):`, err);
+        throw err;
+      }
+    }
+  });
+
+  console.log("[queue] Workers registered: welcome-email, process-review, post-large-review-result, community-review, enforce-audit-retention, refresh-release-cache");
 }

@@ -28,6 +28,11 @@ export async function register() {
       // multiple instances. The worker registered in queue-workers.ts is what
       // actually executes the deletion.
       await boss.schedule("enforce-audit-retention", "0 3 * * *");
+
+      // Daily release-cache refresh (self-hosted Updates page reads from this).
+      // 04:00 UTC — well after typical release windows but before most working
+      // hours so users see fresh data when they check their settings.
+      await boss.schedule("refresh-release-cache", "0 4 * * *");
     }
 
     // Graceful shutdown: wait for active jobs (e.g. in-progress reviews) to finish
