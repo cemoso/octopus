@@ -53,7 +53,23 @@ async function loadOrgConfig(orgId?: string | null): Promise<{
   return { mode, apiKey };
 }
 
-let platformAnthropic: Anthropic | null = null;
+// One client per distinct API key. The previous single-slot cache
+// (`platformAnthropic`) only ever held the FIRST key it saw — every other
+// org incurred a fresh client allocation per call, and a rotated key never
+// invalidated the cached one. A Map keyed by the actual key string fixes
+// both: any number of distinct keys cached, rotation simply produces a new
+// entry, and stale entries can be cleared with `clientByKey.delete(oldKey)`
+// if a future rotation flow needs it.
+const clientByKey = new Map<string, Anthropic>();
+
+function getAnthropicClient(apiKey: string): Anthropic {
+  let client = clientByKey.get(apiKey);
+  if (!client) {
+    client = new Anthropic({ apiKey });
+    clientByKey.set(apiKey, client);
+  }
+  return client;
+}
 
 export const claudeCodeProvider: Provider = {
   name: "claude-code",
@@ -88,8 +104,7 @@ async function runAnthropicApi(params: AiCreateParams, apiKey: string | null): P
     );
   }
 
-  const client = apiKey === platformAnthropic?.apiKey ? platformAnthropic : new Anthropic({ apiKey });
-  if (!platformAnthropic) platformAnthropic = client;
+  const client = getAnthropicClient(apiKey);
 
   const useTool = params.responseSchema !== undefined;
   const response = await client.messages.create({
@@ -211,7 +226,17 @@ async function runClaudeCli(params: AiCreateParams): Promise<AiResponse> {
 }
 
 function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Escape the full set of XML-special chars (`&`, `<`, `>`, `"`, `'`).
+  // The `claude` CLI parses the prompt as XML-ish, so quotes appearing
+  // inside user content could close an attribute string and inject
+  // pseudo-structure. `&` MUST come first so we don't re-escape the
+  // entities we're producing.
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 type CliResult = { exitCode: number; stdout: string; stderr: string; timedOut: boolean };
