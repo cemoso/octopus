@@ -47,32 +47,16 @@ export async function loadConfig(): Promise<OctopusConfig> {
 
 /**
  * Persist the config with restrictive permissions. Creates the home dir if it
- * doesn't exist. Stamps `onboardedAt` to now when missing OR when the
- * incoming value is unparseable / in the future (a tampered config file
- * could otherwise pin a bogus future date that would never become "stale"
- * by any time-based logic downstream).
+ * doesn't exist. Stamps `onboardedAt` if not already set.
  */
 export async function saveConfig(next: OctopusConfig): Promise<void> {
   await ensureOctopusHome();
   const out: OctopusConfig = {
     ...next,
     version: CONFIG_VERSION,
-    onboardedAt: stableOnboardedAt(next.onboardedAt),
+    onboardedAt: next.onboardedAt ?? new Date().toISOString(),
   };
   await writeFile(getConfigPath(), JSON.stringify(out, null, 2), { mode: 0o600 });
-}
-
-function stableOnboardedAt(incoming: string | undefined): string {
-  if (!incoming) return new Date().toISOString();
-  const parsed = new Date(incoming).getTime();
-  // Reject unparseable timestamps + anything more than 60s in the future
-  // (small grace for clock skew between machines). The threshold is
-  // deliberately small — onboardedAt is a personal-machine artifact, not
-  // a distributed log.
-  if (Number.isNaN(parsed) || parsed > Date.now() + 60_000) {
-    return new Date().toISOString();
-  }
-  return incoming;
 }
 
 export function isOnboarded(c: OctopusConfig): boolean {
