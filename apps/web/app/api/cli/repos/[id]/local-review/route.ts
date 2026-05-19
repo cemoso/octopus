@@ -2,6 +2,7 @@ import { authenticateApiToken } from "@/lib/api-auth";
 import { prisma } from "@octopus/db";
 import { generateLocalReview, ReviewConfigError } from "@/lib/review-core";
 import { isOrgOverSpendLimit } from "@/lib/cost";
+import { writeAuditLog } from "@/lib/audit";
 import { NextRequest } from "next/server";
 
 export async function POST(
@@ -62,6 +63,28 @@ export async function POST(
       fileTree: Array.isArray(fileTree) ? fileTree : undefined,
       modelOverride: typeof model === "string" ? model : undefined,
     });
+
+    // Audit each CLI review (mirrors /api/cli/review-local). Powers
+    // /settings/cli-usage. Best-effort, never blocks the response.
+    await writeAuditLog({
+      action: "cli.review_local",
+      category: "review",
+      actorId: result.user?.id ?? null,
+      actorEmail: result.user?.email ?? null,
+      organizationId: result.org.id,
+      targetType: "Repository",
+      targetId: repo.id,
+      metadata: {
+        mode: "with-context",
+        diffBytes: diff.length,
+        findingCount: reviewResult.findings.length,
+        model: reviewResult.model,
+        repoFullName: repo.fullName,
+        title: typeof title === "string" ? title : null,
+      },
+      ipAddress: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+      userAgent: request.headers.get("user-agent") ?? null,
+    }).catch((e) => console.error("[local-review] audit log failed:", e));
 
     return Response.json({
       findings: reviewResult.findings,

@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 import { authenticateApiToken } from "@/lib/api-auth";
 import { generateBareLocalReview, ReviewConfigError } from "@/lib/review-core";
 import { isOrgOverSpendLimit } from "@/lib/cost";
+import { writeAuditLog } from "@/lib/audit";
 
 /**
  * POST /api/cli/review-local
@@ -65,6 +67,29 @@ export async function POST(request: Request) {
       author: body.author,
       modelOverride: typeof body.model === "string" ? body.model : undefined,
     });
+
+    // Audit each CLI review so admins have visibility into who's running
+    // what against the server (powering /settings/cli-usage). Best-effort —
+    // never block the response on the audit write.
+    const reqHeaders = await headers();
+    await writeAuditLog({
+      action: "cli.review_local",
+      category: "review",
+      actorId: auth.user?.id ?? null,
+      actorEmail: auth.user?.email ?? null,
+      organizationId: auth.org.id,
+      targetType: "local-diff",
+      metadata: {
+        mode: "bare",
+        diffBytes: body.diff.length,
+        findingCount: result.findings.length,
+        model: result.model,
+        title: body.title ?? null,
+      },
+      ipAddress: reqHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+      userAgent: reqHeaders.get("user-agent") ?? null,
+    }).catch((e) => console.error("[review-local] audit log failed:", e));
+
     return NextResponse.json({
       findings: result.findings,
       summary: result.summary,
