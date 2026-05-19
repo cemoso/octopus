@@ -126,10 +126,7 @@ export function OnboardWizard({ reset = false }: OnboardWizardProps = {}) {
       {activeKey === "byok" && (
         <ByokStep
           provider={answers.provider ?? ""}
-          ollamaBaseUrl={answers.ollamaBaseUrl}
-          onNext={(patch) =>
-            next(patch.ollamaBaseUrl ? { ollamaBaseUrl: patch.ollamaBaseUrl } : {})
-          }
+          onNext={() => next()}
         />
       )}
       {activeKey === "ollama-setup" && (
