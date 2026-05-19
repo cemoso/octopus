@@ -117,8 +117,19 @@ export async function reviewCommand(argv: string[]): Promise<number> {
     );
     if (resolveRes.ok) {
       repoMatch = resolveRes.data;
-    } else if (resolveRes.status !== 404 && verbose) {
-      console.error(`Could not resolve repo (HTTP ${resolveRes.status}): ${resolveRes.error}`);
+    } else if (resolveRes.status === 404) {
+      // Expected case: the remote isn't connected to Octopus. Silent
+      // fall-through to bare mode; the renderer surfaces the caveat.
+    } else {
+      // Unexpected: server hiccup, 401, etc. Falling to bare mode would
+      // silently downgrade review quality without the user knowing —
+      // surface the error so they can decide whether to retry. Always
+      // logged (not gated on --verbose).
+      console.error(
+        `Could not check whether this repo is connected to Octopus ` +
+          `(HTTP ${resolveRes.status}: ${resolveRes.error}). ` +
+          `Falling back to bare mode — review quality will be lower than usual.`,
+      );
     }
   }
 
