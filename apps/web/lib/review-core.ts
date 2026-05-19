@@ -741,6 +741,21 @@ export async function generateBareLocalReview(
     .replace(/\{\{REVIEW_LANGUAGE\}\}/g, "en")
     .replace(/\{\{REVIEW_LANGUAGE_NAME\}\}/g, "English");
 
+  // Apply org-level review policy. Bare mode doesn't have a repoConfig
+  // layer (no repo) but the system + org defaults still apply — disabled
+  // categories, confidence threshold, max-findings cap, etc. Otherwise a
+  // self-hosted team's centralised rules would silently not apply to CLI
+  // reviews, which is the whole reason the server-hop exists.
+  let systemConfig: ReviewConfig = {};
+  try {
+    const sysRow = await prisma.systemConfig.findUnique({ where: { id: "singleton" } });
+    if (sysRow) systemConfig = parseReviewConfig(sysRow.defaultReviewConfig);
+  } catch {
+    /* table may not exist yet; safe to ignore */
+  }
+  const orgConfig = parseReviewConfig(org.defaultReviewConfig);
+  const reviewConfig = mergeReviewConfigs(systemConfig, orgConfig);
+
   let response;
   try {
     response = await createAiMessage(
@@ -773,7 +788,26 @@ export async function generateBareLocalReview(
     organizationId: org.id,
   });
 
-  const findings = parseFindingsFromJson(response.text) ?? [];
+  let findings = parseFindingsFromJson(response.text) ?? [];
+
+  // Apply the same finding filters the canonical path runs:
+  //   1. confidence threshold (default 70, HIGH = 85, or explicit number)
+  //   2. disabled categories
+  //   3. severity sort + maxFindings cap
+  const confidenceThreshold =
+    typeof reviewConfig.confidenceThreshold === "number"
+      ? reviewConfig.confidenceThreshold
+      : reviewConfig.confidenceThreshold === "HIGH"
+        ? 85
+        : 70;
+  findings = findings.filter((f) => f.confidence >= confidenceThreshold);
+  if (reviewConfig.disabledCategories && reviewConfig.disabledCategories.length > 0) {
+    const disabled = new Set(reviewConfig.disabledCategories.map((c) => c.toLowerCase()));
+    findings = findings.filter((f) => !disabled.has(f.category.toLowerCase()));
+  }
+  const maxFindings = reviewConfig.maxFindings ?? MAX_FINDINGS_PER_REVIEW;
+  ({ kept: findings } = sortAndCapFindings(findings, maxFindings));
+
   const summary = stripFindingsFromBody(response.text);
 
   return {

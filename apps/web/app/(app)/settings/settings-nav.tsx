@@ -34,6 +34,7 @@ const sections = [
       // Admin-only — the page itself enforces role; this nav entry is always
       // visible but the click flow redirects non-admins to /settings.
       { href: "/settings/audit-log", label: "Audit Log", icon: IconHistory },
+      { href: "/settings/cli-usage", label: "CLI Activity", icon: IconTerminal2 },
     ],
   },
   {
