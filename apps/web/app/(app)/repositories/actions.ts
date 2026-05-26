@@ -7,6 +7,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
 import { createAnalysisAbortController, abortAnalysis, clearAnalysisAbortController } from "@/lib/analysis-abort";
+import { abortIndexing } from "@/lib/indexing-abort";
 import { eventBus } from "@/lib/events/bus";
 
 export type RepoDetailData = {
@@ -637,6 +638,117 @@ export async function transferRepository(
     repoName: repo.fullName,
     sourceOrgName: repo.organization.name,
     direction: "in",
+  });
+
+  revalidatePath("/repositories");
+  return { success: true };
+}
+
+export async function removeRepository(
+  repoId: string,
+): Promise<{ error?: string; success?: boolean }> {
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+  if (!session) redirect("/login");
+
+  const repo = await prisma.repository.findUnique({
+    where: { id: repoId },
+    select: {
+      id: true,
+      fullName: true,
+      organizationId: true,
+      indexStatus: true,
+      organization: {
+        select: {
+          members: {
+            where: { userId: session.user.id, deletedAt: null },
+            select: { role: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!repo || repo.organization.members.length === 0) {
+    return { error: "Repository not found." };
+  }
+
+  if (repo.organization.members[0].role !== "owner") {
+    return { error: "Only organization owners can remove repositories." };
+  }
+
+  abortAnalysis(repoId);
+  abortIndexing(repoId);
+
+  await prisma.repository.update({
+    where: { id: repoId },
+    data: {
+      isActive: false,
+      autoReview: false,
+      dismissedAt: new Date(),
+      indexStatus: repo.indexStatus === "indexing" ? "cancelled" : repo.indexStatus,
+    },
+  });
+
+  pubby.trigger(`presence-org-${repo.organizationId}`, "repo-removed", {
+    repoId: repo.id,
+    repoName: repo.fullName,
+  });
+
+  revalidatePath("/repositories");
+  return { success: true };
+}
+
+export async function restoreRepository(
+  repoId: string,
+): Promise<{ error?: string; success?: boolean }> {
+  const session = await auth.api.getSession({
+    headers: await headers(),
+  });
+  if (!session) redirect("/login");
+
+  const repo = await prisma.repository.findUnique({
+    where: { id: repoId },
+    select: {
+      id: true,
+      fullName: true,
+      dismissedAt: true,
+      organizationId: true,
+      organization: {
+        select: {
+          members: {
+            where: { userId: session.user.id, deletedAt: null },
+            select: { role: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!repo || repo.organization.members.length === 0) {
+    return { error: "Repository not found." };
+  }
+
+  if (repo.organization.members[0].role !== "owner") {
+    return { error: "Only organization owners can restore repositories." };
+  }
+
+  if (!repo.dismissedAt) {
+    return { error: "Repository is not removed." };
+  }
+
+  await prisma.repository.update({
+    where: { id: repoId },
+    data: {
+      isActive: true,
+      dismissedAt: null,
+    },
+  });
+
+  pubby.trigger(`presence-org-${repo.organizationId}`, "repo-restored", {
+    repoId: repo.id,
+    repoName: repo.fullName,
   });
 
   revalidatePath("/repositories");
