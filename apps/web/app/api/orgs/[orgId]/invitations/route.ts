@@ -4,6 +4,16 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@octopus/db";
 import { sendInvitationEmail } from "@/lib/invitation-email";
 import { normalizeEmail } from "@/lib/email-normalize";
+import { validateEmailForSignup, reasonToMessage } from "@/lib/email-validator";
+import {
+  fixedWindowLimit,
+  tooManyRequests,
+  INVITE_USER_LIMIT,
+  INVITE_USER_WINDOW_S,
+  INVITE_ORG_LIMIT,
+  INVITE_ORG_WINDOW_S,
+  INVITE_ORG_PENDING_CAP,
+} from "@/lib/rate-limit";
 
 const INVITATION_EXPIRY_DAYS = 7;
 const DAYS_TO_MS = 24 * 60 * 60 * 1000;
@@ -37,6 +47,32 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden: admin role required" }, { status: 403 });
   }
 
+  // Per-inviter burst limit (shared with resend). Catches scripted firing.
+  const userLimit = await fixedWindowLimit(
+    `invite:user:${session.user.id}`,
+    INVITE_USER_LIMIT,
+    INVITE_USER_WINDOW_S,
+  );
+  if (!userLimit.ok) {
+    return tooManyRequests(
+      "Too many invitations sent. Please wait a moment before inviting more people.",
+      userLimit.retryAfterSeconds,
+    );
+  }
+
+  // Per-org sustained limit. Guards against a single org spraying invitations.
+  const orgLimit = await fixedWindowLimit(
+    `invite:org:${orgId}`,
+    INVITE_ORG_LIMIT,
+    INVITE_ORG_WINDOW_S,
+  );
+  if (!orgLimit.ok) {
+    return tooManyRequests(
+      "This organization has reached its daily invitation limit. Please try again later.",
+      orgLimit.retryAfterSeconds,
+    );
+  }
+
   const body = await request.json();
   const { email: rawEmail, role } = body;
 
@@ -45,6 +81,14 @@ export async function POST(
   }
 
   const email = normalizeEmail(rawEmail);
+
+  // Validate the recipient address before sending. Invitations go out via AWS
+  // SES, so blocking disposable domains and addresses with no valid MX record
+  // (the same checks the signup flow runs) protects sender reputation.
+  const emailValidation = await validateEmailForSignup(email);
+  if (!emailValidation.ok) {
+    return NextResponse.json({ error: reasonToMessage(emailValidation.reason) }, { status: 400 });
+  }
 
   if (role && !VALID_ROLES.includes(role)) {
     return NextResponse.json({ error: `Invalid role. Must be one of: ${VALID_ROLES.join(", ")}` }, { status: 400 });
@@ -73,6 +117,17 @@ export async function POST(
   });
   if (existingInvitation) {
     return NextResponse.json({ error: "A pending invitation already exists for this email" }, { status: 409 });
+  }
+
+  // Hard cap on outstanding pending invitations per org.
+  const pendingCount = await prisma.organizationInvitation.count({
+    where: { organizationId: orgId, status: "pending" },
+  });
+  if (pendingCount >= INVITE_ORG_PENDING_CAP) {
+    return NextResponse.json(
+      { error: "Too many pending invitations. Revoke some before sending more." },
+      { status: 409 },
+    );
   }
 
   const org = await prisma.organization.findUniqueOrThrow({ where: { id: orgId } });
