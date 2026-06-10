@@ -126,7 +126,7 @@ cp .env.example .env
 docker compose up -d
 
 # Run database migrations
-docker compose exec web bunx prisma migrate deploy
+docker compose exec web npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
 ```
 
 Octopus will be available at `http://localhost:43300`.

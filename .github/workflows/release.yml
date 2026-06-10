@@ -81,7 +81,7 @@ jobs:
             ```bash
             docker compose pull
             docker compose up -d
-            docker compose exec web bunx prisma migrate deploy
+            docker compose exec web npx prisma migrate deploy --schema packages/db/prisma/schema.prisma
             ```
 
             See the [Updates page](https://docs.octopus-review.ai) in your self-hosted UI for a one-click upgrade path.

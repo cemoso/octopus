@@ -116,7 +116,7 @@ export default async function UpdatesSettingsPage() {
           <pre className="mt-3 overflow-x-auto rounded bg-[#0a0a0a] p-3 text-xs text-[#ccc]">
 {`docker compose pull
 docker compose up -d
-docker compose exec web bunx prisma migrate deploy`}
+docker compose exec web npx prisma migrate deploy --schema packages/db/prisma/schema.prisma`}
           </pre>
         </Panel>
       )}
