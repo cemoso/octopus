@@ -7,6 +7,7 @@ import { prisma } from "@octopus/db";
 import { toBaseSlug, randomSlugSuffix } from "@/lib/slug";
 import { canUserCreateOrg } from "@/lib/org-limits";
 import { MAX_OWNED_ORGS_PER_USER } from "@/lib/constants";
+import { acquireOrgCreationLock } from "@/lib/org-creation-lock";
 
 export async function completeProfile(
   _prevState: { error?: string },
@@ -72,8 +73,11 @@ export async function createOrgForUser(userId: string, userName: string) {
     slug = `${baseSlug}-${randomSlugSuffix()}`;
   }
 
-  // Re-check limit and create atomically to prevent TOCTOU race
+  // Per-user advisory lock so concurrent calls for the same user serialize.
+  // See `acquireOrgCreationLock` for the race we're guarding against.
   const org = await prisma.$transaction(async (tx) => {
+    await acquireOrgCreationLock(tx, userId);
+
     const ownedCount = await tx.organizationMember.count({
       where: { userId, role: "owner", deletedAt: null, organization: { deletedAt: null } },
     });
