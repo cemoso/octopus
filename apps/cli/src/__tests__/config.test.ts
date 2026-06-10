@@ -54,6 +54,41 @@ describe("loadConfig", () => {
     expect(c.provider).toBe("anthropic");
     expect(isOnboarded(c)).toBe(true);
   });
+
+  it("remaps legacy undated Anthropic model IDs to the dated forms", async () => {
+    const cases: Array<[string, string]> = [
+      ["claude-sonnet-4-6", "claude-sonnet-4-6-20250619"],
+      ["claude-opus-4-7", "claude-opus-4-6-20250619"],
+      ["claude-haiku-4-5", "claude-haiku-4-5-20251001"],
+    ];
+    for (const [stored, expected] of cases) {
+      await writeFile(
+        join(tmpHome, "config.json"),
+        JSON.stringify({
+          version: CONFIG_VERSION,
+          onboardedAt: "2026-05-17T00:00:00.000Z",
+          provider: "anthropic",
+          model: stored,
+        }),
+      );
+      const c = await loadConfig();
+      expect(c.model).toBe(expected);
+    }
+  });
+
+  it("leaves non-legacy model IDs unchanged", async () => {
+    await writeFile(
+      join(tmpHome, "config.json"),
+      JSON.stringify({
+        version: CONFIG_VERSION,
+        onboardedAt: "2026-05-17T00:00:00.000Z",
+        provider: "openai",
+        model: "gpt-4o",
+      }),
+    );
+    const c = await loadConfig();
+    expect(c.model).toBe("gpt-4o");
+  });
 });
 
 describe("saveConfig", () => {
