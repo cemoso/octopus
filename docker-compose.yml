@@ -10,7 +10,10 @@ services:
     ports:
       - "43300:3000"
     environment:
-      - DATABASE_URL=postgresql://octopus:octopus@postgres:5432/octopus
+      # Compose interpolates ${VAR:-default} from .env (or shell); the
+      # postgres service below uses the same vars, so changing the password
+      # in one place flows through to both. Keep these in sync.
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-octopus}:${POSTGRES_PASSWORD:-octopus}@postgres:5432/${POSTGRES_DB:-octopus}
       - QDRANT_URL=http://qdrant:6333
       - ENABLE_REVIEW_WORKERS=true
       # Single source of truth — Next.js inlines NEXT_PUBLIC_* into the client
@@ -26,16 +29,28 @@ services:
 
   postgres:
     image: postgres:17-alpine
+    # Bind side-services to loopback so they're reachable from the host for
+    # debugging (psql, etc.) without being published on 0.0.0.0. Docker port
+    # mappings without an address bypass ufw/iptables and expose the service
+    # to the public internet — combined with the default octopus/octopus
+    # password below that's a full DB takeover from anywhere. Set
+    # OCTOPUS_PG_BIND=0.0.0.0 in `.env` to override for a deployment that
+    # genuinely needs remote DB access (and CHANGE THE PASSWORD).
     ports:
-      - "43332:5432"
+      - "${OCTOPUS_PG_BIND:-127.0.0.1}:43332:5432"
     environment:
-      POSTGRES_USER: octopus
-      POSTGRES_PASSWORD: octopus
-      POSTGRES_DB: octopus
+      POSTGRES_USER: ${POSTGRES_USER:-octopus}
+      # Hardcoded default is intentionally "octopus" to keep zero-config local
+      # dev working. SELF-HOSTERS MUST set POSTGRES_PASSWORD in their `.env` —
+      # see the self-hosting docs at /docs/self-hosting (rendered from
+      # apps/web/app/(landing)/docs/self-hosting/page.tsx) for rotation
+      # guidance; CHANGELOG's "Unreleased" entry also documents this break.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-octopus}
+      POSTGRES_DB: ${POSTGRES_DB:-octopus}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U octopus"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-octopus}"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -43,9 +58,14 @@ services:
 
   qdrant:
     image: qdrant/qdrant:v1.17.0
+    # Same loopback-by-default rationale as postgres. Qdrant ships with no
+    # authentication out of the box, so a public bind = full read/write
+    # access to every embedding in the org (which include source code).
+    # Override with OCTOPUS_QDRANT_BIND=0.0.0.0 if remote access is required;
+    # consider enabling QDRANT__SERVICE__API_KEY first.
     ports:
-      - "43333:6333"
-      - "43334:6334"
+      - "${OCTOPUS_QDRANT_BIND:-127.0.0.1}:43333:6333"
+      - "${OCTOPUS_QDRANT_BIND:-127.0.0.1}:43334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:

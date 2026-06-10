@@ -52,6 +52,16 @@ COPY --from=builder --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/CHANGELOG.md ./CHANGELOG.md
 
+# Ship Prisma schema + migrations + CLI so the documented upgrade command
+# (`docker compose exec web npx prisma migrate deploy --schema packages/db/prisma/schema.prisma`)
+# actually works inside the running container. Next's standalone tracing
+# doesn't include .sql migration files or the CLI on its own, so without
+# this block the self-hosted upgrade path is broken on the very first run.
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/prisma ./packages/db/prisma
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/node_modules/prisma ./node_modules/prisma
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder --chown=nextjs:nodejs /app/packages/db/node_modules/.bin/prisma ./node_modules/.bin/prisma
+
 USER nextjs
 EXPOSE 3000
 ENV HOSTNAME=0.0.0.0
