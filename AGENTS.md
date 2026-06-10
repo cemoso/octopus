@@ -6,26 +6,32 @@ For human-oriented setup, workflow, and PR guidelines, see [CONTRIBUTING.md](CON
 
 ## Before submitting a change
 
-Run all four locally. CI will reject if any fail.
+Run lint + typecheck + build locally. CI (`.github/workflows/ci.yml`)
+runs those three plus the security review action — it does not run
+the test suite today, so failing tests won't gate CI. Run `bun test`
+manually when you've touched logic that has coverage.
 
 ```bash
 bun install              # if dependencies haven't been installed
 bun run lint
 bun run typecheck
-bun run test
 bun run build
+bun test                 # manual — not gated by CI yet
 ```
 
 ## Repository layout
 
 ```
-apps/web/                     Next.js 16 web app + API routes (the bulk of the code)
+apps/
+  web/                        Next.js 16 web app + API routes (the bulk of the code)
+  cli/                        @octp/cli — Ink-based terminal CLI (the `octp` binary)
 packages/db/                  Prisma schema, migrations, and shared client
 packages/package-analyzer/    Package metadata + safety analyzer
 tools/{tsconfig,eslint-config}/  Shared dev config
 ```
 
-The `@octp/cli` package referenced in the README lives in a separate repository; changes targeting the CLI do not belong in this repo.
+The CLI lives in this repo at `apps/cli/` (with its own README + AGENTS.md).
+Changes targeting `octp` belong here, not in a separate repository.
 
 ## Conventions that matter for AI-suggested changes
 
@@ -37,7 +43,7 @@ The `@octp/cli` package referenced in the README lives in a separate repository;
 ### AI provider calls
 - All chat/completion calls go through `apps/web/lib/ai-router.ts`'s `createAiMessage`. Do not import provider SDKs (`@anthropic-ai/sdk`, `openai`, `@google/generative-ai`) directly elsewhere.
 - The router resolves the provider from the model ID (DB cache, prefix fallback) and selects per-org BYOK keys. Adding a new provider means extending the router; do not work around it.
-- Embeddings currently route through `apps/web/lib/embeddings.ts` (OpenAI-only at the moment). Pricing data lives in `apps/web/lib/cost.ts`; the `AvailableModel` Prisma table is the source of truth for provider mapping.
+- Embeddings route through `apps/web/lib/embeddings.ts`. Provider is selected via `OCTOPUS_EMBED_PROVIDER` env (`openai` default, `ollama` for fully local). See `embed-config.ts`. Pricing data lives in `apps/web/lib/cost.ts`; the `AvailableModel` Prisma table is the source of truth for LLM provider mapping.
 
 ### Review pipeline
 - The review prompt lives at `apps/web/prompts/SYSTEM_PROMPT.md`. Treat it as code — small wording changes can shift finding rates noticeably.

@@ -63,18 +63,34 @@ if [ -n "${OCTOPUS_INSTALL_TAG:-}" ]; then
   echo "Installing pinned version: $tag"
 else
   echo "Looking up latest octp release on $REPO ..."
-  # Use the GitHub API to find the most recent release whose tag starts with "octp-v".
-  # `jq` is not assumed; parse with grep + sed to keep the installer dependency-free
-  # (works on alpine, distroless, scratch+busybox, etc.).
-  api_url="https://api.github.com/repos/${REPO}/releases?per_page=20"
-  tag=$(
-    curl -fsSL "$api_url" \
-      | grep -E '"tag_name":\s*"octp-v[^"]+' \
-      | head -1 \
-      | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
-  )
+  # The repo publishes two release trains (web v* and CLI octp-v*) into
+  # the same feed. The default page size is 30, but a busy web train can
+  # easily push every octp-v* tag off the first page. Walk pages until we
+  # find an octp-v* match (or exhaust the feed). 5 pages × 100 = 500 most
+  # recent releases is plenty headroom; the API also caps us at 1000.
+  # jq isn't assumed (alpine/scratch may not have it); parse with grep+sed.
+  tag=""
+  page=1
+  while [ "$page" -le 5 ]; do
+    api_url="https://api.github.com/repos/${REPO}/releases?per_page=100&page=${page}"
+    page_body=$(curl -fsSL "$api_url" || true)
+    if [ -z "$page_body" ]; then break; fi
+    found=$(
+      echo "$page_body" \
+        | grep -E '"tag_name":\s*"octp-v[^"]+' \
+        | head -1 \
+        | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
+    )
+    if [ -n "$found" ]; then
+      tag="$found"
+      break
+    fi
+    # When the page didn't include the closing ] (more pages exist) keep going.
+    if ! echo "$page_body" | grep -q "^\\["; then break; fi
+    page=$((page + 1))
+  done
   if [ -z "$tag" ]; then
-    echo "Error: could not find any octp-v* release on $REPO." >&2
+    echo "Error: could not find any octp-v* release on $REPO (scanned up to $((page * 100)) releases)." >&2
     echo "If you are testing pre-release, pin a tag with OCTOPUS_INSTALL_TAG=octp-v0.X.Y" >&2
     exit 1
   fi
@@ -94,6 +110,35 @@ if ! curl -fL --progress-bar -o "$tmp_file" "$download_url"; then
   echo "Error: failed to download $asset from $tag." >&2
   echo "The release might not have a binary for ${os}-${arch}." >&2
   exit 1
+fi
+
+# ── Step 3b: verify the SHA256 against the release's SHA256SUMS.txt ──────────
+# octp-release.yml publishes SHA256SUMS.txt for every tagged release. Verify
+# our download against it so a tampered release asset, a truncated download,
+# or a mid-flight swap can't silently end up on PATH and get executed.
+sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS.txt"
+sums_file="$(mktemp)"
+trap 'rm -f "$tmp_file" "$sums_file"' EXIT
+if curl -fsSL -o "$sums_file" "$sums_url"; then
+  expected=$(grep -E "[[:space:]]+(\\./)?${asset}\$" "$sums_file" | awk '{print $1}')
+  if [ -z "$expected" ]; then
+    echo "Error: SHA256SUMS.txt at $sums_url has no entry for $asset. Refusing to install." >&2
+    exit 1
+  fi
+  if command -v shasum > /dev/null 2>&1; then
+    got=$(shasum -a 256 "$tmp_file" | awk '{print $1}')
+  elif command -v sha256sum > /dev/null 2>&1; then
+    got=$(sha256sum "$tmp_file" | awk '{print $1}')
+  else
+    echo "Warning: no shasum/sha256sum found — proceeding without checksum verification." >&2
+    got="$expected"
+  fi
+  if [ "$got" != "$expected" ]; then
+    echo "Error: checksum mismatch for $asset: expected $expected, got $got. Refusing to install." >&2
+    exit 1
+  fi
+else
+  echo "Warning: could not fetch $sums_url — proceeding without checksum verification." >&2
 fi
 
 # ── Step 4: install ──────────────────────────────────────────────────────────

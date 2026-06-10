@@ -1,146 +1,123 @@
-#Requires -Version 6.0
-# Octopus CLI installer for Windows (requires PowerShell 6+ / PowerShell Core)
-# Usage: irm https://octopus-review.ai/install.ps1 | iex
+# Octopus CLI installer (Windows / PowerShell).
+#
+# Usage:
+#   irm https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.ps1 | iex
+#
+# What it does:
+#   1. Detects your CPU architecture
+#   2. Fetches the latest `octp-v*` release from GitHub
+#   3. Downloads the matching native .exe
+#   4. Installs it to $env:USERPROFILE\.octopus\bin\octp.exe (or $env:OCTOPUS_INSTALL_DIR)
+#   5. Adds the install directory to your user PATH (idempotent)
+#
+# After install, run `octp` to launch the first-run onboarding wizard.
+#
+# Environment variables:
+#   $env:OCTOPUS_INSTALL_DIR   Override install directory
+#   $env:OCTOPUS_INSTALL_REPO  Override the GitHub repo (default: octopusreview/octopus)
+#   $env:OCTOPUS_INSTALL_TAG   Install a specific tag instead of latest
+
 $ErrorActionPreference = "Stop"
 
-$GITHUB_REPO = "octopusreview/octopus-cli"
-$BINARY_NAME = "octopus"
-$INSTALL_DIR = "$env:USERPROFILE\.octopus\bin"
+$Repo        = if ($env:OCTOPUS_INSTALL_REPO) { $env:OCTOPUS_INSTALL_REPO } else { "octopusreview/octopus" }
+$InstallDir  = if ($env:OCTOPUS_INSTALL_DIR)  { $env:OCTOPUS_INSTALL_DIR }  else { Join-Path $env:USERPROFILE ".octopus\bin" }
+$BinaryName  = "octp.exe"
 
-# ─── Helpers ────────────────────────────────────────────────────────────────
+# ── Step 1: arch ─────────────────────────────────────────────────────────────
 
-function Write-Info    { param($msg) Write-Host $msg -ForegroundColor Cyan }
-function Write-Success { param($msg) Write-Host $msg -ForegroundColor Green }
-function Write-Warn    { param($msg) Write-Host $msg -ForegroundColor Yellow }
-function Write-Err     { param($msg) Write-Host "error: $msg" -ForegroundColor Red; exit 1 }
+# We only ship x64 today. ARM64 Windows can fall back to x64 emulation; if a
+# native ARM64 build is added later, expand this map.
+$arch = "x64"
+$asset = "octp-windows-${arch}.exe"
 
-# ─── Detect Architecture ───────────────────────────────────────────────────
+# ── Step 2: resolve release tag ──────────────────────────────────────────────
 
-function Get-Arch {
-    $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
-    switch ($arch) {
-        "X64"   { return "x64" }
-        "Arm64" { return "arm64" }
-        default { Write-Err "Unsupported architecture: $arch" }
-    }
-}
-
-# ─── Get Latest Release ────────────────────────────────────────────────────
-
-function Get-LatestVersion {
-    $url = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
+if ($env:OCTOPUS_INSTALL_TAG) {
+  $tag = $env:OCTOPUS_INSTALL_TAG
+  Write-Host "Installing pinned version: $tag"
+} else {
+  Write-Host "Looking up latest octp release on $Repo ..."
+  # The repo publishes two release trains (web v* and CLI octp-v*) into
+  # the same feed. A busy web train can push every octp-v* tag off the
+  # first page, so walk pages until we find an octp-v* match.
+  $tag = $null
+  for ($page = 1; $page -le 5 -and -not $tag; $page++) {
+    $url = "https://api.github.com/repos/$Repo/releases?per_page=100&page=$page"
     try {
-        $release = Invoke-RestMethod -Uri $url -Headers @{ "User-Agent" = "octopus-installer" }
-        $version = $release.tag_name
-        if (-not $version) { Write-Err "Could not determine latest version." }
-        Write-Info "Latest version: $version"
-        return $version
+      $releases = Invoke-RestMethod -Uri $url -Headers @{ "User-Agent" = "octp-installer" }
     } catch {
-        Write-Err "Failed to fetch latest release: $_"
+      break
     }
+    if (-not $releases -or $releases.Count -eq 0) { break }
+    $candidate = ($releases | Where-Object { $_.tag_name -like "octp-v*" } | Select-Object -First 1)
+    if ($candidate) { $tag = $candidate.tag_name }
+  }
+  if (-not $tag) {
+    Write-Error "Could not find any octp-v* release on $Repo. Pin a tag with `$env:OCTOPUS_INSTALL_TAG = 'octp-v0.X.Y'`."
+    exit 1
+  }
+  Write-Host "Latest release: $tag"
 }
 
-# ─── Download & Install ────────────────────────────────────────────────────
+# ── Step 3: download to a temp file (verified before swapping into place) ────
 
-function Install-Octopus {
-    param($arch)
-    $version = Get-LatestVersion
+$downloadUrl = "https://github.com/$Repo/releases/download/$tag/$asset"
+Write-Host "Downloading $downloadUrl ..."
 
-    $artifactBase = "$BINARY_NAME-windows-$arch"
-    $archive = "$artifactBase.tar.gz"
-    $downloadUrl = "https://github.com/$GITHUB_REPO/releases/download/$version/$archive"
+New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+$target = Join-Path $InstallDir $BinaryName
+# Downloading directly to $target meant a failed upgrade destroyed the
+# working install. Stage to a temp file, verify, then swap.
+$tmpFile = [System.IO.Path]::GetTempFileName()
 
-    Write-Info "Downloading $archive..."
-
-    # Ensure install directory exists
-    if (-not (Test-Path $INSTALL_DIR)) {
-        New-Item -ItemType Directory -Path $INSTALL_DIR -Force | Out-Null
-    }
-
-    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "octopus-install-$([System.Guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
-
-    $archivePath = Join-Path $tmpDir $archive
-
-    try {
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $archivePath -UseBasicParsing
-    } catch {
-        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Err "Download failed. Check if a release exists for windows-$arch. Error: $_"
-    }
-
-    # Verify SHA256 checksum if checksums.txt is available
-    $checksumsUrl = "https://github.com/$GITHUB_REPO/releases/download/$version/checksums.txt"
-    try {
-        $checksums = Invoke-RestMethod -Uri $checksumsUrl -Headers @{ "User-Agent" = "octopus-installer" }
-        $expectedLine = $checksums -split "`n" | Where-Object { $_ -match [regex]::Escape($archive) }
-        if ($expectedLine) {
-            $expectedSha = ($expectedLine -split "\s+")[0]
-            $actualSha = (Get-FileHash -Path $archivePath -Algorithm SHA256).Hash.ToLower()
-            if ($expectedSha -ne $actualSha) {
-                Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Err "Checksum mismatch! Expected $expectedSha, got $actualSha. Aborting."
-            }
-            Write-Info "Checksum verified."
-        }
-    } catch {
-        Write-Warn "No checksums.txt found for this release -- skipping integrity check."
-    }
-
-    # Extract binary from archive
-    tar -xzf $archivePath -C $tmpDir
-    $extractedBinary = Join-Path $tmpDir "$BINARY_NAME.exe"
-    if (-not (Test-Path $extractedBinary)) {
-        Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Err "Expected binary '$BINARY_NAME.exe' not found in archive."
-    }
-
-    $destination = Join-Path $INSTALL_DIR "$BINARY_NAME.exe"
-    Copy-Item $extractedBinary $destination -Force
-    Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
-
-    Write-Success "Installed $BINARY_NAME to $destination"
-
-    # Add to PATH if not already there
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    if ($userPath -notlike "*$INSTALL_DIR*") {
-        [Environment]::SetEnvironmentVariable("Path", "$userPath;$INSTALL_DIR", "User")
-        $env:Path = "$env:Path;$INSTALL_DIR"
-        Write-Info "Added $INSTALL_DIR to your PATH."
-    }
+try {
+  Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
+} catch {
+  Remove-Item -Path $tmpFile -ErrorAction SilentlyContinue
+  Write-Error "Failed to download $asset from $tag. The release might not have a Windows binary."
+  exit 1
 }
 
-# ─── Skills Prompt ──────────────────────────────────────────────────────────
-
-function Prompt-InstallSkills {
-    Write-Host ""
-    $answer = Read-Host "Would you like to install Octopus skills for Claude Code? (y/N)"
-    if ($answer -match "^[yY]") {
-        Write-Info "Installing skills..."
-        try {
-            & (Join-Path $INSTALL_DIR "$BINARY_NAME.exe") skills install --all
-        } catch {
-            Write-Warn "Could not install skills automatically. Run 'octopus skills install --all' after logging in."
-        }
-    } else {
-        Write-Info "Skipped. You can install skills later with: octopus skills install --all"
-    }
+# ── Step 3b: verify SHA256 ───────────────────────────────────────────────────
+$sumsUrl = "https://github.com/$Repo/releases/download/$tag/SHA256SUMS.txt"
+try {
+  $sums = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing).Content
+  # SHA256SUMS.txt lines look like "<sha>  ./octp-windows-x64.exe" or
+  # "<sha>  octp-windows-x64.exe". Match either.
+  $expectedLine = ($sums -split "`r?`n") | Where-Object { $_ -match "\s+(\./)?$([regex]::Escape($asset))$" } | Select-Object -First 1
+  if (-not $expectedLine) {
+    Remove-Item -Path $tmpFile -ErrorAction SilentlyContinue
+    Write-Error "SHA256SUMS.txt at $sumsUrl has no entry for $asset. Refusing to install."
+    exit 1
+  }
+  $expected = ($expectedLine -split "\s+")[0]
+  $got = (Get-FileHash -Algorithm SHA256 -Path $tmpFile).Hash.ToLower()
+  if ($got -ne $expected.ToLower()) {
+    Remove-Item -Path $tmpFile -ErrorAction SilentlyContinue
+    Write-Error "Checksum mismatch for $asset: expected $expected, got $got. Refusing to install."
+    exit 1
+  }
+} catch {
+  Write-Warning "Could not fetch $sumsUrl — proceeding without checksum verification."
 }
 
-# ─── Main ───────────────────────────────────────────────────────────────────
+Move-Item -Path $tmpFile -Destination $target -Force
 
 Write-Host ""
-Write-Info "  Octopus CLI Installer"
-Write-Info "  ====================="
-Write-Host ""
+Write-Host "Installed octp → $target"
 
-$arch = Get-Arch
-Write-Info "Detected platform: windows-$arch"
+# ── Step 4: PATH ─────────────────────────────────────────────────────────────
 
-Install-Octopus -arch $arch
-Prompt-InstallSkills
-
-Write-Host ""
-Write-Success "Done! Get started with:"
-Write-Success "  octopus login"
-Write-Host ""
+$userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+$pathEntries = $userPath -split ";" | Where-Object { $_ -ne "" }
+if ($pathEntries -notcontains $InstallDir) {
+  $newPath = ($pathEntries + $InstallDir) -join ";"
+  [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+  Write-Host "Added $InstallDir to your user PATH."
+  Write-Host ""
+  Write-Host "Open a new PowerShell window, then run: octp"
+} else {
+  Write-Host "$InstallDir is already on your PATH."
+  Write-Host ""
+  Write-Host "Get started: octp"
+}
