@@ -13,7 +13,7 @@ export type OctopusConfig = {
   onboardedAt?: string;
   /** Provider slug chosen during onboarding ("anthropic" | "openai" | "google" | …). */
   provider?: string;
-  /** Model ID chosen during onboarding (e.g. "claude-sonnet-4-6", "gpt-4o"). */
+  /** Model ID chosen during onboarding (e.g. "claude-sonnet-4-6-20250619", "gpt-4o"). */
   model?: string;
   /** Hosted API base URL when self-hosting. Absent when using the SaaS. */
   selfHostedBaseUrl?: string;
@@ -27,6 +27,24 @@ export type OctopusConfig = {
 };
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+
+/**
+ * One-shot remap for Anthropic model IDs persisted by older CLI versions.
+ * The pre-dated-IDs catalog wrote `claude-sonnet-4-6` / `claude-opus-4-7` /
+ * `claude-haiku-4-5` to ~/.octopus/config.json, but those strings are NOT in
+ * the server's exact-key pricing map, so usage logged under them prices to
+ * $0 and bypasses the org spend-limit check — the exact bypass the catalog
+ * fix was meant to close. Bumping CONFIG_VERSION would force re-onboarding
+ * (worse UX); a silent remap on load keeps users billable without surprise.
+ *
+ * Safe to leave in indefinitely: the new IDs ARE the canonical Anthropic
+ * model IDs, so re-saving the config writes the dated form back to disk.
+ */
+const LEGACY_MODEL_REMAP: Record<string, string> = {
+  "claude-sonnet-4-6": "claude-sonnet-4-6-20250619",
+  "claude-opus-4-7": "claude-opus-4-6-20250619",
+  "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+};
 
 const EMPTY: OctopusConfig = { version: CONFIG_VERSION };
 
@@ -46,7 +64,11 @@ export async function loadConfig(): Promise<OctopusConfig> {
       "version" in parsed &&
       (parsed as OctopusConfig).version === CONFIG_VERSION
     ) {
-      return parsed as OctopusConfig;
+      const cfg = parsed as OctopusConfig;
+      if (cfg.model && LEGACY_MODEL_REMAP[cfg.model]) {
+        cfg.model = LEGACY_MODEL_REMAP[cfg.model];
+      }
+      return cfg;
     }
     return { ...EMPTY };
   } catch {
