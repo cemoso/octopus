@@ -30,18 +30,36 @@ export type UrlValidationOptions = {
   hosted?: boolean;
 };
 
+// Patterns run against the WHATWG-canonicalized hostname (brackets stripped),
+// so we only need to match canonical forms — e.g. `[0:0:0:0:0:0:0:1]` already
+// canonicalizes to `::1` before reaching these patterns.
 const PRIVATE_HOST_PATTERNS: RegExp[] = [
   /^localhost$/i,
   /^127\./,                                  // loopback
+  /^0\.0\.0\.0$/,                            // IPv4 wildcard — Linux/macOS route this to loopback
   /^10\./,                                   // RFC1918
   /^192\.168\./,                             // RFC1918
   /^172\.(1[6-9]|2\d|3[01])\./,              // RFC1918
   /^169\.254\./,                             // link-local (cloud metadata!)
   /^fe80:/i,                                 // IPv6 link-local
   /^::1$/i,                                  // IPv6 loopback
+  /^::$/,                                    // IPv6 unspecified
+  /^::ffff:/i,                               // IPv4-mapped IPv6 — kernel routes to embedded v4 (bypasses 169.254. via [::ffff:169.254.169.254])
+  /^2002:/i,                                 // 6to4 (RFC 3056) — embeds a v4 in the next 32 bits; [2002:7f00:1::] reaches 127.0.0.1
+  /^64:ff9b:/i,                              // NAT64 well-known prefix (RFC 6052) — last 32 bits is v4; [64:ff9b::a9fe:a9fe] reaches 169.254.169.254
+  /^::[0-9a-f]{1,4}:[0-9a-f]{1,4}$/i,        // IPv4-compatible IPv6 (RFC 4291 §2.5.5.1, deprecated) — `::a.b.c.d` canonicalizes to `::H:H` and reaches embedded v4
   /^fc[0-9a-f][0-9a-f]:/i,                   // IPv6 unique local (fc00::/7)
   /^fd[0-9a-f][0-9a-f]:/i,                   // IPv6 unique local
 ];
+
+/**
+ * Normalize the hostname returned by `URL` so the patterns above match
+ * canonical strings only. `URL.hostname` keeps brackets on IPv6, and we
+ * want consistent lowercase comparisons.
+ */
+function canonicalHost(parsed: URL): string {
+  return parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+}
 
 /**
  * Validate and normalize a provider base URL. Returns the canonical origin
@@ -68,9 +86,9 @@ export function validateProviderUrl(
     throw new Error(`Provider URL must use http(s); got ${parsed.protocol}`);
   }
 
+  const host = canonicalHost(parsed);
   const hosted = options.hosted ?? process.env.SELF_HOSTED !== "true";
   if (hosted) {
-    const host = parsed.hostname.toLowerCase();
     if (PRIVATE_HOST_PATTERNS.some((re) => re.test(host))) {
       throw new Error(
         `Provider URL host "${host}" is private/loopback/link-local; ` +
