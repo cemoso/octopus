@@ -18,8 +18,13 @@ export type ModelStepProps = {
  * empty model — DoneStep handles the unset case downstream.
  */
 export function ModelStep({ provider, onNext }: ModelStepProps) {
+  // The no-provider panel below tells the user "Press Enter to continue",
+  // so handle Enter (in addition to Esc) when there's no provider. Without
+  // this, Enter does nothing on that screen and the user is soft-locked
+  // on a step whose own instructions are wrong.
   useInput((_input, key) => {
     if (key.escape) onNext({ model: "" });
+    if (key.return && !provider) onNext({ model: "" });
   });
 
   const models = modelsFor(provider);
