@@ -1,4 +1,5 @@
 import { loadByok } from "./byok.js";
+import { loadConfig, DEFAULT_OLLAMA_BASE_URL } from "./config.js";
 
 /**
  * Validate that a BYOK key actually works against the provider's API.
@@ -83,7 +84,17 @@ async function validateGoogle(key: string | undefined): Promise<ValidateResult> 
 }
 
 async function validateOllama(): Promise<ValidateResult> {
-  const base = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+  // URL precedence (matches config.ts:20-28 + agent-serve.ts:79-80):
+  //   1. OLLAMA_BASE_URL env (wins)
+  //   2. ollamaBaseUrl in ~/.octopus/config.json (set by the wizard)
+  //   3. Built-in default
+  // The previous version skipped step 2, so a user who pointed the wizard
+  // at a non-default Ollama URL got `validate` and `doctor` probing
+  // localhost — `octp doctor` then printed a hard ✗ error even though
+  // `octp agent serve` worked fine against the configured URL.
+  const config = await loadConfig();
+  const base =
+    process.env.OLLAMA_BASE_URL ?? config.ollamaBaseUrl ?? DEFAULT_OLLAMA_BASE_URL;
   try {
     const r = await fetch(`${base}/api/tags`);
     if (!r.ok) {

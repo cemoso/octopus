@@ -34,7 +34,7 @@ Committed for the next quarter or so. Loose ordering; reshuffled as priorities s
 - **Roadmap & governance docs** — this document, plus `GOVERNANCE.md`, `MAINTAINERS.md`, `SUPPORT.md` (`workstream:3-roadmap`)
 - **Compliance posture** — surface existing audit-log infrastructure to enterprise buyers; ship sub-processors list, DPA template, SOC2 readiness self-assessment, audit-log UI (`workstream:4-compliance`)
 - **More AI providers** — `codex` (default), `grok`, `acpx` (ACP-compatible: Claude/Pi/Gemini), `opencode`, plus `mock`/`mock-fail` for tests (`workstream:5-providers`)
-- **Architectural refactors** — unified `Provider` interface, Zod-derived JSON schemas, robust JSON extraction, anti-hallucination prompt fields, content-derived finding signatures so user triage survives PR re-reviews (`workstream:6-clawpatch-ports`)
+- **Architectural refactors** — unified `Provider` interface, Zod-derived JSON schemas, robust JSON extraction, anti-hallucination prompt fields, content-derived finding signatures so user triage survives PR re-reviews (`workstream:6-architecture`)
 
 ## Proposed
 

@@ -90,10 +90,22 @@ export function ValidateStep({ provider, onNext, onEditKey }: ValidateStepProps)
   }
 
   if (phase === "failed" && result && result.ok === false) {
+    // Strip ANSI / OSC escapes from `result.message` before rendering —
+    // it can contain raw response bodies from arbitrary remote endpoints
+    // (the user's self-hosted URL or BYOK provider), and a malicious or
+    // misconfigured remote could otherwise inject cursor movement /
+    // terminal-title-rewrite / hyperlink sequences into the wizard's
+    // output. \x1b is the ESC byte; the broad alternation covers CSI,
+    // OSC, and other introducers.
+    const safeMessage = result.message?.replace(
+      // eslint-disable-next-line no-control-regex
+      /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[A-Za-z=>]/g,
+      "",
+    );
     return (
       <Box flexDirection="column">
         <Text color="red" bold>Validation failed{result.status ? ` (HTTP ${result.status})` : ""}.</Text>
-        <Text color="red">{result.message}</Text>
+        <Text color="red">{safeMessage}</Text>
         <Text> </Text>
         <SelectInput
           items={[

@@ -1,4 +1,4 @@
-import { loadConfig, isOnboarded } from "../lib/config.js";
+import { loadConfig, isOnboarded, DEFAULT_OLLAMA_BASE_URL } from "../lib/config.js";
 import { loadCredentials } from "../lib/credentials.js";
 import { loadByok } from "../lib/byok.js";
 import { getJson } from "../lib/api.js";
@@ -76,7 +76,10 @@ export async function doctorCommand(_argv: string[]): Promise<number> {
   if (config.provider !== "ollama") {
     line("skip", "not selected provider");
   } else {
-    const base = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+    // URL precedence matches agent-serve / validate (per config.ts:20-28):
+    // env wins, then wizard-saved ollamaBaseUrl, then default.
+    const base =
+      process.env.OLLAMA_BASE_URL ?? config.ollamaBaseUrl ?? DEFAULT_OLLAMA_BASE_URL;
     try {
       const r = await fetch(`${base}/api/tags`);
       if (r.ok) {

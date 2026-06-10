@@ -106,3 +106,37 @@ export function normalizeBaseUrl(input: string): string | null {
     return null;
   }
 }
+
+/**
+ * Classify a base URL as "transport-safe to send bearer tokens over":
+ * HTTPS to any host, or HTTP to a loopback / private-LAN host. Cleartext
+ * HTTP to a public host should warn the user before we POST the auth
+ * token — that's a one-way credential leak to any on-path observer.
+ *
+ * Callers: AuthStep (warn before sign-in to a self-hosted http:// URL on
+ * a non-local host). Returns true when transport is safe; false when the
+ * caller should surface a warning + require explicit confirmation.
+ */
+export function isTransportSafe(baseUrl: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(baseUrl);
+  } catch {
+    return false;
+  }
+  if (u.protocol === "https:") return true;
+  if (u.protocol !== "http:") return false;
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host === "::1" || host === "::" || host.endsWith(".local")) return true;
+  const v4 = host.split(".");
+  if (v4.length === 4 && v4.every((p) => /^\d+$/.test(p))) {
+    const [a, b] = v4.map(Number);
+    if (a === 127) return true;
+    if (a === 0 && b === 0 && v4[2] === "0" && v4[3] === "0") return true;
+    if (a === 10) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+  }
+  if (host.startsWith("fe80:") || /^f[cd]/.test(host)) return true;
+  return false;
+}

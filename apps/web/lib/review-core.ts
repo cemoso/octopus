@@ -788,7 +788,12 @@ export async function generateBareLocalReview(
     organizationId: org.id,
   });
 
-  let findings = parseFindingsFromJson(response.text) ?? [];
+  // Match the canonical generateLocalReview parser fallback: try JSON
+  // first, then markdown. The bare path's `parseFindings` shim does the
+  // same, so this just keeps the bare review robust to older models or
+  // mid-output truncation that ships findings as the legacy markdown
+  // format instead of JSON.
+  let findings = parseFindings(response.text);
 
   // Apply the same finding filters the canonical path runs:
   //   1. confidence threshold (default 70, HIGH = 85, or explicit number)
