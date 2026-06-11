@@ -91,4 +91,18 @@ describe("selectLatestWebRelease", () => {
       selectLatestWebRelease([{ tag_name: "v1.0.0", draft: false, prerelease: false } as unknown as Parameters<typeof selectLatestWebRelease>[0][number]]),
     ).toBeNull();
   });
+
+  test("picks the most recently PUBLISHED release, not just the API's first eligible entry", () => {
+    // GitHub /releases sorts by created_at desc; this can disagree with
+    // published_at if the older-created release was published later
+    // (e.g. a backdated draft promoted to published after a newer tag
+    // was already created). We want the most recently *published*, which
+    // matches what admins read as "latest".
+    const out = selectLatestWebRelease([
+      rel({ tag_name: "v0.4.0", published_at: "2026-05-10T00:00:00Z" }), // newer created_at
+      rel({ tag_name: "v0.5.0", published_at: "2026-06-01T00:00:00Z" }), // newer published_at
+      rel({ tag_name: "v0.3.9", published_at: "2026-04-01T00:00:00Z" }),
+    ]);
+    expect(out?.tag_name).toBe("v0.5.0");
+  });
 });

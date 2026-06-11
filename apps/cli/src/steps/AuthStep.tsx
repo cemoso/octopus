@@ -57,11 +57,17 @@ export function AuthStep({ onNext }: AuthStepProps) {
   const [error, setError] = useState<string>("");
 
   // Global Esc → skip the whole step (user can configure auth later).
+  // Now also allowed during `requesting` so the wizard isn't hard-locked
+  // on a stalled host: the device-code request has a per-call timeout
+  // below, but a user staring at "Requesting device code from …" still
+  // wants an Esc that works rather than Ctrl+C'ing out of the whole
+  // onboarding wizard. `approved` and `waiting` are kept off-limits
+  // because in those states bailing would corrupt session state.
   // From the failed phase: Enter retries with the current URL, `b` (or
   // backspace) jumps back to URL entry so the user can fix a typo /
   // re-point at the right host without bouncing through the whole step.
   useInput((input, key) => {
-    if (key.escape && mode !== "approved" && mode !== "requesting" && mode !== "waiting") {
+    if (key.escape && mode !== "approved" && mode !== "waiting") {
       setMode("skipped");
       onNext(buildPatch(baseUrl || HOSTED_BASE_URL));
     }
@@ -76,13 +82,17 @@ export function AuthStep({ onNext }: AuthStepProps) {
     }
   });
 
-  // Kick off device-code request when entering `requesting`.
+  // Kick off device-code request when entering `requesting`. Bounded by
+  // a 15s timeout so a firewalled / blackholed self-hosted URL doesn't
+  // hang the wizard indefinitely — the user gets a "Could not request
+  // device code" error and lands in `failed` where Enter retries and
+  // `b` returns to URL entry.
   useEffect(() => {
     if (mode !== "requesting") return;
     let cancelled = false;
     (async () => {
       const url = `${baseUrl}/api/cli/auth/device`;
-      const res = await postJson<DeviceResponse>(url, {});
+      const res = await postJson<DeviceResponse>(url, {}, undefined, { timeoutMs: 15_000 });
       if (cancelled) return;
       if (!res.ok) {
         setError(`Could not request device code: ${res.error}`);

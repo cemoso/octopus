@@ -37,6 +37,12 @@ export function ValidateStep({ provider, onNext, onEditKey }: ValidateStepProps)
       return;
     }
     let cancelled = false;
+    // Track the auto-advance timer so we can clear it on unmount. Without
+    // this, an Esc during the 1.2s "skipped" window (or the 600ms "ok"
+    // window) calls onNext immediately, then the un-cleared timer fires
+    // after unmount and calls onNext a second time — stepIndex advances
+    // twice, jumping past RepoStep to Done without the user seeing it.
+    let autoAdvance: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       setPhase("validating");
       const r = await validateProvider(provider);
@@ -44,16 +50,17 @@ export function ValidateStep({ provider, onNext, onEditKey }: ValidateStepProps)
       setResult(r);
       if (r.ok === true) {
         setPhase("ok");
-        setTimeout(onNext, 600);
+        autoAdvance = setTimeout(onNext, 600);
       } else if (r.ok === "skipped") {
         setPhase("skipped");
-        setTimeout(onNext, 1200);
+        autoAdvance = setTimeout(onNext, 1200);
       } else {
         setPhase("failed");
       }
     })();
     return () => {
       cancelled = true;
+      if (autoAdvance !== null) clearTimeout(autoAdvance);
     };
   }, [provider, attempt, onNext]);
 
@@ -90,10 +97,22 @@ export function ValidateStep({ provider, onNext, onEditKey }: ValidateStepProps)
   }
 
   if (phase === "failed" && result && result.ok === false) {
+    // Strip ANSI / OSC escapes from `result.message` before rendering —
+    // it can contain raw response bodies from arbitrary remote endpoints
+    // (the user's self-hosted URL or BYOK provider), and a malicious or
+    // misconfigured remote could otherwise inject cursor movement /
+    // terminal-title-rewrite / hyperlink sequences into the wizard's
+    // output. \x1b is the ESC byte; the broad alternation covers CSI,
+    // OSC, and other introducers.
+    const safeMessage = result.message?.replace(
+      // eslint-disable-next-line no-control-regex
+      /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[A-Za-z=>]/g,
+      "",
+    );
     return (
       <Box flexDirection="column">
         <Text color="red" bold>Validation failed{result.status ? ` (HTTP ${result.status})` : ""}.</Text>
-        <Text color="red">{result.message}</Text>
+        <Text color="red">{safeMessage}</Text>
         <Text> </Text>
         <SelectInput
           items={[

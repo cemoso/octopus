@@ -37,10 +37,16 @@ if ($env:OCTOPUS_INSTALL_TAG) {
   Write-Host "Installing pinned version: $tag"
 } else {
   Write-Host "Looking up latest octp release on $Repo ..."
-  $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=20" -Headers @{ "User-Agent" = "octp-installer" }
-  $tag = ($releases | Where-Object { $_.tag_name -like "octp-v*" } | Select-Object -First 1).tag_name
+  # Find the most recent NON-DRAFT, NON-PRERELEASE octp-v* tag.
+  # Users testing prerelease tags can override via $env:OCTOPUS_INSTALL_TAG.
+  $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases?per_page=30" -Headers @{ "User-Agent" = "octp-installer" }
+  $tag = (
+    $releases |
+      Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -like "octp-v*" } |
+      Select-Object -First 1
+  ).tag_name
   if (-not $tag) {
-    Write-Error "Could not find any octp-v* release on $Repo. Pin a tag with `$env:OCTOPUS_INSTALL_TAG = 'octp-v0.X.Y'`."
+    Write-Error "Could not find any non-prerelease octp-v* on $Repo. Pin a tag with `$env:OCTOPUS_INSTALL_TAG = 'octp-v0.X.Y'`."
     exit 1
   }
   Write-Host "Latest release: $tag"
@@ -49,6 +55,7 @@ if ($env:OCTOPUS_INSTALL_TAG) {
 # ── Step 3: download ─────────────────────────────────────────────────────────
 
 $downloadUrl = "https://github.com/$Repo/releases/download/$tag/$asset"
+$sumsUrl = "https://github.com/$Repo/releases/download/$tag/SHA256SUMS.txt"
 Write-Host "Downloading $downloadUrl ..."
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -59,6 +66,43 @@ try {
 } catch {
   Write-Error "Failed to download $asset from $tag. The release might not have a Windows binary."
   exit 1
+}
+
+# ── Step 3b: verify SHA256 checksum ──────────────────────────────────────────
+# octp-release.yml generates SHA256SUMS.txt and attaches it to every release.
+# Verifying the binary against the published sum protects against in-flight
+# tampering and truncated downloads. Set $env:OCTOPUS_INSTALL_SKIP_VERIFY="1"
+# to bypass (only do this when pinning a tag pre-dating the sums workflow).
+
+if ($env:OCTOPUS_INSTALL_SKIP_VERIFY -eq "1") {
+  Write-Host "SKIPPING SHA256 verification (OCTOPUS_INSTALL_SKIP_VERIFY=1)."
+} else {
+  $sumsTmp = New-TemporaryFile
+  try {
+    try {
+      Invoke-WebRequest -Uri $sumsUrl -OutFile $sumsTmp -UseBasicParsing
+    } catch {
+      Remove-Item $target -Force -ErrorAction SilentlyContinue
+      Write-Error "Could not download SHA256SUMS.txt from $tag. Older releases pre-date the sums workflow — set `$env:OCTOPUS_INSTALL_SKIP_VERIFY='1' if you accept that risk."
+      exit 1
+    }
+    $expectedLine = Get-Content $sumsTmp | Where-Object { $_ -match "  $([Regex]::Escape($asset))$" } | Select-Object -First 1
+    if (-not $expectedLine) {
+      Remove-Item $target -Force -ErrorAction SilentlyContinue
+      Write-Error "No SHA256SUMS.txt entry for $asset on $tag. Set `$env:OCTOPUS_INSTALL_SKIP_VERIFY='1' to bypass (NOT recommended)."
+      exit 1
+    }
+    $expected = ($expectedLine -split "\s+")[0]
+    $actual = (Get-FileHash -Algorithm SHA256 -Path $target).Hash.ToLower()
+    if ($expected -ne $actual) {
+      Remove-Item $target -Force -ErrorAction SilentlyContinue
+      Write-Error "SHA256 mismatch for $asset. expected=$expected actual=$actual. The download may be corrupt or tampered. Aborting."
+      exit 1
+    }
+    Write-Host "Verified SHA256 ($expected)"
+  } finally {
+    Remove-Item $sumsTmp -Force -ErrorAction SilentlyContinue
+  }
 }
 
 Write-Host ""

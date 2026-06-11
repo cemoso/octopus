@@ -37,10 +37,13 @@ export async function GET(request: Request) {
   }
 
   const { searchParams } = new URL(request.url);
-  const limit = Math.min(
-    MAX_PAGE_SIZE,
-    Math.max(1, parseInt(searchParams.get("limit") ?? String(PAGE_SIZE), 10)),
-  );
+  // parseInt("abc") / parseInt("") returns NaN; both Math.max and Math.min
+  // propagate NaN, so Prisma was getting take: NaN+1 and 500'ing the
+  // endpoint on a typo'd query string. Validate before clamping.
+  const rawLimit = parseInt(searchParams.get("limit") ?? "", 10);
+  const limit = Number.isFinite(rawLimit)
+    ? Math.min(MAX_PAGE_SIZE, Math.max(1, rawLimit))
+    : PAGE_SIZE;
   const cursor = searchParams.get("cursor") ?? undefined;
   // Allow-list validate — same reasoning as the export route.
   const category = validateAuditCategory(searchParams.get("category"));

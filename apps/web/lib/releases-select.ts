@@ -31,24 +31,36 @@ export type GitHubWebRelease = {
 export const WEB_RELEASE_TAG_RE = /^v\d/;
 
 /**
- * Pick the latest *web* release from a GitHub `/releases` list (sorted
- * desc by published_at — the API's default). Skips drafts, prereleases,
- * and tags that don't match the web-release pattern. Returns null when
- * no eligible release is found.
+ * Pick the latest *web* release from a GitHub `/releases` list. Skips
+ * drafts, prereleases, and tags that don't match the web-release pattern.
+ * Returns null when no eligible release is found.
+ *
+ * Sort note: GitHub's `/releases` endpoint sorts by `created_at`
+ * (descending) — NOT `published_at` as one might assume, and not
+ * documented prominently. For two releases tagged on the same commit
+ * (or for a backdated `published_at`), the two orderings disagree. We
+ * filter first, then re-sort by `published_at` desc explicitly so the
+ * "latest" we surface to admins is the most recently *published* one,
+ * which is what they actually care about.
  */
 export function selectLatestWebRelease(
   list: GitHubReleaseListItem[],
 ): GitHubWebRelease | null {
+  const eligible: GitHubWebRelease[] = [];
   for (const rel of list) {
     if (rel.draft || rel.prerelease) continue;
     if (typeof rel.tag_name !== "string" || !WEB_RELEASE_TAG_RE.test(rel.tag_name)) continue;
     if (typeof rel.html_url !== "string" || typeof rel.published_at !== "string") continue;
-    return {
+    eligible.push({
       tag_name: rel.tag_name,
       html_url: rel.html_url,
       published_at: rel.published_at,
       body: rel.body,
-    };
+    });
   }
-  return null;
+  if (eligible.length === 0) return null;
+  // Date.parse on an ISO-8601 string is stable across V8/JSC and tolerant
+  // of the "Z" timezone marker GitHub emits. Highest timestamp wins.
+  eligible.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
+  return eligible[0];
 }

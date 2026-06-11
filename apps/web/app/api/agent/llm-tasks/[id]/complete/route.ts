@@ -68,15 +68,28 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ ok: true, status: task.status }); // idempotent
   }
 
+  // updateMany with the status guard so a concurrent provider-side timeout
+  // doesn't get its terminal state clobbered. The naive `update where: id`
+  // form races: poll-loop and /complete can both pass their respective
+  // status-checks, then last-write-wins. updateMany returns count=0 if the
+  // row has already moved off "claimed", which we treat as idempotent.
   if (body.error) {
-    await prisma.agentLlmTask.update({
-      where: { id },
+    const flipped = await prisma.agentLlmTask.updateMany({
+      where: { id, status: "claimed" },
       data: {
         status: "failed",
         errorMessage: body.error.slice(0, 1000),
         completedAt: new Date(),
       },
     });
+    if (flipped.count === 0) {
+      // Already terminal from the other side; respond idempotently.
+      const current = await prisma.agentLlmTask.findUnique({
+        where: { id },
+        select: { status: true },
+      });
+      return NextResponse.json({ ok: true, status: current?.status ?? "failed" });
+    }
     return NextResponse.json({ ok: true, status: "failed" });
   }
 
@@ -87,15 +100,43 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     );
   }
 
-  await prisma.agentLlmTask.update({
-    where: { id },
+  // Cap result size + sanity-check usage before storing. resultText flows
+  // through to AiResponse.text and into the review pipeline; a multi-MB
+  // text from a buggy agent (or a buggy model output that exceeded the
+  // schema cap) would otherwise bloat the DB indefinitely. usage is
+  // typed-narrowed so non-number values can't poison the int columns
+  // logAiUsage writes downstream.
+  const MAX_RESULT_TEXT_BYTES = 2_000_000;
+  const cappedText =
+    body.text.length > MAX_RESULT_TEXT_BYTES
+      ? body.text.slice(0, MAX_RESULT_TEXT_BYTES)
+      : body.text;
+  const usage = body.usage as Record<string, unknown> | null | undefined;
+  const sanitizedUsage = usage
+    ? {
+        inputTokens: typeof usage.inputTokens === "number" && Number.isFinite(usage.inputTokens) ? usage.inputTokens : 0,
+        outputTokens: typeof usage.outputTokens === "number" && Number.isFinite(usage.outputTokens) ? usage.outputTokens : 0,
+        cacheReadTokens: typeof usage.cacheReadTokens === "number" && Number.isFinite(usage.cacheReadTokens) ? usage.cacheReadTokens : 0,
+        cacheWriteTokens: typeof usage.cacheWriteTokens === "number" && Number.isFinite(usage.cacheWriteTokens) ? usage.cacheWriteTokens : 0,
+      }
+    : undefined;
+
+  const flipped = await prisma.agentLlmTask.updateMany({
+    where: { id, status: "claimed" },
     data: {
       status: "completed",
-      resultText: body.text,
-      resultUsage: body.usage ?? undefined,
+      resultText: cappedText,
+      resultUsage: sanitizedUsage,
       completedAt: new Date(),
     },
   });
+  if (flipped.count === 0) {
+    const current = await prisma.agentLlmTask.findUnique({
+      where: { id },
+      select: { status: true },
+    });
+    return NextResponse.json({ ok: true, status: current?.status ?? "completed" });
+  }
 
   return NextResponse.json({ ok: true, status: "completed" });
 }

@@ -9,7 +9,7 @@ Replaces the previous npm-published `@octp/cli` package — different distributi
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.sh | bash
 ```
 
 ### Windows (PowerShell)

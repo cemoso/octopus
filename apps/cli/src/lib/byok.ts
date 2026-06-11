@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { ensureOctopusHome, getByokPath } from "./paths.js";
 
 /**
@@ -19,11 +19,18 @@ export async function loadByok(): Promise<ByokFile> {
   try {
     const raw = await readFile(getByokPath(), "utf8");
     const parsed = JSON.parse(raw) as unknown;
+    // `typeof null === "object"` and `typeof [] === "object"`, so the
+    // existing shape guard accepted both `{"keys": null}` and `{"keys": []}`.
+    // Either form crashed downstream (`byok.keys[provider]` on null →
+    // TypeError; `provider in []` is fine but `Object.keys` on an array
+    // returned indices). Fall back to EMPTY in both cases.
     if (
       typeof parsed === "object" &&
       parsed !== null &&
       "keys" in parsed &&
-      typeof (parsed as ByokFile).keys === "object"
+      (parsed as ByokFile).keys !== null &&
+      typeof (parsed as ByokFile).keys === "object" &&
+      !Array.isArray((parsed as ByokFile).keys)
     ) {
       return parsed as ByokFile;
     }
@@ -40,7 +47,14 @@ export async function setByokKey(provider: string, apiKey: string): Promise<void
     keys: { ...current.keys, [provider]: apiKey },
     updatedAt: new Date().toISOString(),
   };
-  await writeFile(getByokPath(), JSON.stringify(next, null, 2), { mode: 0o600 });
+  const p = getByokPath();
+  await writeFile(p, JSON.stringify(next, null, 2), { mode: 0o600 });
+  // writeFile's `mode` only applies on FILE CREATION. If byok.json already
+  // existed with looser permissions (older build, restored from a sync
+  // tool, touched under a different umask), rewriting it leaves the loose
+  // bits intact. Force-chmod after every write so the documented 0600
+  // promise actually holds on pre-existing files too.
+  await chmod(p, 0o600);
 }
 
 export async function clearByokKey(provider: string): Promise<void> {

@@ -72,10 +72,19 @@ export async function POST(request: Request) {
       },
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    // Don't return the raw exception message to the client — Better Auth
+    // (and the wrapping APIError) can include stack-like detail, ORM
+    // identifiers, or other internal context that doesn't belong on the
+    // auth surface. Log the full error server-side; surface a fixed
+    // user-facing message at the canonical client-facing status code
+    // for a credential failure.
+    console.error("[password-changed] changePassword failed:", e);
+    const isInvalidCurrent =
+      e instanceof Error &&
+      /current password|invalid password|incorrect/i.test(e.message);
     return NextResponse.json(
-      { error: message || "Password change failed" },
-      { status: 400 },
+      { error: isInvalidCurrent ? "Current password is incorrect." : "Password change failed." },
+      { status: isInvalidCurrent ? 401 : 400 },
     );
   }
 
