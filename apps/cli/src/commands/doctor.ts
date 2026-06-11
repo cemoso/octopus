@@ -1,4 +1,4 @@
-import { loadConfig, isOnboarded } from "../lib/config.js";
+import { loadConfig, isOnboarded, DEFAULT_OLLAMA_BASE_URL } from "../lib/config.js";
 import { loadCredentials } from "../lib/credentials.js";
 import { loadByok } from "../lib/byok.js";
 import { getJson } from "../lib/api.js";
@@ -76,7 +76,10 @@ export async function doctorCommand(_argv: string[]): Promise<number> {
   if (config.provider !== "ollama") {
     line("skip", "not selected provider");
   } else {
-    const base = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
+    // URL precedence matches agent-serve / validate (per config.ts:20-28):
+    // env wins, then wizard-saved ollamaBaseUrl, then default.
+    const base =
+      process.env.OLLAMA_BASE_URL ?? config.ollamaBaseUrl ?? DEFAULT_OLLAMA_BASE_URL;
     try {
       const r = await fetch(`${base}/api/tags`);
       if (r.ok) {
@@ -94,8 +97,13 @@ export async function doctorCommand(_argv: string[]): Promise<number> {
   // ── Local agent registration (if any) ──────────────────────────────────────
   if (creds) {
     console.log("\nLocal agents for this org:");
-    const res = await getJson<{ agents: { id: string; name: string; status: string; lastSeenAt: string | null }[] }>(
-      `${creds.baseUrl}/api/agent/status`,
+    // /api/agent/status requires `orgId` as a query param and 400s without
+    // it. The endpoint already filters to agents with a fresh heartbeat,
+    // so any agent it returns is considered live — no need to inspect a
+    // per-agent `status` field (the endpoint doesn't return one anyway).
+    const url = `${creds.baseUrl}/api/agent/status?orgId=${encodeURIComponent(creds.orgId)}`;
+    const res = await getJson<{ agents: { id: string; name: string; lastSeenAt: string | null }[] }>(
+      url,
       { headers: { authorization: `Bearer ${creds.token}` } },
     );
     if (!res.ok) {
@@ -104,8 +112,7 @@ export async function doctorCommand(_argv: string[]): Promise<number> {
       line("skip", "no agents registered", "run `octp agent serve` to register one");
     } else {
       for (const a of res.data.agents) {
-        const status = a.status === "online" ? "ok" : "warn";
-        line(status, `${a.name}`, `${a.status}${a.lastSeenAt ? ` (last seen ${a.lastSeenAt})` : ""}`);
+        line("ok", a.name, `online${a.lastSeenAt ? ` (last seen ${a.lastSeenAt})` : ""}`);
       }
     }
   }

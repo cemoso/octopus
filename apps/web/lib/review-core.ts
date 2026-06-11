@@ -721,23 +721,27 @@ export async function generateBareLocalReview(
   // placeholders that depend on repo/PR context get safe defaults so the
   // prompt is still well-formed.
   //
+  // The placeholder names below MUST match what apps/web/prompts/SYSTEM_PROMPT.md
+  // actually contains (grep for `{{...}}` there). Drift here is a silent
+  // correctness bug — the replace chain runs with no-op output and the
+  // prompt ships with literal `{{X}}` strings to the model.
+  //
   // REVIEW_LANGUAGE hard-codes "en" because we don't have a repo whose
   // reviewLanguage column we'd respect, and the bare endpoint has no
   // other signal for which language the developer prefers. If this
   // becomes a real concern, expose `reviewLanguage` on the wizard
   // config and have the CLI pass it through alongside `modelOverride`.
   const systemPrompt = getSystemPrompt()
-    .replace(/\{\{REPO_NAME\}\}/g, "Local working tree")
-    .replace(/\{\{REPO_DESCRIPTION\}\}/g, "")
+    .replace(/\{\{CODEBASE_CONTEXT\}\}/g, "")
+    .replace(/\{\{FILE_TREE\}\}/g, "")
+    .replace(/\{\{KNOWLEDGE_CONTEXT\}\}/g, "")
+    .replace(/\{\{FALSE_POSITIVE_CONTEXT\}\}/g, "")
+    .replace(/\{\{USER_INSTRUCTION\}\}/g, "")
     .replace(/\{\{PR_NUMBER\}\}/g, "0")
-    .replace(/\{\{PR_TITLE\}\}/g, title ?? "Uncommitted local changes")
-    .replace(/\{\{PR_AUTHOR\}\}/g, author ?? "local")
     .replace(/\{\{PROVIDER\}\}/g, "local")
-    .replace(/\{\{CONTEXT_BLOCK\}\}/g, "")
-    .replace(/\{\{KNOWLEDGE_BLOCK\}\}/g, "")
-    .replace(/\{\{PRIOR_FINDINGS\}\}/g, "")
     .replace(/\{\{RE_REVIEW_CONTEXT\}\}/g, "")
     .replace(/\{\{CONFLICT_DETECTION\}\}/g, "")
+    .replace(/\{\{DIAGRAM_RULES\}\}/g, "")
     .replace(/\{\{REVIEW_LANGUAGE\}\}/g, "en")
     .replace(/\{\{REVIEW_LANGUAGE_NAME\}\}/g, "English");
 
@@ -788,7 +792,12 @@ export async function generateBareLocalReview(
     organizationId: org.id,
   });
 
-  let findings = parseFindingsFromJson(response.text) ?? [];
+  // Match the canonical generateLocalReview parser fallback: try JSON
+  // first, then markdown. The bare path's `parseFindings` shim does the
+  // same, so this just keeps the bare review robust to older models or
+  // mid-output truncation that ships findings as the legacy markdown
+  // format instead of JSON.
+  let findings = parseFindings(response.text);
 
   // Apply the same finding filters the canonical path runs:
   //   1. confidence threshold (default 70, HIGH = 85, or explicit number)

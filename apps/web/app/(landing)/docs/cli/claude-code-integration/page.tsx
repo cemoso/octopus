@@ -80,7 +80,7 @@ export default function ClaudeCodeIntegrationPage() {
           1. Install the CLI
         </h3>
         <CodeBlock>{`# macOS / Linux (x64 & ARM)
-curl -fsSL ${INSTALL_BASE_URL}/install.sh | sh
+curl -fsSL ${INSTALL_BASE_URL}/install.sh | bash
 
 # Windows (PowerShell)
 irm ${INSTALL_BASE_URL}/install.ps1 | iex

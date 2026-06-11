@@ -66,7 +66,11 @@ export const CURATED_MODELS: CuratedModel[] = [
 
 export function isLocalhostUrl(url: string): boolean {
   try {
-    const host = new URL(url).hostname.toLowerCase();
+    // `URL.hostname` keeps the brackets on IPv6 (`new URL("http://[::1]").hostname`
+    // returns "[::1]"), so a bare `=== "::1"` check is dead. Strip brackets
+    // before comparing — matches the same handling in
+    // apps/cli/src/commands/review.ts:isLocalServer.
+    const host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, "");
     return (
       host === "localhost" ||
       host === "127.0.0.1" ||

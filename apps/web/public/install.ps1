@@ -1,3 +1,9 @@
+# AUTO-SYNCED COPY — DO NOT EDIT DIRECTLY.
+# Canonical source: apps/cli/install/install.ps1. To update this file, edit
+# the canonical source and run `scripts/sync-installers.sh` (or copy by
+# hand). A diff against the canonical version fails the CI check in
+# .github/workflows/sync-installers-check.yml.
+#
 # Octopus CLI installer (Windows / PowerShell).
 #
 # Usage:

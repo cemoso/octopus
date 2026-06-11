@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# AUTO-SYNCED COPY — DO NOT EDIT DIRECTLY.
+# Canonical source: apps/cli/install/install.sh. To update this file, edit
+# the canonical source and run `scripts/sync-installers.sh` (or copy by
+# hand). A diff against the canonical version fails the CI check in
+# .github/workflows/sync-installers-check.yml.
+#
 #
 # Octopus CLI installer (Linux / macOS).
 #
@@ -85,8 +91,13 @@ else
       tag="$found"
       break
     fi
-    # When the page didn't include the closing ] (more pages exist) keep going.
-    if ! echo "$page_body" | grep -q "^\\["; then break; fi
+    # Stop if the page returned an empty array — `[]` or a body with no
+    # `"tag_name"` field means we've exhausted the feed. The previous
+    # check (`grep -q "^["`) was inverted: every API response is a JSON
+    # array starting with `[`, including the empty-page case, so the
+    # condition was effectively never true and the loop only stopped on
+    # the page<=5 cap.
+    if ! echo "$page_body" | grep -q '"tag_name"'; then break; fi
     page=$((page + 1))
   done
   if [ -z "$tag" ]; then
@@ -125,15 +136,20 @@ if curl -fsSL -o "$sums_file" "$sums_url"; then
     echo "Error: SHA256SUMS.txt at $sums_url has no entry for $asset. Refusing to install." >&2
     exit 1
   fi
+  verify=1
   if command -v shasum > /dev/null 2>&1; then
     got=$(shasum -a 256 "$tmp_file" | awk '{print $1}')
   elif command -v sha256sum > /dev/null 2>&1; then
     got=$(sha256sum "$tmp_file" | awk '{print $1}')
   else
+    # No hashing tool available — explicitly skip the comparison rather
+    # than fake-passing it by setting got=$expected. A vacuous comparison
+    # reads like an assertion when it's not, which hides the missing
+    # check from anyone auditing the script later.
     echo "Warning: no shasum/sha256sum found — proceeding without checksum verification." >&2
-    got="$expected"
+    verify=0
   fi
-  if [ "$got" != "$expected" ]; then
+  if [ "$verify" = 1 ] && [ "$got" != "$expected" ]; then
     echo "Error: checksum mismatch for $asset: expected $expected, got $got. Refusing to install." >&2
     exit 1
   fi
