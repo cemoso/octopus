@@ -57,7 +57,7 @@ Evidence column points to the code, doc, or operational artefact that backs the 
 
 | # | Control | Status | Evidence |
 |---|---|---|---|
-| CC5.1 | Control activities for technology | ✅ | CI (lint, typecheck, build, security review) gates every PR |
+| CC5.1 | Control activities for technology | ✅ | CI (lint, typecheck, build, security review) gates every PR. The test suite is run manually today; see CC8.2. |
 | CC5.2 | Policies and procedures | 🟡 | Most processes are documented but not formal "policies" |
 | CC5.3 | Policies enforced | ✅ | Octopus reviewer + CI block non-compliant PRs |
 
@@ -89,7 +89,7 @@ Evidence column points to the code, doc, or operational artefact that backs the 
 | # | Control | Status | Evidence |
 |---|---|---|---|
 | CC8.1 | Changes follow defined process | ✅ | All changes via PR; required approvals from CODEOWNERS |
-| CC8.2 | Changes tested before deployment | ✅ | CI (lint + typecheck + build + tests + security review) blocks merge on failure |
+| CC8.2 | Changes tested before deployment | 🟡 | CI gates lint + typecheck + build + Octopus security review; the test suite is run manually today (no `bun test` step in `.github/workflows/ci.yml`). Adding the test gate is on the roadmap; honest self-assessment until then. |
 | CC8.3 | Emergency change process | 🟡 | Hot-fix path exists but undocumented |
 
 ## CC9 — Risk Mitigation

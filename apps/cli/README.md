@@ -39,10 +39,14 @@ Environment variables both installers respect:
 ```
 octp                       Launch the onboarding wizard (first run) or dashboard
 octp onboard [--reset]     Run the onboarding wizard explicitly
-octp review <pr>           Trigger a review on a pull request          (coming soon)
-octp agent serve           Start the local-agent bridge for Ollama     (coming soon)
+octp review [--staged]     Review local changes before opening a PR
+                           --staged: only diff what's in the staging index
+                           --since <ref>: diff from <ref> instead of HEAD
+                           --index: index the working tree for context-aware review
+                           --no-index: skip the index prompt, review in bare mode
+octp agent serve           Start the local-agent bridge for Ollama / Claude CLI
+octp doctor                Environment + auth health check
 octp config <get|set>      Manage ~/.octopus/config.json               (coming soon)
-octp doctor                Environment + auth health check             (coming soon)
 octp --version | -v        Print version
 octp --help | -h           Print this help
 ```
@@ -112,4 +116,6 @@ git push origin octp-v0.1.0
 
 ## Status
 
-Phase 1 (this commit): package skeleton + native installer infrastructure + Welcome → Done onboarding flow + config persistence + subcommand dispatcher (with `--help`, `--version`, and stub responses for unimplemented subcommands). Real onboarding steps (auth, org, provider, model, BYOK, validate, repo install) and real subcommands (review, agent, config, doctor) land in follow-up PRs tracked under [Workstream 7](https://github.com/cemoso/octopus/issues/61).
+The onboarding wizard, `octp review`, `octp agent serve`, and `octp doctor`
+all ship. Only `octp config <get|set>` is still on the roadmap — set
+config values via the wizard (`octp onboard --reset`) until then.

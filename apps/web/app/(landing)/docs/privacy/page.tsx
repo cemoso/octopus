@@ -51,7 +51,7 @@ export default function PrivacyPage() {
         <H3>Repository Data</H3>
         <P>
           When you connect a repository, we access its contents through the
-          GitHub or Bitbucket API to create code embeddings and perform
+          GitHub, GitLab, or Bitbucket API to create code embeddings and perform
           reviews. We process pull request diffs, file contents, and
           repository metadata.
         </P>
@@ -88,30 +88,21 @@ export default function PrivacyPage() {
       </Section>
 
       <Section title="5. Third-Party Services">
-        <P>We use the following third-party services to operate Octopus:</P>
-        <UL>
-          <li>
-            <strong className="text-white">OpenAI</strong> for generating code
-            embeddings (text-embedding-3-large)
-          </li>
-          <li>
-            <strong className="text-white">Anthropic (Claude)</strong> and/or{" "}
-            <strong className="text-white">OpenAI</strong> for AI-powered code
-            reviews
-          </li>
-          <li>
-            <strong className="text-white">GitHub / Bitbucket</strong> for
-            repository access and webhook events
-          </li>
-          <li>
-            <strong className="text-white">Stripe</strong> for payment
-            processing (if applicable)
-          </li>
-          <li>
-            <strong className="text-white">Google Analytics</strong> for
-            anonymous usage analytics
-          </li>
-        </UL>
+        <P>
+          The canonical, version-controlled list of every vendor with access
+          to org data lives on the{" "}
+          <a href="/docs/sub-processors" className="text-cyan-400 underline">
+            sub-processors page
+          </a>{" "}
+          (referenced from the DPA). At the time of writing it covers AI
+          providers (Anthropic, OpenAI, Google, Cohere — only when used as
+          BYOK), code-hosting integrations (GitHub, GitLab, Bitbucket),
+          payments (Stripe), email (Resend), realtime (Pubby), object
+          storage (Cloudflare R2), analytics (Google Analytics), and
+          per-feature tools (Slack, Linear, Jira). Refer to the sub-processors
+          page rather than this section if the two ever drift — it is the
+          authoritative copy.
+        </P>
         <P>
           Code snippets sent to AI providers are subject to their respective
           privacy policies. We recommend reviewing their data handling
@@ -145,8 +136,18 @@ export default function PrivacyPage() {
           <li>Opt out of analytics tracking</li>
         </UL>
         <P>
-          For any privacy-related requests, open an issue on our GitHub
-          repository or contact us directly.
+          For any privacy-related requests, email{" "}
+          <a href="mailto:privacy@octopus-review.ai" className="text-cyan-400 underline">
+            privacy@octopus-review.ai
+          </a>{" "}
+          from the account address. We respond within 30 days; the
+          process is documented on the{" "}
+          <a href="/docs/data-retention" className="text-cyan-400 underline">
+            data-retention page
+          </a>
+          . Please do <strong>not</strong> file privacy requests as public
+          GitHub issues — they may contain personal data and shouldn&apos;t
+          be in a public tracker.
         </P>
       </Section>
 
