@@ -143,49 +143,52 @@ async function embedWithOpenAI(
   let promptTokens = 0;
 
   async function embedBatch(batch: string[]): Promise<void> {
+    // For text-embedding-3-* models OpenAI accepts an explicit
+    // `dimensions` arg and returns vectors at that length. Pass
+    // config.dim through so an org override (eg. 1536 for compact
+    // storage) actually takes effect instead of defaulting to the
+    // model's native dim and producing a Qdrant 400 at upsert time.
+    // Older embedding models reject the field, so only opt in for
+    // the v3 family.
+    const supportsDimensionsArg = config.model.startsWith("text-embedding-3-");
+    let res;
     try {
-      // For text-embedding-3-* models OpenAI accepts an explicit
-      // `dimensions` arg and returns vectors at that length. Pass
-      // config.dim through so an org override (eg. 1536 for compact
-      // storage) actually takes effect instead of defaulting to the
-      // model's native dim and producing a Qdrant 400 at upsert time.
-      // Older embedding models reject the field, so only opt in for
-      // the v3 family.
-      const supportsDimensionsArg = config.model.startsWith("text-embedding-3-");
-      const res = await client.embeddings.create({
+      res = await client.embeddings.create({
         model: config.model,
         input: batch,
         ...(supportsDimensionsArg ? { dimensions: config.dim } : {}),
       });
-      // The createEmbeddings header comment promises a dim-mismatch
-      // check with an actionable error. Honour it on the OpenAI path
-      // too (the Ollama path already has one) so a misconfigured
-      // OCTOPUS_EMBED_DIM fails loud before the Qdrant upsert returns
-      // a cryptic 400 a layer away.
-      if (res.data.length > 0) {
-        const gotDim = res.data[0].embedding.length;
-        if (gotDim !== config.dim) {
-          throw new Error(
-            `OpenAI embeddings dim mismatch: model "${config.model}" returned ` +
-              `${gotDim}-dim vectors, but OCTOPUS_EMBED_DIM is ${config.dim}. ` +
-              `Set OCTOPUS_EMBED_DIM=${gotDim} (and wipe Qdrant collections so they get re-created).`,
-          );
-        }
-      }
-      for (const item of res.data) vectors.push(item.embedding);
-      promptTokens += res.usage.prompt_tokens;
     } catch (err) {
+      // The split-on-token-limit recovery applies ONLY to OpenAI's
+      // "request too large" 400, never to any other error. Anything
+      // else (auth, network, our own dim-mismatch below) propagates
+      // up unchanged.
       const isTokenLimit =
         err instanceof OpenAI.APIError &&
         err.status === 400 &&
         /maximum request size|tokens per request/i.test(err.message);
       if (!isTokenLimit || batch.length <= 1) throw err;
-      // Token estimate undershot — split and retry instead of failing the
-      // whole repo over one bad batch.
       const mid = Math.floor(batch.length / 2);
       await embedBatch(batch.slice(0, mid));
       await embedBatch(batch.slice(mid));
+      return;
     }
+    // Dim-mismatch check lives OUTSIDE the try above so the split-retry
+    // catch can't accidentally swallow / retry it. A misconfigured
+    // OCTOPUS_EMBED_DIM should fail loud and bubble to the caller, not
+    // get bisected into smaller and smaller still-wrong batches.
+    if (res.data.length > 0) {
+      const gotDim = res.data[0].embedding.length;
+      if (gotDim !== config.dim) {
+        throw new Error(
+          `OpenAI embeddings dim mismatch: model "${config.model}" returned ` +
+            `${gotDim}-dim vectors, but OCTOPUS_EMBED_DIM is ${config.dim}. ` +
+            `Set OCTOPUS_EMBED_DIM=${gotDim} (and wipe Qdrant collections so they get re-created).`,
+        );
+      }
+    }
+    for (const item of res.data) vectors.push(item.embedding);
+    promptTokens += res.usage.prompt_tokens;
   }
 
   let batchStart = 0;
