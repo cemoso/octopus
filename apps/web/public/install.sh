@@ -9,7 +9,12 @@
 # Octopus CLI installer (Linux / macOS).
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.sh | bash
+#
+# The script's shebang is /usr/bin/env bash and it uses bash-isms
+# (`set -o pipefail`, `[[ ]]` would-be patterns) — piping into `sh`
+# breaks on dash/ash where `-o pipefail` is rejected. Documented
+# `| bash` accordingly.
 #
 # What it does:
 #   1. Detects your OS + CPU architecture
