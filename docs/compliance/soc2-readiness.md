@@ -2,7 +2,8 @@
 
 **Status:** Pre-audit · Internal working document
 **Owner:** Maintainers (see [MAINTAINERS.md](../../MAINTAINERS.md))
-**Last reviewed:** May 2026
+**Initial draft:** June 2026
+**Review cadence:** Quarterly by the maintainers listed in [MAINTAINERS.md](../../MAINTAINERS.md)
 
 Octopus is not SOC 2 certified. This document is an honest self-assessment against the SOC 2 Type II Common Criteria, intended to help enterprise prospects evaluate which controls are in place today versus on the roadmap.
 
@@ -81,7 +82,7 @@ Evidence column points to the code, doc, or operational artefact that backs the 
 | CC7.1 | Monitoring infrastructure | 🟡 | CloudWatch + Pubby live-update; no centralised SIEM |
 | CC7.2 | Detect security events | 🟡 | Audit log records mutating actions; no automated anomaly detection |
 | CC7.3 | Evaluate security events | 🟡 | Manual triage of audit log + bug bounty submissions |
-| CC7.4 | Respond to security incidents | 🟡 | Incident-response runbook drafted in `/docs/security-overview`; no formal tabletop exercises |
+| CC7.4 | Respond to security incidents | 🟡 | Ad-hoc response — `security@octopus-review.ai` triage path documented in [SECURITY.md](../../SECURITY.md); no formal runbook or tabletop exercises yet |
 | CC7.5 | Disaster recovery | 🟡 | Encrypted backups (30-day retention); no formal RTO/RPO targets |
 
 ## CC8 — Change Management
