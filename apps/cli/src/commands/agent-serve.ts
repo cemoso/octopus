@@ -31,7 +31,15 @@ const POLL_INTERVAL_MS = 2000;
 // Bound Ollama calls — without this a stuck model load or hung GPU hangs the
 // agent indefinitely, which then misses heartbeats. Override via
 // OCTP_OLLAMA_TIMEOUT_MS for large models that legitimately need more time.
-const OLLAMA_TIMEOUT_MS = Number(process.env.OCTP_OLLAMA_TIMEOUT_MS ?? 5 * 60_000);
+// Guarded the same way as RAW_CONCURRENCY below: Number("5m") is NaN, and
+// setTimeout(cb, NaN) fires after ~1ms, so every claimed task would abort
+// instantly with "timed out after NaNs". Reject malformed values and fall
+// back to the default.
+const RAW_OLLAMA_TIMEOUT_MS = Number(process.env.OCTP_OLLAMA_TIMEOUT_MS ?? 5 * 60_000);
+const OLLAMA_TIMEOUT_MS =
+  Number.isFinite(RAW_OLLAMA_TIMEOUT_MS) && RAW_OLLAMA_TIMEOUT_MS > 0
+    ? RAW_OLLAMA_TIMEOUT_MS
+    : 5 * 60_000;
 // How many tasks to run in parallel. Default 1 (serial) — Ollama generally
 // shares a single GPU and parallel calls just queue inside the daemon. Bump
 // to N (e.g. 2-4) on multi-GPU rigs or when running a tiny model that fits

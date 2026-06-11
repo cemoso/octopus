@@ -1,4 +1,4 @@
-import { readFile, writeFile, unlink } from "node:fs/promises";
+import { chmod, readFile, writeFile, unlink } from "node:fs/promises";
 import { ensureOctopusHome, getCredentialsPath } from "./paths.js";
 
 /**
@@ -41,7 +41,13 @@ export async function loadCredentials(): Promise<Credentials | null> {
 
 export async function saveCredentials(c: Credentials): Promise<void> {
   await ensureOctopusHome();
-  await writeFile(getCredentialsPath(), JSON.stringify(c, null, 2), { mode: 0o600 });
+  const p = getCredentialsPath();
+  await writeFile(p, JSON.stringify(c, null, 2), { mode: 0o600 });
+  // writeFile's `mode` only applies on file CREATION. If the file already
+  // exists with looser bits (older build, sync tool, different umask),
+  // rewriting leaves the loose bits intact. chmod after the write so the
+  // documented 0600 guarantee holds on pre-existing files too.
+  await chmod(p, 0o600);
 }
 
 /**
@@ -55,8 +61,14 @@ export async function saveCredentials(c: Credentials): Promise<void> {
 export async function clearCredentials(): Promise<void> {
   try {
     await unlink(getCredentialsPath());
-  } catch {
-    // ignore — file may not exist
+  } catch (e) {
+    // ENOENT is fine — file already gone is the success state. Anything
+    // else (EPERM, EBUSY, file-locked-on-Windows, EROFS) means the token
+    // is STILL on disk; the sign-out attempt did not complete. Surface
+    // so the caller can warn the user rather than silently claiming
+    // success while their credential is still readable.
+    if (e instanceof Error && "code" in e && (e as { code: string }).code === "ENOENT") return;
+    throw e;
   }
 }
 

@@ -60,8 +60,16 @@ export default async function LocalAgentSettingsPage() {
 
   // Active API tokens — needed for the install one-liner. We only show count;
   // the user copies an existing token from /settings/api-tokens.
+  // Filter to actually-usable tokens: a revoked token (deletedAt set) and an
+  // expired token are both rejected by authenticateApiToken at request time,
+  // so counting them here gives the user a misleading "{N} active" number
+  // that doesn't match what they see on /settings/api-tokens.
   const tokenCount = await prisma.orgApiToken.count({
-    where: { organizationId: orgId },
+    where: {
+      organizationId: orgId,
+      deletedAt: null,
+      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+    },
   });
 
   return (
