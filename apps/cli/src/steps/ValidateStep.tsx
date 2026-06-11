@@ -37,6 +37,12 @@ export function ValidateStep({ provider, onNext, onEditKey }: ValidateStepProps)
       return;
     }
     let cancelled = false;
+    // Track the auto-advance timer so we can clear it on unmount. Without
+    // this, an Esc during the 1.2s "skipped" window (or the 600ms "ok"
+    // window) calls onNext immediately, then the un-cleared timer fires
+    // after unmount and calls onNext a second time — stepIndex advances
+    // twice, jumping past RepoStep to Done without the user seeing it.
+    let autoAdvance: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       setPhase("validating");
       const r = await validateProvider(provider);
@@ -44,16 +50,17 @@ export function ValidateStep({ provider, onNext, onEditKey }: ValidateStepProps)
       setResult(r);
       if (r.ok === true) {
         setPhase("ok");
-        setTimeout(onNext, 600);
+        autoAdvance = setTimeout(onNext, 600);
       } else if (r.ok === "skipped") {
         setPhase("skipped");
-        setTimeout(onNext, 1200);
+        autoAdvance = setTimeout(onNext, 1200);
       } else {
         setPhase("failed");
       }
     })();
     return () => {
       cancelled = true;
+      if (autoAdvance !== null) clearTimeout(autoAdvance);
     };
   }, [provider, attempt, onNext]);
 
