@@ -80,13 +80,27 @@ try {
 
 # ── Step 3b: verify SHA256 ───────────────────────────────────────────────────
 $sumsUrl = "https://github.com/$Repo/releases/download/$tag/SHA256SUMS.txt"
+
+# Narrow the try/catch to JUST the network fetch. With
+# $ErrorActionPreference = "Stop" set above, EVERY Write-Error becomes a
+# terminating error — wrapping the whole verification in one try meant the
+# "no entry for asset" and "checksum mismatch" Write-Error calls were
+# caught by the same catch as "could not fetch sums" and silently
+# downgraded to a Write-Warning, letting tampered downloads land on PATH.
+$sums = $null
 try {
   $sums = (Invoke-WebRequest -Uri $sumsUrl -UseBasicParsing).Content
+} catch {
+  Write-Warning "Could not fetch $sumsUrl — proceeding without checksum verification (likely a pre-sums release; pin OCTOPUS_INSTALL_TAG to a newer one if this is unexpected)."
+}
+
+if ($null -ne $sums) {
   # SHA256SUMS.txt lines look like "<sha>  ./octp-windows-x64.exe" or
   # "<sha>  octp-windows-x64.exe". Match either.
   $expectedLine = ($sums -split "`r?`n") | Where-Object { $_ -match "\s+(\./)?$([regex]::Escape($asset))$" } | Select-Object -First 1
   if (-not $expectedLine) {
     Remove-Item -Path $tmpFile -ErrorAction SilentlyContinue
+    # Outside any try block — Stop ErrorActionPreference makes this fatal.
     Write-Error "SHA256SUMS.txt at $sumsUrl has no entry for $asset. Refusing to install."
     exit 1
   }
@@ -97,8 +111,6 @@ try {
     Write-Error "Checksum mismatch for $asset: expected $expected, got $got. Refusing to install."
     exit 1
   }
-} catch {
-  Write-Warning "Could not fetch $sumsUrl — proceeding without checksum verification."
 }
 
 Move-Item -Path $tmpFile -Destination $target -Force
