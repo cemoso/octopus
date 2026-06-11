@@ -23,6 +23,14 @@ import { type Ignore } from "@/lib/octopus-ignore";
  * the running indexedFiles count so a poll-based UI also works.
  */
 
+/**
+ * Time after which an "indexing"-status repo is considered abandoned and
+ * may be re-claimed. Exported so the route's error message can quote the
+ * exact same value the guard uses — without this the message would drift
+ * out of sync with the guard.
+ */
+export const IN_FLIGHT_WINDOW_MS = 5 * 60 * 1000;
+
 export type LocalFile = { path: string; content: string };
 
 export type IndexLocalBatchResult = {
@@ -154,20 +162,43 @@ export async function prepareRepoForLocalIndex(
 ): Promise<
   | { ok: true; repoId: string; reIndex: boolean }
   | { ok: false; reason: "managed-by-platform"; repoId: string }
+  | { ok: false; reason: "in-flight"; repoId: string }
 > {
   const existing = await prisma.repository.findFirst({
     where: { organizationId, provider, fullName, isActive: true },
-    select: { id: true, installationId: true },
+    select: { id: true, installationId: true, indexStatus: true, updatedAt: true },
   });
 
   if (existing) {
     if (existing.installationId != null) {
       return { ok: false, reason: "managed-by-platform", repoId: existing.id };
     }
-    // Re-index path: wipe prior chunks so stale content doesn't pollute retrieval.
-    await deleteRepoChunks(existing.id);
-    await prisma.repository.update({
-      where: { id: existing.id },
+    // Re-index guard: if a concurrent run is mid-way (indexStatus="indexing"
+    // and updated within the IN_FLIGHT_WINDOW_MS staleness window), reject
+    // this batch instead of wiping the in-flight run's chunks. Without
+    // this, a second `octp review --index` collides with the first — run
+    // B's first batch deletes A's already-upserted chunks and resets
+    // counters, then A's later batches keep upserting under A's repoId,
+    // ending in a partially-mixed chunk set and inconsistent counters.
+    //
+    // ATOMIC CLAIM: the prior implementation read+returned then updated,
+    // which was a textbook TOCTOU — two concurrent runs both saw status
+    // != "indexing", both passed the guard, both wiped. The current
+    // pattern issues ONE `updateMany` that conditionally flips status
+    // to "indexing" only if the existing row is not already in-flight.
+    // Whichever caller's updateMany count comes back as 1 owns the run;
+    // count===0 means someone else flipped it first, so we return
+    // in-flight without wiping. Postgres serialises updateMany on the
+    // matching rows, so there is no window between the WHERE and SET.
+    const inFlightCutoff = new Date(Date.now() - IN_FLIGHT_WINDOW_MS);
+    const claim = await prisma.repository.updateMany({
+      where: {
+        id: existing.id,
+        OR: [
+          { indexStatus: { not: "indexing" } },
+          { updatedAt: { lt: inFlightCutoff } },
+        ],
+      },
       data: {
         indexStatus: "indexing",
         indexedFiles: 0,
@@ -177,6 +208,11 @@ export async function prepareRepoForLocalIndex(
         indexDurationMs: null,
       },
     });
+    if (claim.count === 0) {
+      return { ok: false, reason: "in-flight", repoId: existing.id };
+    }
+    // We hold the claim now — safe to wipe chunks without racing another run.
+    await deleteRepoChunks(existing.id);
     return { ok: true, repoId: existing.id, reIndex: true };
   }
 

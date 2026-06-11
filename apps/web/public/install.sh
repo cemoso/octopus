@@ -12,9 +12,8 @@
 #   curl -fsSL https://raw.githubusercontent.com/octopusreview/octopus/master/apps/cli/install/install.sh | bash
 #
 # The script's shebang is /usr/bin/env bash and it uses bash-isms
-# (`set -o pipefail`, `[[ ]]` would-be patterns) — piping into `sh`
-# breaks on dash/ash where `-o pipefail` is rejected. Documented
-# `| bash` accordingly.
+# (set -o pipefail, `[[...]]` would-be patterns) — piping into `sh`
+# can break on dash/ash. Documented `| bash` accordingly.
 #
 # What it does:
 #   1. Detects your OS + CPU architecture
@@ -74,40 +73,36 @@ if [ -n "${OCTOPUS_INSTALL_TAG:-}" ]; then
   echo "Installing pinned version: $tag"
 else
   echo "Looking up latest octp release on $REPO ..."
-  # The repo publishes two release trains (web v* and CLI octp-v*) into
-  # the same feed. The default page size is 30, but a busy web train can
-  # easily push every octp-v* tag off the first page. Walk pages until we
-  # find an octp-v* match (or exhaust the feed). 5 pages × 100 = 500 most
-  # recent releases is plenty headroom; the API also caps us at 1000.
-  # jq isn't assumed (alpine/scratch may not have it); parse with grep+sed.
-  tag=""
-  page=1
-  while [ "$page" -le 5 ]; do
-    api_url="https://api.github.com/repos/${REPO}/releases?per_page=100&page=${page}"
-    page_body=$(curl -fsSL "$api_url" || true)
-    if [ -z "$page_body" ]; then break; fi
-    found=$(
-      echo "$page_body" \
-        | grep -E '"tag_name":\s*"octp-v[^"]+' \
-        | head -1 \
-        | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/'
-    )
-    if [ -n "$found" ]; then
-      tag="$found"
-      break
-    fi
-    # Stop if the page returned an empty array — `[]` or a body with no
-    # `"tag_name"` field means we've exhausted the feed. The previous
-    # check (`grep -q "^["`) was inverted: every API response is a JSON
-    # array starting with `[`, including the empty-page case, so the
-    # condition was effectively never true and the loop only stopped on
-    # the page<=5 cap.
-    if ! echo "$page_body" | grep -q '"tag_name"'; then break; fi
-    page=$((page + 1))
-  done
+  # Find the most recent NON-DRAFT, NON-PRERELEASE octp-v* tag.
+  # `jq` is not assumed (some minimal install targets — alpine, distroless,
+  # CI runners — don't have it), so parse with sed/grep. GitHub returns
+  # `/releases` as a JSON ARRAY where each release is one object on the
+  # same line. We split objects by inserting a real newline at every
+  # `},{` boundary so line-oriented grep can filter by draft/prerelease
+  # siblings without false-matching across objects.
+  #
+  # macOS portability: BSD sed treats `\n` in the REPLACEMENT as a
+  # literal `n` (only the recognise-`\n`-in-pattern semantics is shared
+  # with GNU sed). Use the portable form — a backslash immediately
+  # followed by a real newline character inside the s/// replacement,
+  # which both GNU and BSD sed interpret as a newline. The `[[:space:]]`
+  # POSIX class is used everywhere else for the same portability reason
+  # (GNU `\s` would silently match "s" on busybox grep / BSD sed).
+  # Users testing prerelease tags can still override via OCTOPUS_INSTALL_TAG.
+  api_url="https://api.github.com/repos/${REPO}/releases?per_page=30"
+  tag=$(
+    curl -fsSL "$api_url" \
+      | sed 's/},{/}\
+{/g' \
+      | grep -v '"draft"[[:space:]]*:[[:space:]]*true' \
+      | grep -v '"prerelease"[[:space:]]*:[[:space:]]*true' \
+      | grep -E '"tag_name"[[:space:]]*:[[:space:]]*"octp-v' \
+      | head -1 \
+      | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+  )
   if [ -z "$tag" ]; then
-    echo "Error: could not find any octp-v* release on $REPO (scanned up to $((page * 100)) releases)." >&2
-    echo "If you are testing pre-release, pin a tag with OCTOPUS_INSTALL_TAG=octp-v0.X.Y" >&2
+    echo "Error: could not find any non-prerelease octp-v* on $REPO." >&2
+    echo "If you are testing a prerelease, pin a tag with OCTOPUS_INSTALL_TAG=octp-v0.X.Y" >&2
     exit 1
   fi
   echo "Latest release: $tag"
@@ -116,11 +111,13 @@ fi
 # ── Step 3: download ─────────────────────────────────────────────────────────
 
 download_url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS.txt"
 echo "Downloading $download_url ..."
 
 mkdir -p "$INSTALL_DIR"
 tmp_file="$(mktemp)"
-trap 'rm -f "$tmp_file"' EXIT
+sums_file="$(mktemp)"
+trap 'rm -f "$tmp_file" "$sums_file"' EXIT
 
 if ! curl -fL --progress-bar -o "$tmp_file" "$download_url"; then
   echo "Error: failed to download $asset from $tag." >&2
@@ -128,38 +125,50 @@ if ! curl -fL --progress-bar -o "$tmp_file" "$download_url"; then
   exit 1
 fi
 
-# ── Step 3b: verify the SHA256 against the release's SHA256SUMS.txt ──────────
-# octp-release.yml publishes SHA256SUMS.txt for every tagged release. Verify
-# our download against it so a tampered release asset, a truncated download,
-# or a mid-flight swap can't silently end up on PATH and get executed.
-sums_url="https://github.com/${REPO}/releases/download/${tag}/SHA256SUMS.txt"
-sums_file="$(mktemp)"
-trap 'rm -f "$tmp_file" "$sums_file"' EXIT
-if curl -fsSL -o "$sums_file" "$sums_url"; then
-  expected=$(grep -E "[[:space:]]+(\\./)?${asset}\$" "$sums_file" | awk '{print $1}')
-  if [ -z "$expected" ]; then
-    echo "Error: SHA256SUMS.txt at $sums_url has no entry for $asset. Refusing to install." >&2
-    exit 1
-  fi
-  verify=1
-  if command -v shasum > /dev/null 2>&1; then
-    got=$(shasum -a 256 "$tmp_file" | awk '{print $1}')
-  elif command -v sha256sum > /dev/null 2>&1; then
-    got=$(sha256sum "$tmp_file" | awk '{print $1}')
-  else
-    # No hashing tool available — explicitly skip the comparison rather
-    # than fake-passing it by setting got=$expected. A vacuous comparison
-    # reads like an assertion when it's not, which hides the missing
-    # check from anyone auditing the script later.
-    echo "Warning: no shasum/sha256sum found — proceeding without checksum verification." >&2
-    verify=0
-  fi
-  if [ "$verify" = 1 ] && [ "$got" != "$expected" ]; then
-    echo "Error: checksum mismatch for $asset: expected $expected, got $got. Refusing to install." >&2
-    exit 1
-  fi
+# ── Step 3b: verify SHA256 checksum ──────────────────────────────────────────
+# octp-release.yml generates SHA256SUMS.txt and attaches it to every release.
+# Verifying the binary against the published sum protects against:
+#   - In-flight tampering on a compromised mirror (GitHub itself signs the
+#     download but the asset chain is still worth re-checking).
+#   - Truncated downloads (curl exit code is the only signal otherwise).
+# If sums file is missing on a release (older builds), we abort with a clear
+# message — passing OCTOPUS_INSTALL_SKIP_VERIFY=1 documents the trade-off
+# explicitly when the user knowingly accepts the risk (e.g. CI pinning a tag
+# pre-dating the sums-generation workflow).
+
+if [ "${OCTOPUS_INSTALL_SKIP_VERIFY:-0}" = "1" ]; then
+  echo "SKIPPING SHA256 verification (OCTOPUS_INSTALL_SKIP_VERIFY=1)."
 else
-  echo "Warning: could not fetch $sums_url — proceeding without checksum verification." >&2
+  if curl -fsSL -o "$sums_file" "$sums_url"; then
+    expected=$(grep -F "  $asset" "$sums_file" | awk '{print $1}')
+    if [ -z "$expected" ]; then
+      echo "Error: no SHA256SUMS.txt entry for $asset on $tag." >&2
+      echo "Run with OCTOPUS_INSTALL_SKIP_VERIFY=1 to bypass (NOT recommended)." >&2
+      exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+      actual=$(sha256sum "$tmp_file" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+      actual=$(shasum -a 256 "$tmp_file" | awk '{print $1}')
+    else
+      echo "Error: neither sha256sum nor shasum found; cannot verify the download." >&2
+      echo "Run with OCTOPUS_INSTALL_SKIP_VERIFY=1 to bypass (NOT recommended)." >&2
+      exit 1
+    fi
+    if [ "$expected" != "$actual" ]; then
+      echo "Error: SHA256 mismatch for $asset." >&2
+      echo "  expected: $expected" >&2
+      echo "  actual:   $actual" >&2
+      echo "The download may be corrupt or tampered. Aborting." >&2
+      exit 1
+    fi
+    echo "✓ Verified SHA256 ($expected)"
+  else
+    echo "Error: could not download SHA256SUMS.txt from $tag." >&2
+    echo "Older releases pre-date the sums workflow — re-run with" >&2
+    echo "OCTOPUS_INSTALL_SKIP_VERIFY=1 if you accept that risk." >&2
+    exit 1
+  fi
 fi
 
 # ── Step 4: install ──────────────────────────────────────────────────────────
