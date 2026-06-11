@@ -144,15 +144,48 @@ function getOrgKeyForProvider(keys: OrgKeys, provider: AiProvider): string | nul
 
 // ── Provider-specific call implementations ───────────────────────────────────
 
+/**
+ * Claude Fable/Mythos models have always-on extended thinking that spends
+ * from the max_tokens budget BEFORE any text is produced, and a tokenizer
+ * that uses ~30% more tokens than Opus-tier models. Budgets tuned for other
+ * models (8192 for reviews, 256 for titles) get fully consumed by the
+ * thinking block on hard inputs, the response ends with
+ * stop_reason "max_tokens" and zero text blocks, and the whole review fails.
+ * Raise the cap to a floor that leaves room for thinking + text; max_tokens
+ * is a ceiling, not a spend, so the floor costs nothing on easy inputs.
+ */
+const ALWAYS_THINKING_MODEL_RX = /^claude-(fable|mythos)-/;
+const ALWAYS_THINKING_MAX_TOKENS_FLOOR = 64000;
+
+/**
+ * Hard deadline for one Anthropic call, thinking time included. The SDK's
+ * built-in timeout only covers time-to-response-headers (its clearTimeout
+ * runs as soon as fetch resolves), so once the SSE stream is open a stalled
+ * connection would hang finalMessage() forever. A caller-supplied abort
+ * signal, by contrast, stays attached for the whole body read. Keep this
+ * below the review queue's 900s job timeout so the call fails with a clear,
+ * retryable error instead of the job silently expiring.
+ */
+const ANTHROPIC_CALL_TIMEOUT_MS = 14 * 60 * 1000;
+
 async function callAnthropic(
   params: AiCreateParams,
   apiKey?: string | null,
 ): Promise<AiResponse> {
   const client = getAnthropic(apiKey);
 
-  const response = await client.messages.create({
+  const maxTokens = ALWAYS_THINKING_MODEL_RX.test(params.model)
+    ? Math.max(params.maxTokens, ALWAYS_THINKING_MAX_TOKENS_FLOOR)
+    : params.maxTokens;
+
+  // Streaming here is purely between this process and the Anthropic API —
+  // finalMessage() buffers the SSE chunks and returns the same complete
+  // Message object messages.create() would. It's required because thinking
+  // models can take minutes before the first byte, and the SDK enforces
+  // streaming for large max_tokens to avoid HTTP timeouts.
+  const stream = client.messages.stream({
     model: params.model,
-    max_tokens: params.maxTokens,
+    max_tokens: maxTokens,
     system: params.system
       ? [
           {
@@ -168,7 +201,24 @@ async function callAnthropic(
       role: m.role,
       content: m.content,
     })),
-  });
+  }, { signal: AbortSignal.timeout(ANTHROPIC_CALL_TIMEOUT_MS) });
+
+  let response: Anthropic.Message;
+  try {
+    response = await stream.finalMessage();
+  } catch (err) {
+    // Map the abort (only our timeout signal can trigger it here) to an
+    // actionable error instead of the SDK's generic "Request was aborted".
+    if (
+      err instanceof Anthropic.APIUserAbortError ||
+      (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError"))
+    ) {
+      throw new Error(
+        `Anthropic call timed out after ${ANTHROPIC_CALL_TIMEOUT_MS / 1000}s (model: ${params.model})`,
+      );
+    }
+    throw err;
+  }
 
   // Models with extended thinking (e.g. claude-fable-5) prepend a thinking
   // block, so the text block is not necessarily content[0] — collect every
