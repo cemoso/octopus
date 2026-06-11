@@ -96,6 +96,24 @@ async function withQdrantRetry<T>(fn: () => Promise<T>, label: string, maxAttemp
 
 const COLLECTION_NAME = "code_chunks";
 const VECTOR_SIZE = 3072; // text-embedding-3-large
+/**
+ * The dim used for dense vectors in EVERY collection this module creates —
+ * code_chunks, knowledge, review, chat, diagram, feedback, docs. They all
+ * pass `size: VECTOR_SIZE` to `createCollection`, so a single output dim
+ * from the embeddings layer is correct for all of them.
+ *
+ * Exported so the embeddings layer can assert returned vectors match the
+ * collection dim. If an org overrides `embedModelId` to a model with a
+ * different native dim (e.g. `text-embedding-3-small` at 1536) the
+ * embeddings layer detects the mismatch and throws an actionable error
+ * instead of letting Qdrant 400 at upsert time with a cryptic "vector dim
+ * mismatch" minutes after the LLM bill has been paid.
+ *
+ * If a future collection ever uses a different dim, decouple this constant
+ * from VECTOR_SIZE and have the embeddings layer accept the expected dim
+ * as an argument instead.
+ */
+export const QDRANT_DENSE_VECTOR_SIZE = VECTOR_SIZE;
 const SPARSE_VECTOR_NAME = "sparse";
 
 let client: QdrantClient | null = null;

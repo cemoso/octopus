@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { logAiUsage } from "@/lib/ai-usage";
 import { getEmbedModel } from "@/lib/ai-client";
 import { isOrgOverSpendLimit } from "@/lib/cost";
+import { QDRANT_DENSE_VECTOR_SIZE } from "@/lib/qdrant";
 
 let openai: OpenAI | null = null;
 
@@ -79,6 +80,22 @@ export async function createEmbeddings(
   async function embedBatch(batch: string[]): Promise<void> {
     try {
       const res = await client.embeddings.create({ model: embedModel, input: batch });
+      // Validate the entire batch BEFORE pushing any item, so a mid-batch
+      // failure doesn't leave validVectors with partial entries (which
+      // could still get upserted by an outer catcher and produce a
+      // half-indexed repo on retry). The assertion catches misconfigured
+      // `embedModelId` overrides — e.g. text-embedding-3-small (1536-dim)
+      // or text-embedding-ada-002 (1536-dim) against a 3072-dim Qdrant
+      // collection — and surfaces an actionable error before Qdrant has
+      // a chance to reject the upsert with a generic "vector dim mismatch"
+      // minutes later.
+      for (const item of res.data) {
+        if (item.embedding.length !== QDRANT_DENSE_VECTOR_SIZE) {
+          throw new Error(
+            `Embedding model "${embedModel}" returned ${item.embedding.length}-dim vectors but the Qdrant collection is configured for ${QDRANT_DENSE_VECTOR_SIZE}. Either pick a model whose native dim matches the collection (text-embedding-3-large @ 3072 by default), or re-create the Qdrant collection at the model's dim.`,
+          );
+        }
+      }
       for (const item of res.data) validVectors.push(item.embedding);
       totalPromptTokens += res.usage.prompt_tokens;
     } catch (err) {
