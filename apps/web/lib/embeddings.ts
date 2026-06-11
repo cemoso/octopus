@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { logAiUsage } from "@/lib/ai-usage";
 import { getEmbedModel } from "@/lib/ai-client";
 import { isOrgOverSpendLimit } from "@/lib/cost";
-import { EMBED_VECTOR_SIZE } from "@/lib/qdrant";
+import { QDRANT_DENSE_VECTOR_SIZE } from "@/lib/qdrant";
 
 let openai: OpenAI | null = null;
 
@@ -91,21 +91,26 @@ export async function createEmbeddings(
       const res = await client.embeddings.create({
         model: embedModel,
         input: batch,
-        ...(supportsDimensionsParam ? { dimensions: EMBED_VECTOR_SIZE } : {}),
+        ...(supportsDimensionsParam ? { dimensions: QDRANT_DENSE_VECTOR_SIZE } : {}),
       });
+      // Defense-in-depth: even with `dimensions:` passed, validate. Any
+      // mismatch here means the model couldn't honour the requested dim
+      // (text-embedding-ada-002 ignores it, custom Azure deployments may
+      // too) — surface it now with an actionable message rather than
+      // letting Qdrant reject the upsert with a cryptic dim error.
+      //
+      // Validate the WHOLE batch before pushing any item, so a mid-batch
+      // failure doesn't leave validVectors with partial entries (which
+      // could still get upserted by an outer catcher and produce a
+      // half-indexed repo on retry).
       for (const item of res.data) {
-        // Defense-in-depth: even with `dimensions:` passed, validate. Any
-        // mismatch here means the model couldn't honour the requested dim
-        // (text-embedding-ada-002 ignores it, custom Azure deployments may
-        // too) — surface it now with an actionable message rather than
-        // letting Qdrant reject the upsert with a cryptic dim error.
-        if (item.embedding.length !== EMBED_VECTOR_SIZE) {
+        if (item.embedding.length !== QDRANT_DENSE_VECTOR_SIZE) {
           throw new Error(
-            `Embedding model "${embedModel}" returned ${item.embedding.length}-dim vectors but the Qdrant collection is configured for ${EMBED_VECTOR_SIZE}. Either pick a model whose native or requested dim matches the collection (text-embedding-3-large @ 3072 by default), or re-create the Qdrant collection at the model's dim.`,
+            `Embedding model "${embedModel}" returned ${item.embedding.length}-dim vectors but the Qdrant collection is configured for ${QDRANT_DENSE_VECTOR_SIZE}. Either pick a model whose native or requested dim matches the collection (text-embedding-3-large @ 3072 by default), or re-create the Qdrant collection at the model's dim.`,
           );
         }
-        validVectors.push(item.embedding);
       }
+      for (const item of res.data) validVectors.push(item.embedding);
       totalPromptTokens += res.usage.prompt_tokens;
     } catch (err) {
       const isTokenLimit =
