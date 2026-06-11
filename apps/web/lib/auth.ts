@@ -15,6 +15,20 @@ export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
+  user: {
+    // Expose mustChangePassword on the session so middleware.ts can gate
+    // /api/* requests on it without an extra DB lookup. The field is already
+    // on the User Prisma model (mustChangePassword Boolean @default(false));
+    // this just teaches Better Auth to surface it via `getSession`.
+    additionalFields: {
+      mustChangePassword: {
+        type: "boolean",
+        required: false,
+        defaultValue: false,
+        input: false, // not settable via signup/update endpoints — managed server-side
+      },
+    },
+  },
   emailAndPassword: {
     enabled: true,
     // Auto-sign-in after the user submits the sign-up form. Better Auth
