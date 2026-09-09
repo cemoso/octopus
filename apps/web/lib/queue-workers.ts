@@ -14,6 +14,7 @@ import { reconcileAutoReloadAttempts } from "./credits";
 import { runOllamaPull } from "./ollama-admin";
 import { reapStuckReviews } from "./reap-stuck-reviews";
 import { discoverRepositories } from "./discover-repositories";
+import { processRepositoryIndex, type RepositoryIndexJob } from "./repository-index-job";
 import type { QueueConfig } from "./queue";
 
 export interface WelcomeEmailJob {
@@ -27,6 +28,10 @@ export interface ProcessReviewJob {
 }
 
 export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promise<void> {
+  await boss.work<RepositoryIndexJob>("index-repository", { localConcurrency: 1 }, async (jobs) => {
+    for (const job of jobs) await processRepositoryIndex(job.data);
+  });
+
   await boss.work<WelcomeEmailJob>("welcome-email", async (jobs) => {
     for (const job of jobs) {
       console.log(`[queue] Processing welcome-email for ${job.data.email}`);

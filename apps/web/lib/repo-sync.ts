@@ -8,6 +8,7 @@ import { grantDeferredWelcomeCredit } from "@/lib/org-create";
 // the test process cannot break module load.
 import * as realtime from "@/lib/pubby";
 import { writeAuditLog } from "@/lib/audit";
+import { enqueuePendingRepositoryIndexes } from "@/lib/repository-index-job";
 
 /**
  * Org-scoped repository sync shared by the manual Sync button, the GitHub
@@ -250,6 +251,9 @@ export async function syncOrgRepos(
 
   notifyDiscovered(organizationId, opts.source, result.createdRepos);
 
+  await enqueuePendingRepositoryIndexes(organizationId)
+    .catch((err) => console.error("[repo-sync] Could not queue indexing; next sync will retry:", err));
+
   return result;
 }
 
@@ -318,6 +322,10 @@ export async function applyRepositoryEvent(
   if (outcome === "created") {
     await grantDeferredWelcomeCredit(organizationId);
     notifyDiscovered(organizationId, "webhook", result.createdRepos);
+  }
+  if (outcome !== "dismissed") {
+    await enqueuePendingRepositoryIndexes(organizationId)
+      .catch((err) => console.error("[repo-sync] Could not queue indexing; next sync will retry:", err));
   }
   return outcome;
 }

@@ -1,3 +1,4 @@
+import "server-only";
 import { PgBoss } from "pg-boss";
 import type { SendOptions } from "pg-boss";
 import { prisma } from "@octopus/db";
@@ -101,6 +102,12 @@ export async function startQueue(): Promise<PgBoss> {
   // resumes where this one stopped.
   await boss.createQueue("discover-repositories", {
     retryLimit: 0,
+    expireInSeconds: 1800,
+  }).catch(() => {});
+
+  await boss.createQueue("index-repository", {
+    retryLimit: 2,
+    retryDelay: 60,
     expireInSeconds: 1800,
   }).catch(() => {});
 

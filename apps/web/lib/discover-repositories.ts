@@ -1,3 +1,4 @@
+import "server-only";
 import { prisma } from "@octopus/db";
 import { GithubRateLimitError } from "@/lib/github";
 import { syncOrgRepos } from "@/lib/repo-sync";
@@ -48,6 +49,19 @@ export async function discoverRepositories(now: Date = new Date()): Promise<{
 
   for (const org of orgs) {
     try {
+      // Recover claims left by a crashed indexing worker. Do this BEFORE sync
+      // upserts refresh updatedAt; 35 min exceeds the indexing queue's expiry.
+      await prisma.repository.updateMany({
+        where: {
+          organizationId: org.id,
+          provider: "github",
+          isActive: true,
+          dismissedAt: null,
+          indexStatus: "indexing",
+          updatedAt: { lt: new Date(now.getTime() - 35 * 60_000) },
+        },
+        data: { indexStatus: "failed" },
+      });
       const r = await syncOrgRepos(org.id, { source: "scheduled" });
       created += r.created;
       removed += r.removed;

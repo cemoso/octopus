@@ -87,6 +87,9 @@ const writeAuditLog = mock(async () => {});
 const actualAudit = await import("@/lib/audit");
 mock.module("@/lib/audit", () => ({ ...actualAudit, writeAuditLog }));
 
+const enqueuePendingRepositoryIndexes = mock(async () => {});
+mock.module("@/lib/repository-index-job", () => ({ enqueuePendingRepositoryIndexes }));
+
 const { syncOrgRepos, applyRepositoryEvent } = await import("@/lib/repo-sync");
 
 const gh = (id: number, name: string) => ({
@@ -116,6 +119,7 @@ describe("syncOrgRepos", () => {
     grantDeferredWelcomeCredit.mockClear();
     trigger.mockClear();
     writeAuditLog.mockClear();
+    enqueuePendingRepositoryIndexes.mockClear();
   });
 
   it("reports brand-new repositories as created and refreshed ones as synced only", async () => {
@@ -129,6 +133,7 @@ describe("syncOrgRepos", () => {
     expect(upserts).toHaveLength(2);
     expect(upserts[1].create).toMatchObject({ externalId: "2", installationId: 111, isActive: true, organizationId: "org_1" });
     expect(grantDeferredWelcomeCredit).toHaveBeenCalledWith("org_1");
+    expect(enqueuePendingRepositoryIndexes).toHaveBeenCalledWith("org_1");
   });
 
   it("never resurrects a repository the user removed, and never deactivates dismissed rows", async () => {
@@ -247,6 +252,7 @@ describe("syncOrgRepos", () => {
     expect(trigger).toHaveBeenCalledWith("presence-org-org_1", "repos-discovered", { count: 2 });
 
     writeAuditLog.mockClear();
+    enqueuePendingRepositoryIndexes.mockClear();
     trigger.mockClear();
     existingRows.github = [{ externalId: "1", dismissedAt: null }, { externalId: "2", dismissedAt: null }];
     await syncOrgRepos("org_1", { source: "webhook" });
@@ -264,6 +270,7 @@ describe("applyRepositoryEvent (GitHub repository webhooks)", () => {
     grantDeferredWelcomeCredit.mockClear();
     trigger.mockClear();
     writeAuditLog.mockClear();
+    enqueuePendingRepositoryIndexes.mockClear();
   });
 
   it("writes one row from the payload on created and announces it", async () => {
