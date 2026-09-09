@@ -111,8 +111,7 @@ import {
   parseFindingsFromSummaryTable,
 } from "@/lib/review-dedup";
 import type { LogLevel } from "@/lib/indexer";
-import { summarizeRepository } from "@/lib/summarizer";
-import { analyzeRepository } from "@/lib/analyzer";
+import { ensureRepositoryAnalysis, deferReviewForRepository } from "@/lib/review-repository-preparation";
 import { writeSyncLog, deleteSyncLogs } from "@/lib/elasticsearch";
 import { logAiUsage } from "@/lib/ai-usage";
 import { resolveReviewModel } from "@/lib/review-routing";
@@ -887,7 +886,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
   }
 
   try {
-    // Phase 0: Auto-index & analyze if repository hasn't been indexed yet
+    // Phase 0: Ensure the repository is indexed before preparing review context
     if (repo.indexStatus !== "indexed") {
       console.log(`[reviewer] Repository ${repo.fullName} not indexed (status: ${repo.indexStatus}). Starting auto-index...`);
 
@@ -907,27 +906,24 @@ export async function processReview(pullRequestId: string): Promise<void> {
         const currentStatus = fresh?.indexStatus ?? "failed";
 
         if (currentStatus === "indexed") {
-          // Peer already finished -- skip straight to review
+          // Peer already finished -- continue to the analysis prerequisite
           console.log(`[reviewer] Repository ${repo.fullName} already indexed by another process, continuing with review`);
           if (reviewCommentId) {
             await providerUpdateComment(
               reviewCommentId,
-              "> 🐙 **Octopus Review** — Repository already indexed ✓.\n>\n> Starting PR review...",
+              "> 🐙 **Octopus Review** — Repository already indexed ✓.\n>\n> Preparing repository analysis...",
             );
           }
         } else if (currentStatus === "indexing") {
           // Peer still running -- yield this worker and retry later
           console.log(`[reviewer] Repository ${repo.fullName} is being indexed by another process, re-queuing PR ${pullRequestId}`);
-          await prisma.pullRequest.update({
-            where: { id: pullRequestId },
-            data: { status: "queued" },
-          });
           if (reviewCommentId) {
             await providerUpdateComment(
               reviewCommentId,
-              "> 🐙 **Octopus Review** — Repository indexing is in progress (started by another review).\n>\n> This review has been re-queued and will start automatically once indexing completes.",
+              "> 🐙 **Octopus Review** — Repository indexing is in progress.\n>\n> This review has been re-queued and will start automatically once indexing completes.",
             );
           }
+          await deferReviewForRepository(pullRequestId);
           return;
         } else {
           // Peer failed -- attempt conditional reclaim
@@ -1019,6 +1015,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
           where: { id: repo.id },
           data: {
             indexStatus: "indexed",
+            analysisStatus: "none",
             indexedAt: new Date(),
             indexedFiles: indexStats.indexedFiles,
             totalFiles: indexStats.totalFiles,
@@ -1039,62 +1036,6 @@ export async function processReview(pullRequestId: string): Promise<void> {
         }).catch((err) => console.error("[reviewer] Pubby index-status trigger failed:", err));
 
         console.log(`[reviewer] Indexing complete: ${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors`);
-
-        if (indexStats.totalChunks > 0) {
-          if (reviewCommentId) {
-            await providerUpdateComment(
-              reviewCommentId,
-              `> 🐙 **Octopus Review** — Indexing complete ✓ (${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors).\n>\n> Analyzing repository... (Step 2/3)`,
-            );
-          }
-
-          const { summary, purpose } = await summarizeRepository(repo.id, repo.fullName, org.id);
-          await prisma.repository.update({
-            where: { id: repo.id },
-            data: { summary, purpose },
-          });
-
-          console.log(`[reviewer] Summary complete: ${purpose}`);
-
-          await prisma.repository.update({
-            where: { id: repo.id },
-            data: { analysisStatus: "analyzing" },
-          });
-
-          pubby.trigger(indexChannel, "analysis-status", {
-            repoId: repo.id,
-            status: "analyzing",
-          }).catch((err) => console.error("[reviewer] Pubby analysis-status trigger failed:", err));
-
-          const analysis = await analyzeRepository(repo.id, repo.fullName, org.id);
-          await prisma.repository.update({
-            where: { id: repo.id },
-            data: {
-              analysis,
-              analysisStatus: "analyzed",
-              analyzedAt: new Date(),
-            },
-          });
-
-          pubby.trigger(indexChannel, "analysis-status", {
-            repoId: repo.id,
-            status: "analyzed",
-          }).catch((err) => console.error("[reviewer] Pubby analysis-status trigger failed:", err));
-
-          console.log(`[reviewer] Analysis complete`);
-
-          if (reviewCommentId) {
-            await providerUpdateComment(
-              reviewCommentId,
-              "> 🐙 **Octopus Review** — Repository indexed and analyzed ✓.\n>\n> Starting PR review... (Step 3/3)",
-            );
-          }
-        } else if (reviewCommentId) {
-          await providerUpdateComment(
-            reviewCommentId,
-            "> 🐙 **Octopus Review** — The base branch has no indexable content yet.\n>\n> Reviewing the changes in this pull request...",
-          );
-        }
 
         await prisma.repository.update({
           where: { id: repo.id },
@@ -1117,19 +1058,6 @@ export async function processReview(pullRequestId: string): Promise<void> {
           totalVectors: indexStats.totalVectors,
           durationMs: indexStats.durationMs,
         });
-
-        if (indexStats.totalChunks > 0) {
-          await pubby.trigger(`presence-org-${org.id}`, "repo-analyzed", {
-            repoId: repo.id,
-            fullName: repo.fullName,
-          }).catch((err) => console.error("[reviewer] Pubby repo-analyzed trigger failed:", err));
-
-          eventBus.emit({
-            type: "repo-analyzed",
-            orgId: org.id,
-            repoFullName: repo.fullName,
-          });
-        }
 
         console.log(`[reviewer] Phase 0 complete -- ${repo.fullName} indexed, auto-review enabled`);
       }
@@ -1214,6 +1142,33 @@ export async function processReview(pullRequestId: string): Promise<void> {
         await enqueueAfter("process-review", { pullRequestId: pr.id }, 30);
         return;
       }
+    }
+
+    const preparation = await ensureRepositoryAnalysis(repo.id, org.id, async () => {
+      if (reviewCommentId) {
+        await providerUpdateComment(
+          reviewCommentId,
+          "> 🐙 **Octopus Review** — Repository indexed ✓.\n>\n> Analyzing repository before reviewing this pull request... (Step 2/3)",
+        );
+      }
+    });
+    if (preparation === "waiting") {
+      if (reviewCommentId) {
+        await providerUpdateComment(
+          reviewCommentId,
+          "> 🐙 **Octopus Review** — Repository indexing or analysis is in progress.\n>\n> This review will retry automatically once repository preparation completes.",
+        );
+      }
+      await deferReviewForRepository(pullRequestId);
+      return;
+    }
+    if (reviewCommentId) {
+      await providerUpdateComment(
+        reviewCommentId,
+        preparation === "empty"
+          ? "> 🐙 **Octopus Review** — The base branch has no indexable content yet.\n>\n> Reviewing the changes in this pull request..."
+          : "> 🐙 **Octopus Review** — Repository indexed and analyzed ✓.\n>\n> Starting PR review... (Step 3/3)",
+      );
     }
 
     // Step 1: Mark as reviewing (idempotent — the guard may have set it already)
