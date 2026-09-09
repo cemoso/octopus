@@ -1,3 +1,4 @@
+import "server-only";
 import crypto from "node:crypto";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
@@ -1039,52 +1040,59 @@ export async function processReview(pullRequestId: string): Promise<void> {
 
         console.log(`[reviewer] Indexing complete: ${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors`);
 
-        if (reviewCommentId) {
+        if (indexStats.totalChunks > 0) {
+          if (reviewCommentId) {
+            await providerUpdateComment(
+              reviewCommentId,
+              `> 🐙 **Octopus Review** — Indexing complete ✓ (${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors).\n>\n> Analyzing repository... (Step 2/3)`,
+            );
+          }
+
+          const { summary, purpose } = await summarizeRepository(repo.id, repo.fullName, org.id);
+          await prisma.repository.update({
+            where: { id: repo.id },
+            data: { summary, purpose },
+          });
+
+          console.log(`[reviewer] Summary complete: ${purpose}`);
+
+          await prisma.repository.update({
+            where: { id: repo.id },
+            data: { analysisStatus: "analyzing" },
+          });
+
+          pubby.trigger(indexChannel, "analysis-status", {
+            repoId: repo.id,
+            status: "analyzing",
+          }).catch((err) => console.error("[reviewer] Pubby analysis-status trigger failed:", err));
+
+          const analysis = await analyzeRepository(repo.id, repo.fullName, org.id);
+          await prisma.repository.update({
+            where: { id: repo.id },
+            data: {
+              analysis,
+              analysisStatus: "analyzed",
+              analyzedAt: new Date(),
+            },
+          });
+
+          pubby.trigger(indexChannel, "analysis-status", {
+            repoId: repo.id,
+            status: "analyzed",
+          }).catch((err) => console.error("[reviewer] Pubby analysis-status trigger failed:", err));
+
+          console.log(`[reviewer] Analysis complete`);
+
+          if (reviewCommentId) {
+            await providerUpdateComment(
+              reviewCommentId,
+              "> 🐙 **Octopus Review** — Repository indexed and analyzed ✓.\n>\n> Starting PR review... (Step 3/3)",
+            );
+          }
+        } else if (reviewCommentId) {
           await providerUpdateComment(
             reviewCommentId,
-            `> 🐙 **Octopus Review** — Indexing complete ✓ (${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors).\n>\n> Analyzing repository... (Step 2/3)`,
-          );
-        }
-
-        const { summary, purpose } = await summarizeRepository(repo.id, repo.fullName, org.id);
-        await prisma.repository.update({
-          where: { id: repo.id },
-          data: { summary, purpose },
-        });
-
-        console.log(`[reviewer] Summary complete: ${purpose}`);
-
-        await prisma.repository.update({
-          where: { id: repo.id },
-          data: { analysisStatus: "analyzing" },
-        });
-
-        pubby.trigger(indexChannel, "analysis-status", {
-          repoId: repo.id,
-          status: "analyzing",
-        }).catch((err) => console.error("[reviewer] Pubby analysis-status trigger failed:", err));
-
-        const analysis = await analyzeRepository(repo.id, repo.fullName, org.id);
-        await prisma.repository.update({
-          where: { id: repo.id },
-          data: {
-            analysis,
-            analysisStatus: "analyzed",
-            analyzedAt: new Date(),
-          },
-        });
-
-        pubby.trigger(indexChannel, "analysis-status", {
-          repoId: repo.id,
-          status: "analyzed",
-        }).catch((err) => console.error("[reviewer] Pubby analysis-status trigger failed:", err));
-
-        console.log(`[reviewer] Analysis complete`);
-
-        if (reviewCommentId) {
-          await providerUpdateComment(
-            reviewCommentId,
-            "> 🐙 **Octopus Review** — Repository indexed and analyzed ✓.\n>\n> Starting PR review... (Step 3/3)",
+            "> 🐙 **Octopus Review** — The base branch has no indexable content yet.\n>\n> Reviewing the changes in this pull request...",
           );
         }
 
@@ -1110,18 +1118,20 @@ export async function processReview(pullRequestId: string): Promise<void> {
           durationMs: indexStats.durationMs,
         });
 
-        await pubby.trigger(`presence-org-${org.id}`, "repo-analyzed", {
-          repoId: repo.id,
-          fullName: repo.fullName,
-        }).catch((err) => console.error("[reviewer] Pubby repo-analyzed trigger failed:", err));
+        if (indexStats.totalChunks > 0) {
+          await pubby.trigger(`presence-org-${org.id}`, "repo-analyzed", {
+            repoId: repo.id,
+            fullName: repo.fullName,
+          }).catch((err) => console.error("[reviewer] Pubby repo-analyzed trigger failed:", err));
 
-        eventBus.emit({
-          type: "repo-analyzed",
-          orgId: org.id,
-          repoFullName: repo.fullName,
-        });
+          eventBus.emit({
+            type: "repo-analyzed",
+            orgId: org.id,
+            repoFullName: repo.fullName,
+          });
+        }
 
-        console.log(`[reviewer] Phase 0 complete -- ${repo.fullName} indexed, analyzed, auto-review enabled`);
+        console.log(`[reviewer] Phase 0 complete -- ${repo.fullName} indexed, auto-review enabled`);
       }
     }
 

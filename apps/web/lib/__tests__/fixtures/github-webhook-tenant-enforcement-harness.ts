@@ -20,6 +20,8 @@ let failNextLedgerWrite = false;
 let installationBindingCleared = false;
 let legacyRepositoryLookups = 0;
 let autoDiscoverEnabled = true;
+let createdRepository = false;
+let repositoryDismissed = false;
 const syncCalls: Array<{ organizationId: string; source: string }> = [];
 
 const webhookDeliveryStore = {
@@ -65,6 +67,7 @@ mock.module("@/lib/repo-sync", () => ({
   },
   applyRepositoryEvent: (organizationId: string, installationId: number, action: string) => {
     syncCalls.push({ organizationId, source: `repository.${action}@${installationId}` });
+    if (!repositoryDismissed) createdRepository = true;
     return Promise.resolve("created");
   },
 }));
@@ -122,7 +125,7 @@ mock.module("@octopus/db", () => ({
       }) => {
         if (args.where.provider_externalId_organizationId) {
           // Only the shared repository (9001) has a row; 9002 is brand new.
-          if (args.where.provider_externalId_organizationId.externalId !== "9001") {
+          if (args.where.provider_externalId_organizationId.externalId !== "9001" && !createdRepository) {
             return Promise.resolve(null);
           }
           return Promise.resolve({ id: "repo_b", organizationId: "org_b" });
@@ -136,6 +139,8 @@ mock.module("@octopus/db", () => ({
             fullName: "shared/repository",
             defaultBranch: "main",
             indexStatus: "pending",
+            isActive: true,
+            dismissedAt: repositoryDismissed ? new Date() : null,
           });
         }
         return Promise.resolve(null);
@@ -361,6 +366,34 @@ try {
   assert(installationBindingCleared, "uninstall did not clear the installation binding");
   assert(syncCalls.length === 0, "uninstall or earlier events unexpectedly triggered a repo sync");
 
+  // A first PR recovers a missed creation event before routing the review.
+  installationBindingCleared = false;
+  const firstPrBody = JSON.stringify({
+    ...JSON.parse(pullRequestBody()),
+    repository: { id: 9002, name: "brand-new", full_name: "shared/brand-new", default_branch: "main" },
+  });
+  const reviewsBeforeRecovery = reviewCalls.length;
+  autoDiscoverEnabled = false;
+  await POST(webhookRequest(firstPrBody));
+  await runAfterCallbacks();
+  assert(reviewCalls.length === reviewsBeforeRecovery && syncCalls.length === 0, "PR discovery ignored opt-out");
+  autoDiscoverEnabled = true;
+  repositoryDismissed = true;
+  await POST(webhookRequest(pullRequestBody()));
+  await POST(webhookRequest(issueCommentBody(), { eventType: "issue_comment" }));
+  await runAfterCallbacks();
+  assert(reviewCalls.length === reviewsBeforeRecovery, "a previously discovered, dismissed repository was reviewed");
+  await POST(webhookRequest(firstPrBody));
+  await runAfterCallbacks();
+  assert(reviewCalls.length === reviewsBeforeRecovery, "a dismissed repository was reviewed");
+  repositoryDismissed = false;
+  await POST(webhookRequest(firstPrBody));
+  await runAfterCallbacks();
+  assert(reviewCalls.length === reviewsBeforeRecovery + 1, "first PR was dropped after discovery");
+  assert(reviewCalls.at(-1)?.orgId === "org_b", "first PR crossed the installation boundary");
+  createdRepository = false;
+  syncCalls.length = 0;
+
   // Re-bind the installation for the repository lifecycle scenarios.
   installationBindingCleared = false;
   const repositoryCreatedBody = JSON.stringify({
@@ -442,6 +475,7 @@ try {
     repositoryCreatedUnmappedDropped: true,
     repositoryCreatedRespectsOptOut: true,
     installationRepositoriesSynced: true,
+    firstPrRecoversMissingRepository: true,
   }));
 } catch (error) {
   originalConsole.warn(error);

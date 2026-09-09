@@ -72,6 +72,7 @@ export async function indexRepository(
   let contributorCount = 0;
   let contributors: Contributor[] = [];
   let resolvedDefaultBranch: string | undefined;
+  let emptyRepository = false;
 
   if ((provider === "bitbucket" || provider === "gitlab") && organizationId) {
     // ── Bitbucket / GitLab indexing flow (clone-based) ──
@@ -252,10 +253,11 @@ export async function indexRepository(
 
     onLog(`Fetching repository tree for ${fullName}@${activeBranch}...`);
     let treeRes = await fetch(
-      `${GITHUB_API}/repos/${fullName}/git/trees/${activeBranch}?recursive=1`,
-      { headers },
+      `${GITHUB_API}/repos/${fullName}/git/trees/${encodeURIComponent(activeBranch)}?recursive=1`,
+      { headers, signal },
     );
 
+    let branchExists = false;
     if (!treeRes.ok && treeRes.status === 404) {
       const [owner, repoName] = fullName.split("/");
       const details = await getRepositoryDetails(installationId, owner, repoName, token);
@@ -269,23 +271,34 @@ export async function indexRepository(
         activeBranch = details.default_branch;
         resolvedDefaultBranch = details.default_branch;
         treeRes = await fetch(
-          `${GITHUB_API}/repos/${fullName}/git/trees/${activeBranch}?recursive=1`,
-          { headers },
+          `${GITHUB_API}/repos/${fullName}/git/trees/${encodeURIComponent(activeBranch)}?recursive=1`,
+          { headers, signal },
         );
       }
     }
 
-    if (!treeRes.ok) {
-      if (treeRes.status === 409) {
-        onLog(
-          `Repository '${fullName}' appears to be empty: there are no files to index. Push some code to the repository and try again.`,
-          "error",
-        );
-        throw new Error(
-          `Repository is empty: no files to index. Push some code and retry indexing.`,
-        );
+    // GitHub can return 404 for an existing branch whose commit references
+    // Git's empty tree. Verify the commit instead of calling it a missing branch.
+    if (!treeRes.ok && treeRes.status === 404) {
+      const commitRes = await fetch(
+        `${GITHUB_API}/repos/${fullName}/commits/${encodeURIComponent(activeBranch)}`,
+        { headers, signal },
+      );
+      if (commitRes.ok) {
+        branchExists = true;
+        const commit = await commitRes.json();
+        emptyRepository = commit.commit?.tree?.sha === "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+      } else if (commitRes.status !== 404 && commitRes.status !== 422) {
+        throw new Error(`Failed to verify branch '${activeBranch}': HTTP ${commitRes.status}`);
       }
+    }
+    if (!treeRes.ok && treeRes.status === 409) {
+      const error = await treeRes.json();
+      emptyRepository = error.message === "Git Repository is empty.";
+    }
+    if (!treeRes.ok && !emptyRepository) {
       if (treeRes.status === 404) {
+        if (branchExists) throw new Error(`GitHub returned no tree for existing branch '${activeBranch}' on ${fullName}`);
         onLog(`Branch '${activeBranch}' not found on ${fullName}`, "error");
         throw new Error(`Branch '${activeBranch}' not found on ${fullName}`);
       }
@@ -293,17 +306,12 @@ export async function indexRepository(
       throw new Error(`Failed to fetch tree: ${treeRes.status}`);
     }
 
-    const treeData = await treeRes.json();
-    const allItems = (treeData.tree as TreeItem[] | undefined) ?? [];
-
-    if (allItems.length === 0) {
-      onLog(
-        `Repository '${fullName}' appears to be empty: there are no files to index. Push some code to the repository and try again.`,
-        "error",
-      );
-      throw new Error(
-        `Repository is empty: no files to index. Push some code and retry indexing.`,
-      );
+    const treeData = emptyRepository ? { tree: [] } : await treeRes.json();
+    if (!Array.isArray(treeData.tree)) throw new Error("Invalid repository tree response from GitHub");
+    const allItems = treeData.tree as TreeItem[];
+    emptyRepository = allItems.length === 0;
+    if (emptyRepository) {
+      onLog(`Branch '${activeBranch}' has no files yet. Pull requests can still be reviewed.`, "info");
     }
 
     // Check for .octopusignore
@@ -457,6 +465,12 @@ export async function indexRepository(
   }
 
   if (allChunks.length === 0) {
+    if (emptyRepository) {
+      if (signal?.aborted) throw new Error("Indexing cancelled");
+      // An empty snapshot must not leave searchable chunks from an older tree.
+      await ensureCollection();
+      await deleteRepoChunks(repoId);
+    }
     onLog("No indexable content found", "warning");
     return {
       totalFiles: totalFileCount,

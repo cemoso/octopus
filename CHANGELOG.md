@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.139] - 2026-09-09
+
+### Fixed
+- New GitHub repositories now start indexing automatically after connection or discovery. A first pull request also recovers a repository missed by its creation webhook.
+- Pull requests against an empty initial branch can now be reviewed. GitHub's empty-tree response is no longer reported as a missing branch, while access and invalid-branch errors remain actionable.
+- Empty repositories are checked again after code is pushed, and abandoned indexing jobs recover during repository discovery.
+
 ## [1.0.138] - 2026-09-05
 
 ### Changed

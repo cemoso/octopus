@@ -1,3 +1,4 @@
+import "server-only";
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
@@ -11,6 +12,7 @@ import {
 } from "@/lib/github";
 import { getGithubAppConfig } from "@/lib/github-app-config";
 import { grantDeferredWelcomeCredit } from "@/lib/org-create";
+import { enqueuePendingRepositoryIndexes } from "@/lib/repository-index-job";
 import { getRedis } from "@/lib/redis";
 import { writeAuditLog } from "@/lib/audit";
 import {
@@ -196,6 +198,7 @@ async function bindAndSyncInstallation(
     // First repo connect releases a deferred welcome grant (no-op otherwise).
     if (ghRepos.length > 0) {
       await grantDeferredWelcomeCredit(organizationId);
+      await enqueuePendingRepositoryIndexes(organizationId);
     }
   } catch (error) {
     console.error("[github/callback] repo sync error:", error);

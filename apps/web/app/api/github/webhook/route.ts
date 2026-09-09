@@ -63,11 +63,35 @@ export async function POST(request: NextRequest) {
   const deliveryId = request.headers.get("x-github-delivery");
   const payloadSha256 = crypto.createHash("sha256").update(body).digest("hex");
   const payload = JSON.parse(body);
-  const tenantResolution = await resolveGithubWebhookTenant({
+  let tenantResolution = await resolveGithubWebhookTenant({
     provider: "github",
     installationId: payload.installation?.id,
     repositoryExternalId: payload.repository?.id,
   });
+
+  // A PR may arrive before repository.created (or before that subscription
+  // was enabled). Recover only inside the signed installation's mapped org.
+  const isReviewTrigger =
+    (event === "pull_request" && ["opened", "reopened", "synchronize", "ready_for_review"].includes(payload.action)) ||
+    (event === "issue_comment" && payload.action === "created" && payload.issue?.pull_request &&
+      /@octopus(?:review|-review)?\b/i.test(payload.comment?.body ?? ""));
+  if (isReviewTrigger && tenantResolution.status === "repository_not_owned" && tenantResolution.organizationId) {
+    const org = await prisma.organization.findFirst({
+      where: { id: tenantResolution.organizationId, deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
+      select: { id: true, autoDiscoverRepos: true },
+    });
+    if (org?.autoDiscoverRepos) {
+      await applyRepositoryEvent(org.id, payload.installation.id, "created", payload.repository);
+      // Never construct a resolved tenant from the payload or an upsert result.
+      tenantResolution = await resolveGithubWebhookTenant({
+        provider: "github",
+        installationId: payload.installation.id,
+        repositoryExternalId: payload.repository.id,
+      });
+      revalidatePath("/");
+      revalidatePath("/repositories");
+    }
+  }
   const resolvedRepositoryTenant = isResolvedRepositoryTenant(tenantResolution)
     ? tenantResolution
     : null;
@@ -202,10 +226,10 @@ export async function POST(request: NextRequest) {
     // Find repository in DB and check autoReview
     const repo = await prisma.repository.findUnique({
       where: { id: resolvedRepositoryTenant.repositoryId },
-      select: { id: true, organizationId: true, autoReview: true, installationId: true },
+      select: { id: true, organizationId: true, autoReview: true, installationId: true, isActive: true, dismissedAt: true },
     });
 
-    if (!repo || repo.organizationId !== resolvedRepositoryTenant.organizationId) {
+    if (!repo || !repo.isActive || repo.dismissedAt || repo.organizationId !== resolvedRepositoryTenant.organizationId) {
       console.warn(`[webhook] Repo not found in DB — externalId: ${repoExternalId}`);
       return NextResponse.json({ ok: true });
     }
@@ -425,10 +449,10 @@ export async function POST(request: NextRequest) {
       // Find repository in DB
       const repo = await prisma.repository.findUnique({
         where: { id: resolvedRepositoryTenant.repositoryId },
-        select: { id: true, organizationId: true, installationId: true },
+        select: { id: true, organizationId: true, installationId: true, isActive: true, dismissedAt: true },
       });
 
-      if (!repo || repo.organizationId !== resolvedRepositoryTenant.organizationId) {
+      if (!repo || !repo.isActive || repo.dismissedAt || repo.organizationId !== resolvedRepositoryTenant.organizationId) {
         console.warn(`[webhook] Repo not found in DB — externalId: ${repoExternalId}, fullName: ${repoFullName}`);
         return NextResponse.json({ ok: true });
       }
