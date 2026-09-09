@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.140] - 2026-09-09
+
+### Fixed
+- A repository's first pull request now waits for repository analysis even when automatic discovery has already finished indexing. Concurrent first reviews share the analysis, and waiting reviews retry automatically.
+
 ## [1.0.139] - 2026-09-09
 
 ### Fixed
