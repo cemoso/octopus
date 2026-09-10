@@ -1,3 +1,5 @@
+import { readReviewJson } from "@/lib/review-fetch";
+import { fetchGitHubReviewInput } from "@/lib/github-review-input";
 import crypto from "node:crypto";
 import { getGithubAppConfig } from "@/lib/github-app-config";
 import { MAX_FETCH_DIFF_CHARS, truncateDiff, truncationNotice } from "@/lib/diff-truncate";
@@ -424,6 +426,24 @@ export class LargePrError extends Error {
     super(message);
     this.name = "LargePrError";
   }
+}
+
+export async function getPullRequestReviewInput(
+  installationId: number, owner: string, repo: string, prNumber: number, expectedHead: string | null,
+) {
+  const token = await getInstallationToken(installationId);
+  return fetchGitHubReviewInput({
+    expectedHead,
+    maxPatchChars: MAX_FETCH_DIFF_CHARS,
+    fetchDiff: () => getPullRequestDiff(installationId, owner, repo, prNumber, token),
+    readJson: async (suffix) => {
+      const res = await fetchWithRetry(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}${suffix}`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) throw new Error(`Failed to get review input: ${res.status}`);
+      return readReviewJson(res);
+    },
+  });
 }
 
 export async function getPullRequestDiff(

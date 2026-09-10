@@ -1,3 +1,7 @@
+import "server-only";
+import { randomUUID } from "node:crypto";
+import { saveReviewAttempt } from "@/lib/review-attempt";
+import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
 import {
@@ -115,7 +119,11 @@ export async function handleLargeReviewResult(
     return;
   }
 
-  const reviewBody = data.reviewBody;
+  const attemptId = randomUUID();
+  // Legacy internal CLI results carry prose only, not proof of supplied files or
+  // immutable revisions. Never infer complete coverage from the model's score.
+  const coverage = unknownReviewCoverage(repo.provider, "Large-review worker did not supply verified changed-file coverage.");
+  const reviewBody = applyReviewCoverage(data.reviewBody, coverage, attemptId);
 
   // 1. Parse findings out of the markdown, then apply the SAME per-category
   // confidence filter + severity cap as the standard path (#652) so the largest,
@@ -207,7 +215,7 @@ export async function handleLargeReviewResult(
     : "COMMENT";
 
   const findingsBlock = buildLowSeveritySummary(findings);
-  const summaryHeader = `Large PR — ${findings.length} finding${findings.length !== 1 ? "s" : ""}${
+  const summaryHeader = `${coverageSummary(coverage)} Large PR — ${findings.length} finding${findings.length !== 1 ? "s" : ""}${
     mainCommentId && pr.url ? ` | [View details](${pr.url}#issuecomment-${mainCommentId})` : ""
   }`;
   const summaryBody = [
@@ -279,25 +287,15 @@ export async function handleLargeReviewResult(
   }
 
   // 5. Mark PR completed
-  await prisma.pullRequest.update({
-    where: { id: pr.id },
-    data: { status: "completed", reviewBody, errorMessage: null },
-  });
+  await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
 
   // 6. Update check run if PR has headSha (best effort — we don't track checkRunId
   // across the queue boundary, so we recreate-or-skip via a fresh check run.)
   if (pr.headSha) {
     try {
-      const conclusion = shouldRequestChanges ? "failure" : "success";
-      const summaryText = shouldRequestChanges
-        ? hasCritical
-          ? "Critical issues found that must be fixed before merge."
-          : hasHigh
-            ? "High severity issues found that should be fixed before merge."
-            : "Medium severity issues found that should be fixed before merge."
-        : findings.length > 0
-          ? "Review complete. No issues above the configured threshold."
-          : "Review complete. No issues found.";
+      const checkResult = reviewCheckResult(coverage, shouldRequestChanges, findingsCount);
+      const conclusion = checkResult.conclusion;
+      const summaryText = checkResult.summary;
 
       const { createCheckRun: ghCreateCheckRun } = await import("@/lib/github");
       const checkRunId = await ghCreateCheckRun(
@@ -314,7 +312,7 @@ export async function handleLargeReviewResult(
         checkRunId,
         conclusion,
         {
-          title: `${findings.length} finding${findings.length !== 1 ? "s" : ""}`,
+          title: checkResult.title,
           summary: summaryText,
         },
       );

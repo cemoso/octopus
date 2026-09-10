@@ -1,4 +1,5 @@
-import { prisma } from "@octopus/db";
+import "server-only";
+import { prisma, Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
 import { enqueue } from "@/lib/queue";
 import { eventBus } from "@/lib/events";
@@ -163,6 +164,7 @@ export async function startReviewFlow(params: {
       triggerCommentId,
       triggerCommentBody,
       reviewBody: null,
+      reviewCoverage: Prisma.DbNull,
       errorMessage: null,
     },
   });

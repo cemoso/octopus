@@ -405,6 +405,7 @@ model PullRequest {
   headSha            String?
   reviewCommentId    BigInt?
   reviewBody         String?
+  reviewCoverage     Json?
   errorMessage       String?
   mergedAt           DateTime?
   createdAt          DateTime  @default(now())
@@ -414,10 +415,26 @@ model PullRequest {
   repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
 
   reviewIssues ReviewIssue[]
+  reviewAttempts ReviewAttempt[]
 
   @@unique([repositoryId, number])
   @@index([repositoryId, status])
   @@map("pull_requests")
+}
+
+// Append-only final results. A new attempt never overwrites prior evidence.
+model ReviewAttempt {
+  id            String   @id
+  pullRequestId String
+  pullRequest   PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  headSha       String?
+  baseSha       String?
+  coverage      Json
+  reviewBody    String
+  createdAt     DateTime @default(now())
+
+  @@index([pullRequestId, createdAt])
+  @@map("review_attempts")
 }
 
 model ReviewIssue {

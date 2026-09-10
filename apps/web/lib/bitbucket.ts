@@ -1,3 +1,6 @@
+import "server-only";
+import { readReviewJson } from "@/lib/review-fetch";
+import { attachReviewPatches, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
 import { prisma } from "@octopus/db";
 import { truncateDiff, MAX_FETCH_DIFF_CHARS } from "@/lib/diff-truncate";
 import { encryptString, decryptStringMaybeLegacy } from "@/lib/crypto";
@@ -476,4 +479,38 @@ export async function deleteWebhook(
   if (!res.ok) {
     console.error(`[bitbucket] Failed to delete webhook: ${res.status}`);
   }
+}
+
+export async function getPullRequestReviewInput(organizationId: string, workspace: string, repoSlug: string, prId: number, expectedHead: string | null): Promise<{ input: ReviewInput; rawDiff: string }> {
+  const token = await getAccessToken(organizationId);
+  const base = `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}`;
+  type InputPage = { source?: { commit?: { hash?: string } }; destination?: { commit?: { hash?: string } }; size?: number; next?: string; values?: { old?: { path?: string }; new?: { path?: string }; status: string; lines_added?: number; lines_removed?: number }[] };
+  const read = async (suffix: string) => {
+    const response = await fetch(base + suffix, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`Failed to get Bitbucket review input: ${response.status}`);
+    return readReviewJson<InputPage>(response);
+  };
+  const before = await read("");
+  const headSha = before.source?.commit?.hash;
+  const baseSha = before.destination?.commit?.hash ?? null;
+  if (!headSha || (expectedHead && headSha !== expectedHead)) throw new Error("PR revision changed before review input was fetched");
+  const rawDiff = await getPullRequestDiff(organizationId, workspace, repoSlug, prId);
+  const files: ReviewFileInput[] = [];
+  let inventoryComplete = false, expectedFiles: number | null = null;
+  for (let page = 1; page <= 30; page++) {
+    const result = await read(`/diffstat?pagelen=100&page=${page}`);
+    if (!Array.isArray(result.values)) throw new Error("Invalid Bitbucket changed-file response");
+    if (typeof result.size === "number" && Number.isSafeInteger(result.size) && result.size >= 0) expectedFiles = result.size;
+    for (const f of result.values) {
+      const path = f.new?.path ?? f.old?.path;
+      if (typeof path !== "string") throw new Error("Invalid Bitbucket changed-file entry");
+      files.push({ path, previousPath: f.old?.path, change: f.status === "added" ? "added" : f.status === "removed" ? "removed" : f.status, additions: f.lines_added, deletions: f.lines_removed });
+    }
+    // Construct our own next URL so a response cannot redirect credentials.
+    if (!result.next) { inventoryComplete = true; break; }
+  }
+  const after = await read("");
+  if (after.source?.commit?.hash !== headSha || after.destination?.commit?.hash !== baseSha) throw new Error("PR revision changed while review input was being fetched");
+  inventoryComplete = inventoryComplete && (expectedFiles === null || expectedFiles === files.length) && Boolean(baseSha);
+  return { rawDiff, input: { provider: "bitbucket", headSha, baseSha, files: attachReviewPatches(files, rawDiff), expectedFiles: expectedFiles ?? (inventoryComplete ? files.length : null), inventoryComplete, limitations: inventoryComplete ? [] : ["Bitbucket changed-file inventory could not be verified completely."] } };
 }
