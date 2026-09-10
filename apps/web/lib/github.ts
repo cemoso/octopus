@@ -378,6 +378,7 @@ export async function createPullRequestReview(
   comments: ReviewComment[],
   /** Pre-resolved token (bot-account mode). Skips getInstallationToken when provided. */
   providedToken?: string,
+  commitId?: string,
 ): Promise<number> {
   // The review-record `body` is subject to the same 65,536-char limit as
   // issue/PR comments; without this the standard-pipeline review path can
@@ -396,6 +397,7 @@ export async function createPullRequestReview(
         body: safeBody,
         event,
         comments,
+        ...(commitId ? { commit_id: commitId } : {}),
       }),
     },
   );

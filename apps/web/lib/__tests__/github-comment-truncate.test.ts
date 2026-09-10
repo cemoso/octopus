@@ -1,5 +1,6 @@
-import { describe, it, expect } from "bun:test";
-import { MAX_GITHUB_COMMENT_BODY, truncateForGithubComment } from "@/lib/github";
+import { describe, it, expect, mock } from "bun:test";
+mock.module("server-only", () => ({}));
+const { MAX_GITHUB_COMMENT_BODY, truncateForGithubComment, createPullRequestReview } = await import("@/lib/github");
 
 describe("truncateForGithubComment", () => {
   it("returns short bodies unchanged", () => {
@@ -54,4 +55,20 @@ describe("truncateForGithubComment", () => {
     // Sanity: re-encoding through JSON preserves all code points.
     expect(() => JSON.parse(JSON.stringify({ body: out }))).not.toThrow();
   });
+});
+
+it("pins submitted review records to the originating commit", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: unknown[] = [];
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return Response.json({ id: 123 });
+  }) as typeof fetch;
+  try {
+    const head = "a".repeat(40);
+    expect(await createPullRequestReview(1, "owner", "repo", 2, "Review", "COMMENT", [], "test-only-token", head)).toBe(123);
+    expect(requests).toEqual([{ body: "Review", event: "COMMENT", comments: [], commit_id: head }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

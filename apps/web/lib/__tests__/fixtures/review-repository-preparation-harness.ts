@@ -47,7 +47,10 @@ mock.module("@octopus/db", () => ({
       },
     },
     pullRequest: {
-      update: async ({ data }: { data: { status: string } }) => { prStatus = data.status; },
+      updateMany: async ({ data, where }: { data: { status: string }; where: { headSha?: string | null } }) => {
+        if (where.headSha !== undefined && where.headSha !== "current") return { count: 0 };
+        prStatus = data.status; return { count: 1 };
+      },
     },
   },
 }));
@@ -132,6 +135,8 @@ await assert.rejects(() => ensureRepositoryAnalysis(repo.id, "other-org"), /not 
 
 await deferReviewForRepository("pr-1");
 assert.deepEqual(queued, [["process-review", { pullRequestId: "pr-1" }, 30]]);
+await deferReviewForRepository("pr-1", "stale");
+assert.equal(queued.length, 1);
 queueFailure = true;
 await assert.rejects(() => deferReviewForRepository("pr-1"), /Could not enqueue/);
 console.log("Analysis sequencing, empty bases, concurrency, retries and ownership checks passed");

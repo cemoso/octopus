@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma, Prisma } from "@octopus/db";
+import { createReviewAttemptComment } from "@/lib/review-attempt";
 import { pubby } from "@/lib/pubby";
 import { enqueue } from "@/lib/queue";
 import { eventBus } from "@/lib/events";
@@ -111,8 +112,8 @@ export async function startReviewFlow(params: {
 
     if (isStuck) {
       console.log(`[webhook] Review for PR #${prNumber} stuck for >3min, marking as failed and restarting`);
-      await prisma.pullRequest.update({
-        where: { id: existingPr.id },
+      await prisma.pullRequest.updateMany({
+        where: { id: existingPr.id, headSha: existingPr.headSha, updatedAt: existingPr.updatedAt },
         data: { status: "failed", errorMessage: "Review timed out after 3 minutes" },
       });
     } else if (existingPr.headSha === headSha) {
@@ -170,41 +171,22 @@ export async function startReviewFlow(params: {
   });
   console.log(`[webhook] PullRequest upserted — id: ${pr.id}, number: ${pr.number}`);
 
-  const existingCommentId = pr.reviewCommentId ? Number(pr.reviewCommentId) : null;
-  const placeholderBody =
-    "> 🐙 **Octopus Review** is analyzing this pull request...\n>\n> This comment will be updated with the full review once complete.";
-
-  // Post or update placeholder comment
+  const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${headSha || "unknown"}\`. A separate review attempt will report the result.`;
   try {
-    if (existingCommentId) {
-      console.log(`[webhook] Updating existing placeholder comment — commentId: ${existingCommentId}`);
+    await createReviewAttemptComment(pr.id, headSha || null, async () => {
       if (provider === "github" && installationId) {
-        await github.updatePullRequestComment(installationId, owner, repoName, existingCommentId, placeholderBody);
-      } else if (provider === "bitbucket" && organizationId) {
-        await bitbucket.updatePullRequestComment(organizationId, owner, repoName, prNumber, existingCommentId, placeholderBody);
-      } else if (provider === "gitlab" && organizationId) {
-        await gitlab.updatePullRequestComment(organizationId, repoFullName, prNumber, existingCommentId, placeholderBody);
+        return github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
       }
-    } else {
-      console.log(`[webhook] Posting new placeholder comment to PR #${prNumber}`);
-      let newCommentId: number;
-      if (provider === "github" && installationId) {
-        newCommentId = await github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
-      } else if (provider === "bitbucket" && organizationId) {
-        newCommentId = await bitbucket.createPullRequestComment(organizationId, owner, repoName, prNumber, placeholderBody);
-      } else if (provider === "gitlab" && organizationId) {
-        newCommentId = await gitlab.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
-      } else {
-        throw new Error("Invalid provider configuration");
+      if (provider === "bitbucket" && organizationId) {
+        return bitbucket.createPullRequestComment(organizationId, owner, repoName, prNumber, placeholderBody);
       }
-      console.log(`[webhook] Placeholder comment posted — commentId: ${newCommentId}`);
-      await prisma.pullRequest.update({
-        where: { id: pr.id },
-        data: { reviewCommentId: newCommentId },
-      });
-    }
+      if (provider === "gitlab" && organizationId) {
+        return gitlab.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
+      }
+      throw new Error("Invalid provider configuration");
+    });
   } catch (err) {
-    console.error("[webhook] Failed to post/update placeholder comment:", err);
+    console.error("[webhook] Failed to post placeholder comment:", err);
   }
 
   // Notify real-time dashboard

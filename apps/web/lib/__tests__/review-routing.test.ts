@@ -1,3 +1,4 @@
+import { buildGeneratedMatcher } from "@/lib/generated-files";
 import { prepareReviewInput } from "@/lib/review-coverage";
 import { describe, it, expect, mock } from "bun:test";
 
@@ -102,4 +103,21 @@ describe("coverage-aware model classification", () => {
     const mixed = prepareReviewInput({ ...input, expectedFiles: 2, files: [...files, { path: "README.md", change: "added", patch: "@@ -0,0 +1 @@\n+docs\n" }] }, { maxChars: 90 });
     expect(classifyDiff(mixed.diff, mixed.coverage)).toMatchObject({ files: 2, mechanicalOnly: false, tier: "standard" });
   });
+});
+
+it("ignores policy-excluded paths while retaining unavailable source in routing", () => {
+  const files = [
+    { path: "src/example.ts", change: "modified", patch: "@@ -1 +1 @@\n-old\n+new\n" },
+    { path: "bun.lock", change: "modified", patch: "@@ -1 +1 @@\n-old\n+new\n" },
+  ];
+  const input = { provider: "github", headSha: "a", baseSha: "b", inventoryComplete: true, expectedFiles: 2, limitations: [], files };
+  const full = prepareReviewInput(input, { maxChars: 1000, generated: buildGeneratedMatcher() });
+  expect(full.coverage.files[1].state).toBe("excluded");
+  expect(classifyDiff(full.diff, full.coverage)).toEqual(classifyDiff(full.diff));
+  expect(classifyDiff(full.diff, full.coverage)).toMatchObject({ files: 1, loc: 2, tier: "mechanical" });
+  const missingSource = prepareReviewInput({ ...input, files: [
+    { path: "src/example.ts", change: "modified" },
+    { path: "README.md", change: "modified", patch: "@@ -1 +1 @@\n-old\n+new\n" },
+  ] }, { maxChars: 1000 });
+  expect(classifyDiff(missingSource.diff, missingSource.coverage)).toMatchObject({ files: 2, mechanicalOnly: false, tier: "standard" });
 });

@@ -2,16 +2,22 @@ import { mock } from "bun:test";
 import assert from "node:assert/strict";
 
 type Row = { id: string; pullRequestId: string; reviewBody: string; coverage: unknown; headSha: string | null; baseSha: string | null; createdAt?: Date };
-type Action = { kind: "create"; data: Row } | { kind: "update"; data: Record<string, unknown>; headSha?: string };
+let issues: unknown[] = [];
+let duringConfig: (() => void) | undefined;
 const rows = new Map<string, Row>();
 let current: Record<string, unknown> = {};
 let currentHead = "a".repeat(40);
 let member = true;
 let queries = 0;
 mock.module("server-only", () => ({}));
-mock.module("@octopus/db", () => ({ prisma: {
+const db = {
+  organization: { findUnique: async () => ({ reviewsPaused: false, blockedAuthors: [] }) },
   reviewAttempt: {
-    create: ({ data }: { data: Row }): Action => ({ kind: "create", data }),
+    create: async ({ data }: { data: Row }) => {
+      if (rows.has(data.id)) throw new Error("duplicate attempt");
+      rows.set(data.id, structuredClone(data));
+      return data;
+    },
     findFirst: async ({ where }: { where: { id: string; pullRequest?: { repository?: { organization?: { id?: string; members?: { some?: { userId?: string; deletedAt?: unknown } }; bannedAt?: unknown; deletedAt?: unknown }; isActive?: boolean } } } }) => {
       queries++;
       const org = where.pullRequest?.repository?.organization;
@@ -23,14 +29,29 @@ mock.module("@octopus/db", () => ({ prisma: {
     },
   },
   pullRequest: {
+    upsert: async () => ({ id: "pr", headSha: currentHead, number: 1, status: "pending", reviewCommentId: current.reviewCommentId }),
     findUnique: async () => ({ id: "pr", headSha: currentHead, number: 1, repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
-    updateMany: ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string } }): Action => ({ kind: "update", data, headSha: where.headSha }) },
-  $transaction: async (actions: Action[]) => {
-    const create = actions.find(a => a.kind === "create");
-    if (create?.kind === "create" && rows.has(create.data.id)) throw new Error("duplicate attempt");
-    for (const action of actions) {
-      if (action.kind === "create") rows.set(action.data.id, structuredClone(action.data));
-      else if (!action.headSha || action.headSha === currentHead) current = structuredClone(action.data);
+    updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string } }) => {
+      if (where.headSha && where.headSha !== currentHead) return { count: 0 };
+      current = { ...current, ...structuredClone(data) };
+      return { count: 1 };
+    },
+  },
+  systemConfig: { findUnique: async () => { duringConfig?.(); return null; } },
+  reviewIssue: {
+    findMany: async () => [],
+    deleteMany: async () => { issues = []; },
+    createMany: async ({ data }: { data: unknown[] }) => { issues = structuredClone(data); },
+  },
+};
+mock.module("@octopus/db", () => ({ Prisma: { DbNull: null }, prisma: { ...db,
+  $transaction: async (run: (tx: typeof db) => Promise<unknown>) => {
+    const savedRows = new Map(rows), savedCurrent = structuredClone(current), savedIssues = structuredClone(issues);
+    try { return await run(db); }
+    catch (error) {
+      rows.clear(); for (const [key, value] of savedRows) rows.set(key, value);
+      current = savedCurrent; issues = savedIssues;
+      throw error;
     }
   },
 } }));
@@ -43,7 +64,7 @@ mock.module("@/lib/api-auth", () => ({ authenticateApiToken: async (request: Req
   return null;
 } }));
 
-const { saveReviewAttempt } = await import("../../review-attempt");
+const { saveReviewAttempt, updateCurrentReview, createReviewAttemptComment } = await import("../../review-attempt");
 const { unknownReviewCoverage } = await import("../../review-coverage");
 const { GET } = await import("../../../app/api/review-attempts/[id]/route");
 const first = "11111111-1111-4111-8111-111111111111", second = "22222222-2222-4222-8222-222222222222";
@@ -82,12 +103,14 @@ assert.equal(rows.get("55555555-5555-4555-8555-555555555555")?.reviewBody, "Unkn
 console.log("PASS stale-head isolation, immutable attempts, token/session tenant isolation, account hold and cache policy");
 
 const checks: unknown[][] = [];
+const published: unknown[][] = [];
+let allowPublication = false;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
   updateCheckRun: async (...args: unknown[]) => { checks.push(args); },
-  createPullRequestComment: unexpectedPublication,
+  createPullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); published.push(args); return 900; },
   updatePullRequestComment: unexpectedPublication,
-  createPullRequestReview: unexpectedPublication,
+  createPullRequestReview: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
 }));
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: unexpectedPublication } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: unexpectedPublication } }));
@@ -107,3 +130,47 @@ assert.equal(checks.length, 1);
 assert.equal(current.reviewBody, "New-head report");
 assert.equal([...rows.values()].slice(-2).every(row => row.headSha === null && !(row.coverage as { complete: boolean }).complete), true);
 console.log("PASS originating large-review check and revision correlation, legacy result isolation");
+
+const issue = (title: string) => ({ pullRequestId: "pr", title, description: title, severity: "low" });
+let finishOldComment!: (id: number) => void;
+const oldComment = createReviewAttemptComment("pr", "a".repeat(40), () => new Promise<number>(resolve => { finishOldComment = resolve; }));
+const newCommentId = await createReviewAttemptComment("pr", currentHead, async () => 200);
+assert.equal(newCommentId, 200);
+const newerAttempt = "88888888-8888-4888-8888-888888888888";
+assert.equal(await saveReviewAttempt(newerAttempt, "pr", { ...coverage, headSha: currentHead }, "Newer final report", [issue("new finding")]), true);
+finishOldComment(100);
+assert.equal(await oldComment, 100);
+assert.equal(current.reviewCommentId, 200);
+assert.deepEqual(await updateCurrentReview("pr", coverage.headSha, { status: "failed" }), { count: 0 });
+assert.equal(current.status, "completed");
+assert.equal(await saveReviewAttempt("99999999-9999-4999-8999-999999999999", "pr", coverage, "Late A report", [issue("old finding")]), false);
+assert.deepEqual(issues, [issue("new finding")]);
+assert.equal(current.reviewBody, "Newer final report");
+assert.equal(rows.get("99999999-9999-4999-8999-999999999999")?.reviewBody, "Late A report");
+assert.equal(await saveReviewAttempt("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "pr", unknownReviewCoverage("github", "legacy"), "Unknown report", []), false);
+assert.deepEqual(issues, [issue("new finding")]);
+
+currentHead = origin.headSha;
+duringConfig = () => { currentHead = "b".repeat(40); };
+allowPublication = true;
+await handleLargeReviewResult({ pullRequestId: "pr", ...origin, attemptId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", reviewBody: "Overall 5/5" });
+assert.equal(current.reviewCommentId, 200);
+assert.equal(current.reviewBody, "Newer final report");
+assert.equal(current.status, "completed");
+assert.deepEqual(issues, [issue("new finding")]);
+assert.equal(published.length, 2);
+assert.equal(published[1][8], origin.headSha);
+assert.equal(rows.get("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")?.headSha, origin.headSha);
+console.log("PASS publication races preserve current comments, findings and status while archiving stale attempts");
+
+duringConfig = undefined;
+mock.module("@/lib/bitbucket", () => ({}));
+mock.module("@/lib/gitlab", () => ({}));
+mock.module("@/lib/queue", () => ({ enqueue: async () => "queued" }));
+mock.module("@/lib/pubby", () => ({ pubby: { trigger: async () => {} } }));
+mock.module("@/lib/events", () => ({ eventBus: { emit: () => {} } }));
+const { startReviewFlow } = await import("../../webhook-shared");
+assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", headSha: currentHead, triggerCommentId: 1, triggerCommentBody: "review" }), { started: true });
+assert.equal(published.length, 3);
+assert.equal(current.reviewCommentId, 900);
+console.log("PASS review triggers create new comments without editing previous attempts");

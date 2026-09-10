@@ -57,7 +57,7 @@ import { MAX_DIFF_CHARS } from "@/lib/diff-truncate";
 import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, type ReviewInput } from "@/lib/review-coverage";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
-import { saveReviewAttempt } from "@/lib/review-attempt";
+import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
 import {
@@ -143,6 +143,7 @@ function getConflictDetectionPrompt(): string {
 type ReviewEvent = {
   repoId: string;
   pullRequestId: string;
+  headSha: string | null;
   number: number;
   status: "reviewing" | "completed" | "failed";
   step:
@@ -159,11 +160,14 @@ type ReviewEvent = {
 };
 
 async function emitReviewStatus(orgId: string, event: ReviewEvent) {
+  const current = await prisma.pullRequest.findUnique({ where: { id: event.pullRequestId }, select: { headSha: true } });
+  if (!event.headSha || current?.headSha !== event.headSha) return false;
   await pubby
     .trigger(`presence-org-${orgId}`, "review-status", event)
     .catch((err) =>
       console.error("[reviewer] Pubby trigger failed:", err),
     );
+  return true;
 }
 
 // --- Pre-review feedback sync helpers ---
@@ -354,6 +358,7 @@ async function syncReactionsForPR(
   owner: string,
   repoName: string,
   pullRequestId: string,
+  headSha: string | null,
 ) {
   const issues = await prisma.reviewIssue.findMany({
     where: {
@@ -387,8 +392,8 @@ async function syncReactionsForPR(
       const reactions = await ghGetCommentReactions(installationId, owner, repoName, commentId);
       if (reactions.thumbsUp > 0 || reactions.thumbsDown > 0) {
         const vote = reactions.thumbsUp >= reactions.thumbsDown ? "up" : "down";
-        await prisma.reviewIssue.update({
-          where: { id: issue.id },
+        await prisma.reviewIssue.updateMany({
+          where: { id: issue.id, pullRequest: { headSha } },
           data: { feedback: vote, feedbackAt: new Date(), feedbackBy: "github-reaction" },
         });
         await embedFeedbackPattern(issue, vote);
@@ -421,6 +426,7 @@ async function syncTextDismissalsForPR(
   prNumber: number,
   pullRequestId: string,
   prAuthor: string,
+  headSha: string | null,
 ) {
   const issues = await prisma.reviewIssue.findMany({
     where: {
@@ -499,8 +505,8 @@ async function syncTextDismissalsForPR(
         const vote = intent === "dismissed" ? "down" : "up";
         const feedbackSource = intent === "dismissed" ? "github-reply-dismissal" : "github-reply-acceptance";
         try {
-          await prisma.reviewIssue.update({
-            where: { id: issue.id },
+          await prisma.reviewIssue.updateMany({
+            where: { id: issue.id, pullRequest: { headSha } },
             data: { feedback: vote, feedbackAt: new Date(), feedbackBy: feedbackSource },
           });
           await embedFeedbackPattern(issue, vote);
@@ -555,8 +561,8 @@ async function syncTextDismissalsForPR(
           for (const issue of matched) {
             if (dismissedIds.has(issue.id)) continue;
             try {
-              await prisma.reviewIssue.update({
-                where: { id: issue.id },
+              await prisma.reviewIssue.updateMany({
+                where: { id: issue.id, pullRequest: { headSha } },
                 data: { feedback, feedbackAt: new Date(), feedbackBy: "github-issue-comment-per-finding" },
               });
               await embedFeedbackPattern(issue, feedback);
@@ -594,7 +600,7 @@ async function syncTextDismissalsForPR(
       if (hasDismissalComment && stillRemaining.length > 0) {
         const remainingIds = stillRemaining.map((i) => i.id);
         const { count } = await prisma.reviewIssue.updateMany({
-          where: { id: { in: remainingIds } },
+          where: { id: { in: remainingIds }, pullRequest: { headSha } },
           data: { feedback: "down", feedbackAt: new Date(), feedbackBy: "github-issue-comment-dismissal" },
         });
         synced += count;
@@ -653,6 +659,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
   const claimed = await prisma.pullRequest.updateMany({
     where: {
       id: pullRequestId,
+      headSha: pr.headSha,
       OR: [
         // Fresh-claim: never seen / explicitly retryable
         { status: "pending" },
@@ -730,32 +737,29 @@ export async function processReview(pullRequestId: string): Promise<void> {
     }
   };
 
+  const attemptLabel = `Review attempt: ${attemptId}. Head: ${pr.headSha ?? "unknown"}.\n\n`;
   const providerCreateComment = (prNumber: number, body: string) =>
     isGitHub
-      ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, body)
+      ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel + body)
       : isGitlab
-        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, body)
-        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, body);
+        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel + body)
+        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel + body);
 
   const providerUpdateComment = async (commentId: number, body: string) => {
     try {
       if (isGitHub) {
-        await ghUpdatePullRequestComment(installationId!, owner, repoName, commentId, body);
+        await ghUpdatePullRequestComment(installationId!, owner, repoName, commentId, attemptLabel + body);
       } else if (isGitlab) {
-        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, body);
+        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel + body);
       } else {
-        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, body);
+        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel + body);
       }
     } catch (err) {
       // If the comment was deleted externally, create a new one and update the reference
       if (err instanceof Error && err.message.includes("404")) {
         console.warn(`[reviewer] Comment ${commentId} not found (deleted?), creating new comment`);
-        const newId = await providerCreateComment(pr.number, body);
+        const newId = await createReviewAttemptComment(pr.id, pr.headSha, () => providerCreateComment(pr.number, body));
         reviewCommentId = newId;
-        await prisma.pullRequest.update({
-          where: { id: pr.id },
-          data: { reviewCommentId: newId },
-        });
         return;
       }
       throw err;
@@ -821,10 +825,11 @@ export async function processReview(pullRequestId: string): Promise<void> {
     }
     return paths;
   };
-  let reviewCommentId = pr.reviewCommentId ? Number(pr.reviewCommentId) : null;
+  let reviewCommentId: number | null = null;
   const baseEvent = {
     repoId: repo.id,
     pullRequestId: pr.id,
+    headSha: pr.headSha,
     number: pr.number,
   };
 
@@ -876,14 +881,15 @@ export async function processReview(pullRequestId: string): Promise<void> {
   // Pre-review: sync feedback from GitHub before generating new findings
   if (isGitHub && installationId) {
     try {
-      await syncReactionsForPR(installationId, owner, repoName, pr.id);
-      await syncTextDismissalsForPR(installationId, owner, repoName, pr.number, pr.id, pr.author);
+      await syncReactionsForPR(installationId, owner, repoName, pr.id, pr.headSha);
+      await syncTextDismissalsForPR(installationId, owner, repoName, pr.number, pr.id, pr.author, pr.headSha);
     } catch (err) {
       console.warn("[reviewer] Pre-review feedback sync failed, continuing:", err);
     }
   }
 
   try {
+    reviewCommentId = await createReviewAttemptComment(pr.id, pr.headSha, () => providerCreateComment(pr.number, "> 🐙 **Octopus Review** — Preparing review..."));
     // Phase 0: Ensure the repository is indexed before preparing review context
     if (repo.indexStatus !== "indexed") {
       console.log(`[reviewer] Repository ${repo.fullName} not indexed (status: ${repo.indexStatus}). Starting auto-index...`);
@@ -921,7 +927,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
               "> 🐙 **Octopus Review** — Repository indexing is in progress.\n>\n> This review has been re-queued and will start automatically once indexing completes.",
             );
           }
-          await deferReviewForRepository(pullRequestId);
+          await deferReviewForRepository(pullRequestId, pr.headSha);
           return;
         } else {
           // Peer failed -- attempt conditional reclaim
@@ -942,10 +948,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
             console.log(`[reviewer] Repository ${repo.fullName} indexing resolved by peer, continuing with review`);
           } else {
             console.error(`[reviewer] Repository ${repo.fullName} ${decision.reason}`);
-            await prisma.pullRequest.update({
-              where: { id: pullRequestId },
-              data: { status: "failed" },
-            });
+            await updateCurrentReview(pr.id, pr.headSha, { status: "failed" });
             if (reviewCommentId) {
               await providerUpdateComment(
                 reviewCommentId,
@@ -1023,8 +1026,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
             contributorCount: indexStats.contributorCount,
             contributors: JSON.parse(JSON.stringify(indexStats.contributors)),
             ...(indexStats.resolvedDefaultBranch ? { defaultBranch: indexStats.resolvedDefaultBranch } : {}),
-          },
-        });
+          });
 
         emitIndexLog(`Indexing complete: ${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors`, "success");
 
@@ -1081,12 +1083,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
       } else {
         await providerCreateComment(pr.number, limitMsg);
       }
-      await prisma.pullRequest.update({
-        where: { id: pr.id },
-        data: {
-          status: "failed",
-          errorMessage: outOfCredits ? "Out of credits" : "Monthly spend limit reached",
-        },
+      await updateCurrentReview(pr.id, pr.headSha, {
+        status: "failed",
+        errorMessage: outOfCredits ? "Out of credits" : "Monthly spend limit reached",
       });
       // Finalize the GitLab status as success — a billing limit is not a code
       // problem, so it must not block the MR merge (and leaving "running" would
@@ -1126,17 +1125,14 @@ export async function processReview(pullRequestId: string): Promise<void> {
           },
         });
         if (inFlight > 0) return false;
-        await tx.pullRequest.update({ where: { id: pr.id }, data: { status: "reviewing" } });
-        return true;
+        const admitted = await tx.pullRequest.updateMany({ where: { id: pr.id, headSha: pr.headSha }, data: { status: "reviewing" } });
+        return admitted.count > 0;
       });
       if (!admitted) {
         console.log(
           `[reviewer] Low balance + in-flight review for org ${org.id} — re-queuing PR ${pr.id}`,
         );
-        await prisma.pullRequest.update({
-          where: { id: pr.id },
-          data: { status: "queued", updatedAt: new Date() },
-        });
+        await updateCurrentReview(pr.id, pr.headSha, { status: "queued", updatedAt: new Date() });
         await enqueueAfter("process-review", { pullRequestId: pr.id }, 30);
         return;
       }
@@ -1157,7 +1153,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
           "> 🐙 **Octopus Review** — Repository indexing or analysis is in progress.\n>\n> This review will retry automatically once repository preparation completes.",
         );
       }
-      await deferReviewForRepository(pullRequestId);
+      await deferReviewForRepository(pullRequestId, pr.headSha);
       return;
     }
     if (reviewCommentId) {
@@ -1170,10 +1166,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
     }
 
     // Step 1: Mark as reviewing (idempotent — the guard may have set it already)
-    await prisma.pullRequest.update({
-      where: { id: pr.id },
-      data: { status: "reviewing" },
-    });
+    await updateCurrentReview(pr.id, pr.headSha, { status: "reviewing" });
     await emitReviewStatus(org.id, {
       ...baseEvent,
       status: "reviewing",
@@ -1230,10 +1223,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
           checkRunId: checkRunId ?? null,
           reason: err.meta.reason,
         });
-        await prisma.pullRequest.update({
-          where: { id: pr.id },
-          data: { status: "queued", updatedAt: new Date() },
-        });
+        await updateCurrentReview(pr.id, pr.headSha, { status: "queued", updatedAt: new Date() });
         return;
       }
       throw err;
@@ -1837,12 +1827,8 @@ export async function processReview(pullRequestId: string): Promise<void> {
       await providerUpdateComment(reviewCommentId, mainCommentBody);
       console.log(`[reviewer] Placeholder comment updated — commentId: ${reviewCommentId}`);
     } else {
-      const newCommentId = await providerCreateComment(pr.number, mainCommentBody);
+      const newCommentId = await createReviewAttemptComment(pr.id, pr.headSha, () => providerCreateComment(pr.number, mainCommentBody));
       reviewCommentId = newCommentId;
-      await prisma.pullRequest.update({
-        where: { id: pr.id },
-        data: { reviewCommentId: newCommentId },
-      });
       console.log(`[reviewer] New review comment created — commentId: ${newCommentId}`);
     }
 
@@ -2277,7 +2263,7 @@ Rules:
         try {
           const reviewId = await ghCreatePullRequestReview(
             installationId, owner, repoName, pr.number,
-            summaryLine, reviewEvent as "COMMENT" | "REQUEST_CHANGES", dedupedComments,
+            summaryLine, reviewEvent as "COMMENT" | "REQUEST_CHANGES", dedupedComments, undefined, coverage.headSha ?? undefined,
           );
           inlineReviewSucceeded = true;
           console.log(`[reviewer] PR review submitted with ${dedupedComments.length} inline comments, ${nonInlineWithUnmappable.length} in summary (${reviewEvent}), reviewId: ${reviewId}`);
@@ -2298,8 +2284,8 @@ Rules:
                 (c) => c.path === issue.filePath && c.line === issue.lineNumber,
               );
               if (match) {
-                await prisma.reviewIssue.update({
-                  where: { id: issue.id },
+                await prisma.reviewIssue.updateMany({
+                  where: { id: issue.id, pullRequest: { headSha: pr.headSha } },
                   data: { githubCommentId: BigInt(match.id) },
                 });
               }
@@ -2324,7 +2310,7 @@ Rules:
         try {
           await ghCreatePullRequestReview(
             installationId, owner, repoName, pr.number,
-            summaryBody, reviewEvent as "COMMENT" | "REQUEST_CHANGES", [],
+            summaryBody, reviewEvent as "COMMENT" | "REQUEST_CHANGES", [], undefined, coverage.headSha ?? undefined,
           );
           console.log(`[reviewer] PR review submitted without inline comments, ${allSummaryFindings.length} in summary (${reviewEvent})`);
         } catch (err) {
@@ -2438,24 +2424,15 @@ Rules:
       inheritedCount = inherited;
     }
 
-    // Atomic replace: clear + insert together (re-review idempotency without
-    // a window where triage-bearing rows are deleted but replacements unwritten).
-    await prisma.$transaction([
-      prisma.reviewIssue.deleteMany({ where: { pullRequestId: pr.id } }),
-      ...(mergedIssues.length > 0
-        ? [prisma.reviewIssue.createMany({ data: mergedIssues })]
-        : []),
-    ]);
-    if (mergedIssues.length > 0) {
+    // Keep an immutable final result before exposing completion. Retries update
+    // the current PR view, but cannot erase this attempt's coverage and body.
+    const promoted = await saveReviewAttempt(attemptId, pr.id, coverage, effectiveReviewBody, mergedIssues);
+    if (promoted && mergedIssues.length > 0) {
       console.log(
         `[reviewer] Saved ${mergedIssues.length} review issues to DB` +
           (inheritedCount > 0 ? ` (${inheritedCount} inherited prior triage state)` : ""),
       );
     }
-
-    // Keep an immutable final result before exposing completion. Retries update
-    // the current PR view, but cannot erase this attempt's coverage and body.
-    await saveReviewAttempt(attemptId, pr.id, coverage, effectiveReviewBody);
 
     // Merge-gating result, computed once and applied to whichever provider
     // supports a status check (GitHub check-run, GitLab commit status).
@@ -2480,6 +2457,8 @@ Rules:
         .catch((err) => console.error("[reviewer] Failed to set GitLab commit status:", err));
       console.log(`[reviewer] GitLab commit status set — state: ${state} (threshold: ${threshold})`);
     }
+
+    if (!promoted) return;
 
     // Step 7: Store review in vector DB for timeline/search
     try {
@@ -2551,8 +2530,7 @@ Rules:
               diagramType: mermaidBlocks[i].type,
               description: descriptions[i],
               reviewDate,
-            },
-          });
+            });
         }
         console.log(`[reviewer] ${mermaidBlocks.length} diagram(s) stored in vector DB — prId: ${pr.id}`);
       }
@@ -2560,11 +2538,11 @@ Rules:
       console.error("[reviewer] Failed to store diagrams in vector DB:", err);
     }
 
-    await emitReviewStatus(org.id, {
+    if (!await emitReviewStatus(org.id, {
       ...baseEvent,
       status: "completed",
       step: "completed",
-    });
+    })) return;
 
     eventBus.emit({
       type: "review-completed",
@@ -2626,15 +2604,12 @@ Rules:
       }).catch((e) => console.error("[reviewer] Pubby index-status failed trigger failed:", e));
     }
 
-    await prisma.pullRequest
-      .update({
-        where: { id: pr.id },
-        data: {
-          status: "failed",
-          errorMessage,
-        },
-      })
+    const failedUpdate = await updateCurrentReview(pr.id, pr.headSha, {
+      status: "failed",
+      errorMessage,
+    })
       .catch((e) => console.error("[reviewer] Failed to update PR status:", e));
+    if (!failedUpdate?.count) return;
 
     await emitReviewStatus(org.id, {
       ...baseEvent,

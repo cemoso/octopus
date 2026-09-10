@@ -60,7 +60,7 @@ export function extractChangedPaths(diff: string): string[] {
 }
 
 export function classifyDiff(diff: string, coverage?: ReviewCoverage): DiffClass {
-  const paths = [...new Set(coverage ? coverage.files.map(file => file.path) : extractChangedPaths(diff))];
+  const paths = [...new Set(coverage ? coverage.files.filter(file => file.state !== "excluded").map(file => file.path) : extractChangedPaths(diff))];
   const files = paths.length;
 
   // Changed lines of code = added/removed content lines, excluding the +++/---

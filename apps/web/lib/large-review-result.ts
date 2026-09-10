@@ -1,12 +1,11 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { saveReviewAttempt } from "@/lib/review-attempt";
+import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
 import {
   createPullRequestComment as ghCreatePullRequestComment,
-  updatePullRequestComment as ghUpdatePullRequestComment,
   createPullRequestReview as ghCreatePullRequestReview,
   updateCheckRun as ghUpdateCheckRun,
 } from "@/lib/github";
@@ -97,7 +96,6 @@ export async function handleLargeReviewResult(
     return;
   }
 
-  const reviewCommentId = pr.reviewCommentId ? Number(pr.reviewCommentId) : null;
 
   if (data.error) {
     await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
@@ -109,32 +107,12 @@ export async function handleLargeReviewResult(
       "> Please try again by commenting `@octopus-review` on this PR.",
     ].join("\n");
 
-    if (reviewCommentId) {
-      await ghUpdatePullRequestComment(
-        installationId,
-        owner,
-        repoName,
-        reviewCommentId,
-        errorBody,
-      ).catch((e) =>
-        console.error("[large-review-result] Failed to update placeholder:", e),
-      );
-    } else {
-      await ghCreatePullRequestComment(
-        installationId,
-        owner,
-        repoName,
-        pr.number,
-        errorBody,
-      ).catch((e) =>
-        console.error("[large-review-result] Failed to create error comment:", e),
-      );
-    }
+    await createReviewAttemptComment(pr.id, coverage.headSha, () => ghCreatePullRequestComment(
+      installationId, owner, repoName, pr.number, applyReviewCoverage(errorBody, coverage, attemptId),
+    ));
 
-    await prisma.pullRequest.updateMany({
-      where: { id: pr.id, headSha: coverage.headSha },
-      data: { status: "failed", errorMessage: data.error },
-    });
+    const failedUpdate = await updateCurrentReview(pr.id, coverage.headSha, { status: "failed", errorMessage: data.error });
+    if (!failedUpdate.count) return;
 
     eventBus.emit({
       type: "review-failed",
@@ -175,51 +153,10 @@ export async function handleLargeReviewResult(
     `[large-review-result] PR #${pr.number}: ${reviewBody.length} chars, ${parsedFindings.length} parsed → ${findings.length} after confidence filter${truncatedCount ? ` (capped ${truncatedCount})` : ""}`,
   );
 
-  // 2. Update placeholder comment with main body (findings JSON stripped — they go inline/summary)
   const mainCommentBody = stripDetailedFindings(reviewBody);
-  let mainCommentId = reviewCommentId;
-  if (mainCommentId) {
-    try {
-      await ghUpdatePullRequestComment(
-        installationId,
-        owner,
-        repoName,
-        mainCommentId,
-        mainCommentBody,
-      );
-    } catch (err) {
-      // Comment may have been deleted — recreate
-      if (err instanceof Error && err.message.includes("404")) {
-        const newId = await ghCreatePullRequestComment(
-          installationId,
-          owner,
-          repoName,
-          pr.number,
-          mainCommentBody,
-        );
-        mainCommentId = newId;
-        await prisma.pullRequest.update({
-          where: { id: pr.id },
-          data: { reviewCommentId: newId },
-        });
-      } else {
-        throw err;
-      }
-    }
-  } else {
-    const newId = await ghCreatePullRequestComment(
-      installationId,
-      owner,
-      repoName,
-      pr.number,
-      mainCommentBody,
-    );
-    mainCommentId = newId;
-    await prisma.pullRequest.update({
-      where: { id: pr.id },
-      data: { reviewCommentId: newId },
-    });
-  }
+  const mainCommentId = await createReviewAttemptComment(pr.id, coverage.headSha, () => ghCreatePullRequestComment(
+    installationId, owner, repoName, pr.number, mainCommentBody,
+  ));
 
   // 3. Post a summary review (no inline comments — internal-cli path doesn't compute
   // diff line maps. All findings end up in the summary table.)
@@ -256,6 +193,8 @@ export async function handleLargeReviewResult(
       summaryBody,
       reviewEvent,
       [],
+      undefined,
+      coverage.headSha ?? undefined,
     );
     console.log(
       `[large-review-result] PR review submitted (${reviewEvent}, ${findings.length} findings in summary)`,
@@ -296,19 +235,16 @@ export async function handleLargeReviewResult(
     current,
     inherit: inheritReviewIssueTriage,
   });
-  await prisma.$transaction([
-    prisma.reviewIssue.deleteMany({ where: { pullRequestId: pr.id } }),
-    ...(merged.length > 0 ? [prisma.reviewIssue.createMany({ data: merged })] : []),
-  ]);
+
+  // 5. Mark PR completed
+  const promoted = await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody, merged);
+  if (!promoted) return;
   if (merged.length > 0) {
     console.log(
       `[large-review-result] Saved ${merged.length} review issues to DB` +
         (inherited > 0 ? ` (${inherited} inherited prior triage state)` : ""),
     );
   }
-
-  // 5. Mark PR completed
-  await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
 
   // 7. Pubby + event bus
   await pubby

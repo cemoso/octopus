@@ -66,10 +66,11 @@ export async function ensureRepositoryAnalysis(
   }
 }
 
-export async function deferReviewForRepository(pullRequestId: string): Promise<void> {
+export async function deferReviewForRepository(pullRequestId: string, headSha?: string | null): Promise<void> {
   // "queued" is reserved for an active large-review job and cannot be claimed
   // again until its stale timeout. A prerequisite retry must be claimable now.
-  await prisma.pullRequest.update({ where: { id: pullRequestId }, data: { status: "pending" } });
+  const changed = await prisma.pullRequest.updateMany({ where: { id: pullRequestId, ...(headSha !== undefined ? { headSha } : {}) }, data: { status: "pending" } });
+  if (!changed.count) return;
   const jobId = await enqueueAfter("process-review", { pullRequestId }, 30);
   if (!jobId) throw new Error("Could not enqueue review after repository preparation");
 }
