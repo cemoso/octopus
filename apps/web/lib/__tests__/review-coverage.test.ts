@@ -7,6 +7,8 @@ import { createCoveredReviewRequest } from "@/lib/review-request";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { readReviewJson } from "@/lib/review-fetch";
 
+const completedAssessment = { state: "completed" as const, reason: "Completed fixture", model: "test", policySha256: "a".repeat(64), templateSha256: "b".repeat(64), requests: [{ provider: "openai" as const, model: "test", inputPreserved: true, sha256: "c".repeat(64) }], responseSha256: "d".repeat(64), completion: { state: "completed" as const, reason: "stop" } };
+
 const head = "1".repeat(40), base = "2".repeat(40);
 const patch = (text = "export const validate = () => true;") => `@@ -0,0 +1 @@\n+${text}\n`;
 const input = (files: ReviewInput["files"]): ReviewInput => ({ provider: "github", headSha: head, baseSha: base, inventoryComplete: true, expectedFiles: files.length, files, limitations: [] });
@@ -114,6 +116,7 @@ describe("review input coverage", () => {
 
   it("keeps ordinary complete reviews and severity gating compatible", () => {
     const plan = prepareReviewInput(input([{ path: "a.ts", change: "added", patch: patch(), additions: 1, deletions: 0 }]), { maxChars: 1000 });
+    plan.coverage.assessment = completedAssessment;
     expect(reviewCheckResult(plan.coverage, false, 0).conclusion).toBe("success");
     expect(reviewCheckResult(plan.coverage, true, 1).conclusion).toBe("failure");
     const report = "### Score\n| Overall | 4/5 |\n";
@@ -131,6 +134,7 @@ it("reconciles archived and published scores without changing findings JSON", ()
   const payload = '<!-- OCTOPUS_FINDINGS_START -->\n[{"description":"example 3/5"}]\n<!-- OCTOPUS_FINDINGS_END -->';
   const body = "### Score\n| Overall | 3/5 |\n\n" + payload;
   const plan = prepareReviewInput(input([{ path: "a.ts", change: "added", patch: patch() }]), { maxChars: 1000 });
+  plan.coverage.assessment = completedAssessment;
   const report = applyReviewCoverage(body, plan.coverage, "attempt");
   const flags = { hasCritical: false, hasHigh: false, hasMedium: false };
   const archived = reconcileScoreTable(report, flags);

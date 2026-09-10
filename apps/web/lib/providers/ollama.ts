@@ -1,4 +1,5 @@
 import "server-only";
+import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import { prisma } from "@octopus/db";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
@@ -106,16 +107,17 @@ export const ollamaProvider: Provider = {
     // Octopus namespaces local models as "ollama:<model>"; strip the prefix.
     const model = params.model.startsWith("ollama:") ? params.model.slice(7) : params.model;
 
-    const response = await client.chat.completions.create({
+    const response = await client.chat.completions.create(observeAiRequest(params, "ollama", {
       model,
       max_completion_tokens: params.maxTokens,
       messages,
-    });
+    }));
 
     const text = response.choices[0]?.message?.content ?? "";
 
     return {
       text,
+      completion: completionEvidence(response.choices[0]?.finish_reason, ["stop"]),
       provider: "ollama",
       model: params.model,
       usage: {

@@ -1,4 +1,5 @@
 import "server-only";
+import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { AiCreateParams, AiResponse, AiProvider } from "./index";
 
@@ -40,7 +41,7 @@ export async function callOpenAiGateway(
     ? params.model.slice(opts.modelPrefix.length)
     : params.model;
 
-  const response = await client.chat.completions.create({
+  const response = await client.chat.completions.create(observeAiRequest(params, opts.name, {
     model,
     max_completion_tokens: params.maxTokens,
     messages,
@@ -56,7 +57,7 @@ export async function callOpenAiGateway(
           },
         }
       : {}),
-  });
+  }));
 
   const text = response.choices[0]?.message?.content ?? "";
   // Surface an empty completion as an error instead of returning a blank review
@@ -69,6 +70,7 @@ export async function callOpenAiGateway(
 
   return {
     text,
+    completion: completionEvidence(response.choices[0]?.finish_reason, ["stop"]),
     provider: opts.name,
     model: params.model,
     usage: {

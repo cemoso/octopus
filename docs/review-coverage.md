@@ -10,6 +10,12 @@ Source, configuration and package/build scripts have priority over test fixtures
 
 Existing `.octopusignore` exclusions are recorded as repository policy. Curated default generated-file exclusions remain explicit. A repository's additional generated labels cannot silently hide source, tests, schemas or configuration; those remain accounted for. Excluded files are not claimed as reviewed.
 
+## Assessment completion and request provenance
+
+Supplied files alone do not establish a completed assessment. The final provider adapters report completion state and capture SHA-256 receipts over their actual SDK request payloads, after model-prefix, caching, thinking and text transformations. Each receipt records whether all requested message contents survived the transformation. The attempt retains these receipts, the selected model, policy/template digests, response-text digest and completion outcome; it does not publish raw prompts, credentials or private source.
+
+A passing assessment requires a completed provider response, preserved request input and a valid report with its canonical score table and findings JSON. Empty, malformed, token-limited, interrupted, unknown-completion or unobserved responses stay incomplete and cannot publish a numeric Overall or successful native check. Useful findings remain available. Legacy/local bridges without underlying completion evidence stay unknown. Explicitly excluded-only input records a no-model disposition; it does not claim an assessment of the excluded content. Identical immutable retries remain idempotent; changing request, policy or outcome evidence conflicts with the original attempt.
+
 ## Results and history
 
 Coverage states are `supplied`, `partial`, `omitted`, `excluded`, and `unavailable`. The manifest also records expected/known file counts, pagination completeness, provider, head/base SHAs and limitations. `supplied` means all known changed text hunks were included in model input; it is not a guarantee that the model found every defect.

@@ -1,4 +1,5 @@
 import "server-only";
+import { observeAiRequest, completionEvidence } from "./request-evidence";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
 import { splitSystemForCache, type CacheTtl } from "./system-cache";
@@ -60,7 +61,7 @@ export const anthropicProvider: Provider = {
     // models can take minutes before the first byte, and the SDK enforces
     // streaming for large max_tokens to avoid HTTP timeouts.
     const stream = client.messages.stream(
-      {
+      observeAiRequest(params, "anthropic", {
         model: params.model,
         max_tokens: maxTokens,
         ...(thinkingParam ? { thinking: thinkingParam } : {}),
@@ -90,7 +91,7 @@ export const anthropicProvider: Provider = {
               },
             }
           : {}),
-      },
+      }),
       { signal: AbortSignal.timeout(ANTHROPIC_CALL_TIMEOUT_MS) },
     );
 
@@ -144,6 +145,7 @@ export const anthropicProvider: Provider = {
 
     return {
       text,
+      completion: completionEvidence(response.stop_reason, useTool ? ["tool_use"] : ["end_turn"]),
       provider: "anthropic",
       model: params.model,
       usage: {

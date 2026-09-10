@@ -54,9 +54,10 @@ import { getGithubAppConfig } from "@/lib/github-app-config";
 import { parseOctopusIgnore, detectBadCommits } from "@/lib/octopus-ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
 import { MAX_DIFF_CHARS } from "@/lib/diff-truncate";
-import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, type ReviewInput } from "@/lib/review-coverage";
+import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, type ReviewInput, type ReviewCoverage } from "@/lib/review-coverage";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
+import { executeCoveredReview, recordNoModelAssessment } from "@/lib/review-assessment";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
@@ -686,6 +687,8 @@ export async function processReview(pullRequestId: string): Promise<void> {
   const repo = pr.repository;
   const org = repo.organization;
   const attemptId = crypto.randomUUID();
+  let attemptCoverage: ReviewCoverage | undefined;
+  let attemptSaved = false;
 
   // 3-tier config: system defaults -> org defaults -> repo overrides
   let systemConfig: ReviewConfig = {};
@@ -1266,6 +1269,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       ignored: octopusIg,
     });
     const { diff, coverage, inventoryDiff } = preparedInput;
+    attemptCoverage = coverage;
     coverage.reviewRequestVersion = pr.reviewRequestVersion;
     if (checkRunId !== null) coverage.nativeCheckId = String(checkRunId);
     const commentContext = prepareReviewComment(pr.triggerCommentBody ?? "");
@@ -1292,8 +1296,10 @@ export async function processReview(pullRequestId: string): Promise<void> {
     // Preserve missing/ignored inventory rather than interpreting an empty
     // selected diff as an empty PR or spending tokens on unrelated RAG context.
     if (!diff.trim()) {
+      recordNoModelAssessment(coverage);
       const body = applyReviewCoverage("No changed text hunks were supplied for review.", coverage, attemptId);
       await saveReviewAttempt(attemptId, pr.id, coverage, body, []);
+      attemptSaved = true;
       if (reviewCommentId) await providerUpdateComment(reviewCommentId, body);
       else await providerCreateComment(pr.number, body);
       const result = reviewCheckResult(coverage, false, 0);
@@ -1743,11 +1749,11 @@ export async function processReview(pullRequestId: string): Promise<void> {
       REVIEW_LANGUAGE_NAME: reviewLanguage.promptName,
     });
 
-    const response = await createAiMessage(createCoveredReviewRequest({
+    const response = await executeCoveredReview(createCoveredReviewRequest({
       model: reviewModel, system: systemPrompt, number: pr.number, title: pr.title,
       author: pr.author, diff, coverage, comment: pr.triggerCommentBody ?? "",
       repoConfig: repoConfigUserBlock,
-    }), org.id);
+    }), coverage, getSystemPrompt(), request => createAiMessage(request, org.id));
 
     // Fix malformed mermaid block closings:
     // 1. Content on same line before closing ```: "unchanged```" → "unchanged\n```"
@@ -1819,7 +1825,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       step: "posting-comment",
     });
 
-    // 5a: Update placeholder (or create new) with review body (findings stripped — they go inline)
+    // Prepare the main report; publish it after storing the final immutable outcome.
     let mainCommentBody = stripDetailedFindings(reviewBody);
 
     // Re-review with zero new findings: surface this as an explicit positive
@@ -1829,15 +1835,6 @@ export async function processReview(pullRequestId: string): Promise<void> {
       mainCommentBody =
         `> ✅ No new issues detected since the last review${commitSuffix}.\n\n` +
         mainCommentBody;
-    }
-
-    if (reviewCommentId) {
-      await providerUpdateComment(reviewCommentId, mainCommentBody);
-      console.log(`[reviewer] Placeholder comment updated — commentId: ${reviewCommentId}`);
-    } else {
-      const newCommentId = await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, mainCommentBody));
-      reviewCommentId = newCommentId;
-      console.log(`[reviewer] New review comment created — commentId: ${newCommentId}`);
     }
 
     // 5b: Parse findings and submit inline review comments
@@ -2117,7 +2114,6 @@ Rules:
               /### Findings Summary[\s\S]*?(?=\n### |\n## |$)/,
               "### Findings Summary\n\nAll previously raised findings have been addressed. No critical issues found.\n",
             );
-            await providerUpdateComment(reviewCommentId, mainCommentBody);
             console.log(`[reviewer] Updated main comment for re-review (${allParsedFindings.length} findings remain)`);
           } catch (err) {
             console.warn("[reviewer] Failed to update main comment for re-review:", err);
@@ -2186,18 +2182,7 @@ Rules:
     // above actively manufactures. When no blocking (critical/high/medium) finding
     // survived, floor the sub-gate categories. See review-helpers.reconcileScoreTable.
     if (coverage.complete) effectiveReviewBody = reconcileScoreTable(effectiveReviewBody, { hasCritical, hasHigh, hasMedium });
-    if (reviewCommentId) {
-      const reconciledBody = coverage.complete ? reconcileScoreTable(mainCommentBody, { hasCritical, hasHigh, hasMedium }) : mainCommentBody;
-      if (reconciledBody !== mainCommentBody) {
-        mainCommentBody = reconciledBody;
-        try {
-          await providerUpdateComment(reviewCommentId, mainCommentBody);
-          console.log("[reviewer] Score table reconciled: no blocking findings — floored sub-gate categories");
-        } catch (err) {
-          console.warn("[reviewer] Failed to update comment after score reconciliation:", err);
-        }
-      }
-    }
+    if (coverage.complete) mainCommentBody = reconcileScoreTable(mainCommentBody, { hasCritical, hasHigh, hasMedium });
 
     const threshold = org.checkFailureThreshold || "critical";
     const shouldRequestChanges = shouldFailReviewCheck(
@@ -2435,6 +2420,18 @@ Rules:
     // Keep an immutable final result before exposing completion. Retries update
     // the current PR view, but cannot erase this attempt's coverage and body.
     const promoted = await saveReviewAttempt(attemptId, pr.id, coverage, effectiveReviewBody, mergedIssues);
+    attemptSaved = true;
+
+    // The final scored comment becomes visible only after its immutable outcome is durable.
+    if (reviewCommentId) {
+      await providerUpdateComment(reviewCommentId, mainCommentBody);
+      console.log(`[reviewer] Placeholder comment updated — commentId: ${reviewCommentId}`);
+    } else {
+      const newCommentId = await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, mainCommentBody));
+      reviewCommentId = newCommentId;
+      console.log(`[reviewer] New review comment created — commentId: ${newCommentId}`);
+    }
+
     if (promoted && mergedIssues.length > 0) {
       console.log(
         `[reviewer] Saved ${mergedIssues.length} review issues to DB` +
@@ -2569,11 +2566,19 @@ Rules:
       err instanceof Error ? err.message : "Unknown error";
     console.error(`[reviewer] Review failed for PR #${pr.number}:`, err);
 
+    // Preserve failed adapter attempts without replacing a previously saved outcome.
+    if (attemptCoverage && !attemptSaved) attemptCoverage.complete = false;
+    const failureBody = attemptCoverage?.assessment && !attemptSaved
+      ? applyReviewCoverage("## 🐙 Octopus Review\n\nAssessment failed or was interrupted. No complete assessment is available.", attemptCoverage, attemptId) : null;
+    if (failureBody && attemptCoverage) {
+      await saveReviewAttempt(attemptId, pr.id, attemptCoverage, failureBody).catch(e => console.error("[reviewer] Failed to archive interrupted assessment:", e));
+    }
+
     // Update placeholder comment with error if possible
     if (reviewCommentId) {
       await providerUpdateComment(
         reviewCommentId,
-        `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
+        failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
       ).catch((e) => console.error("[reviewer] Failed to update placeholder with error:", e));
     }
 

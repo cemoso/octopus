@@ -1,4 +1,5 @@
 import "server-only";
+import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
 
@@ -41,7 +42,7 @@ export const openrouterProvider: Provider = {
     if (params.system) messages.push({ role: "system", content: params.system });
     for (const m of params.messages) messages.push({ role: m.role, content: m.content });
 
-    const response = await client.chat.completions.create({
+    const response = await client.chat.completions.create(observeAiRequest(params, "openrouter", {
       model: params.model,
       max_completion_tokens: params.maxTokens,
       messages,
@@ -57,12 +58,13 @@ export const openrouterProvider: Provider = {
             },
           }
         : {}),
-    });
+    }));
 
     const text = response.choices[0]?.message?.content ?? "";
 
     return {
       text,
+      completion: completionEvidence(response.choices[0]?.finish_reason, ["stop"]),
       provider: "openrouter",
       model: params.model,
       usage: {

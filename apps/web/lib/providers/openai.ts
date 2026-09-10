@@ -1,4 +1,5 @@
 import "server-only";
+import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
 
@@ -22,7 +23,7 @@ async function callOpenAIResponses(
   client: OpenAI,
   params: AiCreateParams,
 ): Promise<AiResponse> {
-  const response = await client.responses.create({
+  const response = await client.responses.create(observeAiRequest(params, "openai", {
     model: params.model,
     instructions: params.system,
     input: params.messages.map((m) => ({ role: m.role, content: m.content })),
@@ -39,7 +40,7 @@ async function callOpenAIResponses(
           },
         }
       : {}),
-  });
+  }));
 
   const text = response.output_text ?? "";
   // Surface non-text or truncated responses as errors instead of silently
@@ -54,6 +55,7 @@ async function callOpenAIResponses(
 
   return {
     text,
+    completion: completionEvidence(response.status, ["completed"]),
     provider: "openai",
     model: params.model,
     usage: {
@@ -83,7 +85,7 @@ export const openaiProvider: Provider = {
       messages.push({ role: m.role, content: m.content });
     }
 
-    const response = await client.chat.completions.create({
+    const response = await client.chat.completions.create(observeAiRequest(params, "openai", {
       model: params.model,
       max_completion_tokens: params.maxTokens,
       messages,
@@ -99,12 +101,13 @@ export const openaiProvider: Provider = {
             },
           }
         : {}),
-    });
+    }));
 
     const text = response.choices[0]?.message?.content ?? "";
 
     return {
       text,
+      completion: completionEvidence(response.choices[0]?.finish_reason, ["stop"]),
       provider: "openai",
       model: params.model,
       usage: {
