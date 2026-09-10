@@ -35,6 +35,7 @@ import { getPubbyClient } from "@/lib/pubby-client";
 type PullRequestItem = {
   id: string;
   headSha?: string | null;
+  reviewRequestVersion?: number;
   number: number;
   title: string;
   url: string;

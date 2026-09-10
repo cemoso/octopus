@@ -403,6 +403,7 @@ model PullRequest {
   triggerCommentId   BigInt?
   triggerCommentBody String?
   headSha            String?
+  reviewRequestVersion Int     @default(0)
   reviewCommentId    BigInt?
   reviewBody         String?
   reviewCoverage     Json?

@@ -1,4 +1,5 @@
 import "server-only";
+import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { randomUUID } from "node:crypto";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, hasReviewAttempt } from "@/lib/review-attempt";
 import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
@@ -28,6 +29,7 @@ import { eventBus } from "@/lib/events";
 export type LargeReviewResultJob = {
   pullRequestId: string;
   attemptId?: string;
+  reviewRequestVersion?: number;
   headSha?: string | null;
   baseSha?: string | null;
   checkRunId?: number | null;
@@ -80,6 +82,7 @@ export async function handleLargeReviewResult(
   const attemptId = correlated ? data.attemptId! : randomUUID();
   const coverage = unknownReviewCoverage(repo.provider, "Large-review worker did not supply verified changed-file coverage.");
   if (correlated) {
+    if (isReviewRequestVersion(data.reviewRequestVersion)) coverage.reviewRequestVersion = data.reviewRequestVersion;
     coverage.headSha = data.headSha!;
     coverage.baseSha = data.baseSha!;
     if (Number.isSafeInteger(data.checkRunId) && data.checkRunId! > 0) coverage.nativeCheckId = String(data.checkRunId);
@@ -93,7 +96,7 @@ export async function handleLargeReviewResult(
     });
   }
   if (redelivery && (!data.error || pr.reviewBody !== reviewBody || (pr.status === "failed" && pr.errorMessage === data.error))) return;
-  if (!correlated || coverage.headSha !== pr.headSha) {
+  if (!correlated || !isReviewRequestVersion(coverage.reviewRequestVersion) || coverage.reviewRequestVersion !== pr.reviewRequestVersion || coverage.headSha !== pr.headSha) {
     await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
     return;
   }
@@ -109,11 +112,11 @@ export async function handleLargeReviewResult(
       "> Please try again by commenting `@octopus-review` on this PR.",
     ].join("\n");
 
-    await createReviewAttemptComment(pr.id, coverage.headSha, () => ghCreatePullRequestComment(
+    await createReviewAttemptComment(pr.id, coverage.headSha, coverage.reviewRequestVersion, () => ghCreatePullRequestComment(
       installationId, owner, repoName, pr.number, applyReviewCoverage(errorBody, coverage, attemptId),
     ), reviewBody);
 
-    const failedUpdate = await updateCurrentReview(pr.id, coverage.headSha, { status: "failed", errorMessage: data.error }, reviewBody);
+    const failedUpdate = await updateCurrentReview(pr.id, coverage.headSha, coverage.reviewRequestVersion, { status: "failed", errorMessage: data.error }, reviewBody);
     if (!failedUpdate.count) return;
 
     eventBus.emit({
@@ -156,7 +159,7 @@ export async function handleLargeReviewResult(
   );
 
   const mainCommentBody = stripDetailedFindings(reviewBody);
-  const mainCommentId = await createReviewAttemptComment(pr.id, coverage.headSha, () => ghCreatePullRequestComment(
+  const mainCommentId = await createReviewAttemptComment(pr.id, coverage.headSha, coverage.reviewRequestVersion, () => ghCreatePullRequestComment(
     installationId, owner, repoName, pr.number, mainCommentBody,
   ));
 
@@ -254,6 +257,7 @@ export async function handleLargeReviewResult(
       repoId: repo.id,
       pullRequestId: pr.id,
       headSha: coverage.headSha,
+      reviewRequestVersion: coverage.reviewRequestVersion,
       number: pr.number,
       status: "completed",
       step: "completed",

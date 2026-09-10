@@ -159,6 +159,7 @@ export default async function DashboardPage({
                   author: true,
                   status: true,
                   headSha: true,
+                  reviewRequestVersion: true,
                   createdAt: true,
                 },
                 orderBy: { createdAt: "desc" },

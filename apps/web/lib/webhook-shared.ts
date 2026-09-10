@@ -152,6 +152,7 @@ export async function startReviewFlow(params: {
       author: prAuthor,
       headSha: headSha || null,
       status: "pending",
+      reviewRequestVersion: 1,
       triggerCommentId,
       triggerCommentBody,
       repositoryId: repoId,
@@ -162,6 +163,7 @@ export async function startReviewFlow(params: {
       author: prAuthor,
       headSha: headSha || null,
       status: "pending",
+      reviewRequestVersion: { increment: 1 },
       triggerCommentId,
       triggerCommentBody,
       reviewBody: null,
@@ -173,7 +175,7 @@ export async function startReviewFlow(params: {
 
   const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${headSha || "unknown"}\`. A separate review attempt will report the result.`;
   try {
-    await createReviewAttemptComment(pr.id, headSha || null, async () => {
+    await createReviewAttemptComment(pr.id, headSha || null, pr.reviewRequestVersion, async () => {
       if (provider === "github" && installationId) {
         return github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
       }
@@ -202,6 +204,7 @@ export async function startReviewFlow(params: {
         author: pr.author,
         status: pr.status,
         headSha: pr.headSha,
+        reviewRequestVersion: pr.reviewRequestVersion,
         createdAt: pr.createdAt.toISOString(),
       },
     })

@@ -1,21 +1,23 @@
 import "server-only";
+import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { isDeepStrictEqual } from "node:util";
 import { prisma, type Prisma } from "@octopus/db";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 
-export async function updateCurrentReview(pullRequestId: string, headSha: string | null, data: Prisma.PullRequestUpdateManyMutationInput, expectedReviewBody?: string) {
-  if (!headSha) return { count: 0 };
-  return prisma.pullRequest.updateMany({ where: { id: pullRequestId, headSha, ...(expectedReviewBody !== undefined ? { reviewBody: expectedReviewBody } : {}) }, data });
+export async function updateCurrentReview(pullRequestId: string, headSha: string | null, reviewRequestVersion: number | undefined, data: Prisma.PullRequestUpdateManyMutationInput, expectedReviewBody?: string) {
+  if (!headSha || !isReviewRequestVersion(reviewRequestVersion)) return { count: 0 };
+  return prisma.pullRequest.updateMany({ where: { id: pullRequestId, headSha, reviewRequestVersion, ...(expectedReviewBody !== undefined ? { reviewBody: expectedReviewBody } : {}) }, data });
 }
 
 export async function createReviewAttemptComment(
   pullRequestId: string,
   headSha: string | null,
+  reviewRequestVersion: number | undefined,
   create: () => Promise<number>,
   expectedReviewBody?: string,
 ): Promise<number> {
   const id = await create();
-  await updateCurrentReview(pullRequestId, headSha, { reviewCommentId: id }, expectedReviewBody);
+  await updateCurrentReview(pullRequestId, headSha, reviewRequestVersion, { reviewCommentId: id }, expectedReviewBody);
   return id;
 }
 
@@ -47,8 +49,8 @@ export async function saveReviewAttempt(
       if (!await hasReviewAttempt(attemptId, pullRequestId, coverage, reviewBody, tx)) throw new Error("Review attempt identity conflict");
       return false;
     }
-    if (!coverage.headSha) return false;
-    const promoted = await tx.pullRequest.updateMany({ where: { id: pullRequestId, headSha: coverage.headSha }, data: {
+    if (!coverage.headSha || !isReviewRequestVersion(coverage.reviewRequestVersion)) return false;
+    const promoted = await tx.pullRequest.updateMany({ where: { id: pullRequestId, headSha: coverage.headSha, reviewRequestVersion: coverage.reviewRequestVersion }, data: {
       status: "completed", reviewBody, reviewCoverage: coverageJson, errorMessage: null,
     } });
     if (!promoted.count) return false;

@@ -49,6 +49,7 @@ export type ReviewCoverage = {
   files: FileCoverage[];
   limitations: string[];
   nativeCheckId?: string;
+  reviewRequestVersion?: number;
   comment?: { receivedChars: number; suppliedChars: number; truncated: boolean; verifiedAsChangedSource: false };
 };
 

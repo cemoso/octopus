@@ -1,3 +1,5 @@
+import "server-only";
+import { pubby } from "@/lib/pubby";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@octopus/db";
 import { enqueue } from "@/lib/queue";
@@ -31,6 +33,7 @@ export async function POST(
       status: true,
       updatedAt: true,
       repositoryId: true,
+      repository: { select: { organizationId: true } },
     },
   });
 
@@ -51,14 +54,20 @@ export async function POST(
     }
   }
 
-  await prisma.pullRequest.update({
+  const requested = await prisma.pullRequest.update({
     where: { id: pr.id },
     data: {
       status: "pending",
+      reviewRequestVersion: { increment: 1 },
       errorMessage: null,
       reviewBody: null,
     },
   });
+
+  await pubby.trigger(`presence-org-${pr.repository.organizationId}`, "review-requested", {
+    repoId: pr.repositoryId,
+    pullRequest: { id: requested.id, number: requested.number, title: requested.title, url: requested.url, author: requested.author, status: requested.status, headSha: requested.headSha, reviewRequestVersion: requested.reviewRequestVersion, createdAt: requested.createdAt.toISOString() },
+  }).catch(error => console.error("[review-retry] Status publication failed:", error));
 
   await enqueue("process-review", { pullRequestId: pr.id });
 
