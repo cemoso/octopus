@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
+import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, hasReviewAttempt } from "@/lib/review-attempt";
 import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
@@ -85,6 +85,8 @@ export async function handleLargeReviewResult(
     if (Number.isSafeInteger(data.checkRunId) && data.checkRunId! > 0) coverage.nativeCheckId = String(data.checkRunId);
   }
   const reviewBody = applyReviewCoverage(data.error ? `Large review failed: ${data.error}` : data.reviewBody, coverage, attemptId);
+  const redelivery = await hasReviewAttempt(attemptId, pr.id, coverage, reviewBody);
+  if (redelivery && (!data.error || pr.reviewBody !== reviewBody || (pr.status === "failed" && pr.errorMessage === data.error))) return;
   if (coverage.nativeCheckId) {
     const result = reviewCheckResult(coverage, false, 0);
     await ghUpdateCheckRun(installationId, owner, repoName, Number(coverage.nativeCheckId), result.conclusion, {
@@ -109,9 +111,9 @@ export async function handleLargeReviewResult(
 
     await createReviewAttemptComment(pr.id, coverage.headSha, () => ghCreatePullRequestComment(
       installationId, owner, repoName, pr.number, applyReviewCoverage(errorBody, coverage, attemptId),
-    ));
+    ), reviewBody);
 
-    const failedUpdate = await updateCurrentReview(pr.id, coverage.headSha, { status: "failed", errorMessage: data.error });
+    const failedUpdate = await updateCurrentReview(pr.id, coverage.headSha, { status: "failed", errorMessage: data.error }, reviewBody);
     if (!failedUpdate.count) return;
 
     eventBus.emit({

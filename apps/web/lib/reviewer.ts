@@ -1285,7 +1285,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
     // selected diff as an empty PR or spending tokens on unrelated RAG context.
     if (!diff.trim()) {
       const body = applyReviewCoverage("No changed text hunks were supplied for review.", coverage, attemptId);
-      await saveReviewAttempt(attemptId, pr.id, coverage, body);
+      await saveReviewAttempt(attemptId, pr.id, coverage, body, []);
       if (reviewCommentId) await providerUpdateComment(reviewCommentId, body);
       else await providerCreateComment(pr.number, body);
       const result = reviewCheckResult(coverage, false, 0);

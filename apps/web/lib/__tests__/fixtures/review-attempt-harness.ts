@@ -13,11 +13,18 @@ mock.module("server-only", () => ({}));
 const db = {
   organization: { findUnique: async () => ({ reviewsPaused: false, blockedAuthors: [] }) },
   reviewAttempt: {
-    create: async ({ data }: { data: Row }) => {
-      if (rows.has(data.id)) throw new Error("duplicate attempt");
-      rows.set(data.id, structuredClone(data));
-      return data;
+    createMany: async ({ data, skipDuplicates }: { data: Row[]; skipDuplicates: boolean }) => {
+      let count = 0;
+      for (const row of data) {
+        if (rows.has(row.id)) {
+          if (!skipDuplicates) throw new Error("duplicate attempt");
+          continue;
+        }
+        rows.set(row.id, structuredClone(row)); count++;
+      }
+      return { count };
     },
+    findUnique: async ({ where }: { where: { id: string } }) => rows.get(where.id) ?? null,
     findFirst: async ({ where }: { where: { id: string; pullRequest?: { repository?: { organization?: { id?: string; members?: { some?: { userId?: string; deletedAt?: unknown } }; bannedAt?: unknown; deletedAt?: unknown }; isActive?: boolean } } } }) => {
       queries++;
       const org = where.pullRequest?.repository?.organization;
@@ -30,9 +37,10 @@ const db = {
   },
   pullRequest: {
     upsert: async () => ({ id: "pr", headSha: currentHead, number: 1, status: "pending", reviewCommentId: current.reviewCommentId }),
-    findUnique: async () => ({ id: "pr", headSha: currentHead, number: 1, repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
-    updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string } }) => {
+    findUnique: async () => ({ ...current, id: "pr", headSha: currentHead, number: 1, repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
+    updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string; reviewBody?: string } }) => {
       if (where.headSha && where.headSha !== currentHead) return { count: 0 };
+      if (where.reviewBody !== undefined && current.reviewBody !== where.reviewBody) return { count: 0 };
       current = { ...current, ...structuredClone(data) };
       return { count: 1 };
     },
@@ -65,7 +73,7 @@ mock.module("@/lib/api-auth", () => ({ authenticateApiToken: async (request: Req
 } }));
 
 const { saveReviewAttempt, updateCurrentReview, createReviewAttemptComment } = await import("../../review-attempt");
-const { unknownReviewCoverage } = await import("../../review-coverage");
+const { unknownReviewCoverage, prepareReviewInput } = await import("../../review-coverage");
 const { GET } = await import("../../../app/api/review-attempts/[id]/route");
 const first = "11111111-1111-4111-8111-111111111111", second = "22222222-2222-4222-8222-222222222222";
 const coverage = { ...unknownReviewCoverage("github", "fixture"), headSha: currentHead };
@@ -74,7 +82,7 @@ await saveReviewAttempt(second, "pr", coverage, "Second immutable report");
 assert.equal(rows.size, 2);
 assert.equal(rows.get(first)?.reviewBody, "First immutable report");
 assert.equal(current.reviewBody, "Second immutable report");
-await assert.rejects(saveReviewAttempt(first, "pr", coverage, "overwrite"), /duplicate/);
+await assert.rejects(saveReviewAttempt(first, "pr", coverage, "overwrite"), /identity conflict/);
 assert.equal(rows.get(first)?.reviewBody, "First immutable report");
 const request = (headers: Record<string, string>) => GET(new Request("https://example.test/api/review-attempts/" + first, { headers }), { params: Promise.resolve({ id: first }) });
 assert.equal((await request({})).status, 401);
@@ -105,10 +113,11 @@ console.log("PASS stale-head isolation, immutable attempts, token/session tenant
 const checks: unknown[][] = [];
 const published: unknown[][] = [];
 let allowPublication = false;
+let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
   updateCheckRun: async (...args: unknown[]) => { checks.push(args); },
-  createPullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); published.push(args); return 900; },
+  createPullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
   updatePullRequestComment: unexpectedPublication,
   createPullRequestReview: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
 }));
@@ -174,3 +183,85 @@ assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123
 assert.equal(published.length, 3);
 assert.equal(current.reviewCommentId, 900);
 console.log("PASS review triggers create new comments without editing previous attempts");
+
+const emptyId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+const { buildGeneratedMatcher } = await import("../../generated-files");
+const emptyInput = prepareReviewInput({ provider: "github", headSha: currentHead, baseSha: origin.baseSha, inventoryComplete: true, expectedFiles: 1, limitations: [], files: [{ path: "bun.lock", change: "modified", patch: "@@ -1 +1 @@\n-old\n+new\n" }] }, { maxChars: 1000, generated: buildGeneratedMatcher() });
+assert.equal(emptyInput.diff, "");
+assert.equal(emptyInput.coverage.complete, true);
+const emptyCoverage = emptyInput.coverage;
+assert.equal(await saveReviewAttempt(emptyId, "pr", emptyCoverage, "No supplied hunks", []), true);
+assert.deepEqual(issues, []);
+await saveReviewAttempt("dddddddd-dddd-4ddd-8ddd-dddddddddddd", "pr", emptyCoverage, "New current findings", [issue("latest finding")]);
+assert.equal(await saveReviewAttempt("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", "pr", coverage, "Old empty report", []), false);
+assert.deepEqual(issues, [issue("latest finding")]);
+assert.equal(current.reviewBody, "New current findings");
+
+const reorderJson = (value: unknown): unknown => Array.isArray(value) ? value.map(reorderJson)
+  : value !== null && typeof value === "object" ? Object.fromEntries(Object.entries(value).reverse().map(([key, entry]) => [key, reorderJson(entry)])) : value;
+const archivedEmpty = rows.get(emptyId)!;
+archivedEmpty.coverage = reorderJson(archivedEmpty.coverage);
+const archiveBefore = structuredClone(archivedEmpty);
+assert.equal(await saveReviewAttempt(emptyId, "pr", emptyCoverage, "No supplied hunks", []), false);
+assert.deepEqual(rows.get(emptyId), archiveBefore);
+assert.deepEqual(issues, [issue("latest finding")]);
+assert.equal(current.reviewBody, "New current findings");
+for (const [prId, candidateCoverage, candidateBody] of [
+  ["other-pr", emptyCoverage, "No supplied hunks"],
+  ["pr", { ...emptyCoverage, headSha: "f".repeat(40) }, "No supplied hunks"],
+  ["pr", { ...emptyCoverage, baseSha: "f".repeat(40) }, "No supplied hunks"],
+  ["pr", { ...emptyCoverage, complete: false }, "No supplied hunks"],
+  ["pr", emptyCoverage, "Different body"],
+] as const) {
+  await assert.rejects(saveReviewAttempt(emptyId, prId, candidateCoverage, candidateBody), /identity conflict/);
+  assert.deepEqual(rows.get(emptyId), archiveBefore);
+}
+
+const failedJob = { pullRequestId: "pr", ...origin, headSha: currentHead, attemptId: "ffffffff-ffff-4fff-8fff-ffffffffffff", reviewBody: "", error: "model failure" };
+allowPublication = false;
+await assert.rejects(handleLargeReviewResult(failedJob), /Delayed result published/);
+const failureArchive = structuredClone(rows.get(failedJob.attemptId));
+assert.ok(failureArchive);
+assert.equal(current.status, "completed");
+allowPublication = true;
+await handleLargeReviewResult(failedJob);
+assert.equal(current.status, "failed");
+assert.equal(current.errorMessage, "model failure");
+assert.deepEqual(rows.get(failedJob.attemptId), failureArchive);
+const publicationCount = published.length;
+await handleLargeReviewResult(failedJob);
+assert.equal(published.length, publicationCount);
+
+const supersededJob = { ...failedJob, attemptId: "12345678-1234-4234-8234-123456789abc" };
+allowPublication = false;
+await assert.rejects(handleLargeReviewResult(supersededJob), /Delayed result published/);
+const supersededArchive = structuredClone(rows.get(supersededJob.attemptId));
+await saveReviewAttempt("23456789-2345-4345-8345-23456789abcd", "pr", emptyCoverage, "New result on same head", [issue("newer result")]);
+await createReviewAttemptComment("pr", currentHead, async () => 345);
+const newerState = structuredClone(current);
+allowPublication = true;
+await handleLargeReviewResult(supersededJob);
+assert.deepEqual(current, newerState);
+assert.deepEqual(issues, [issue("newer result")]);
+assert.deepEqual(rows.get(supersededJob.attemptId), supersededArchive);
+const beforeConflict = checks.length;
+await assert.rejects(handleLargeReviewResult({ ...supersededJob, error: "different error" }), /identity conflict/);
+assert.equal(checks.length, beforeConflict);
+assert.deepEqual(current, newerState);
+console.log("PASS empty finalization, semantic immutable replay, conflicting identity rejection and error recovery");
+
+const racingJob = { ...failedJob, attemptId: "3456789a-3456-4456-8456-3456789abcde" };
+allowPublication = false;
+await assert.rejects(handleLargeReviewResult(racingJob), /Delayed result published/);
+allowPublication = true;
+duringPublication = async () => {
+  await saveReviewAttempt("456789ab-4567-4567-8567-456789abcdef", "pr", emptyCoverage, "Won during publication", [issue("race winner")]);
+  await updateCurrentReview("pr", currentHead, { reviewCommentId: 456 });
+};
+await handleLargeReviewResult(racingJob);
+assert.equal(current.status, "completed");
+assert.equal(current.reviewBody, "Won during publication");
+assert.equal(current.reviewCommentId, 456);
+assert.deepEqual(issues, [issue("race winner")]);
+duringPublication = undefined;
+console.log("PASS resumed error publication cannot change a replacement report on the same head");
