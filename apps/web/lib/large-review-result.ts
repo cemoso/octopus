@@ -28,6 +28,10 @@ import { eventBus } from "@/lib/events";
 
 export type LargeReviewResultJob = {
   pullRequestId: string;
+  attemptId?: string;
+  headSha?: string | null;
+  baseSha?: string | null;
+  checkRunId?: number | null;
   reviewBody: string;
   durationMs?: number;
   error?: string;
@@ -71,9 +75,32 @@ export async function handleLargeReviewResult(
     return;
   }
 
+  const correlated = typeof data.attemptId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.attemptId)
+    && typeof data.headSha === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(data.headSha)
+    && typeof data.baseSha === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(data.baseSha);
+  const attemptId = correlated ? data.attemptId! : randomUUID();
+  const coverage = unknownReviewCoverage(repo.provider, "Large-review worker did not supply verified changed-file coverage.");
+  if (correlated) {
+    coverage.headSha = data.headSha!;
+    coverage.baseSha = data.baseSha!;
+    if (Number.isSafeInteger(data.checkRunId) && data.checkRunId! > 0) coverage.nativeCheckId = String(data.checkRunId);
+  }
+  const reviewBody = applyReviewCoverage(data.error ? `Large review failed: ${data.error}` : data.reviewBody, coverage, attemptId);
+  if (coverage.nativeCheckId) {
+    const result = reviewCheckResult(coverage, false, 0);
+    await ghUpdateCheckRun(installationId, owner, repoName, Number(coverage.nativeCheckId), result.conclusion, {
+      title: result.title, summary: result.summary,
+    }).catch(error => console.error("[large-review-result] Check run update failed:", error));
+  }
+  if (!correlated || coverage.headSha !== pr.headSha) {
+    await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
+    return;
+  }
+
   const reviewCommentId = pr.reviewCommentId ? Number(pr.reviewCommentId) : null;
 
   if (data.error) {
+    await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
     const errorBody = [
       "> 🐙 **Octopus Review** encountered an error while analyzing this large pull request.",
       ">",
@@ -104,8 +131,8 @@ export async function handleLargeReviewResult(
       );
     }
 
-    await prisma.pullRequest.update({
-      where: { id: pr.id },
+    await prisma.pullRequest.updateMany({
+      where: { id: pr.id, headSha: coverage.headSha },
       data: { status: "failed", errorMessage: data.error },
     });
 
@@ -118,12 +145,6 @@ export async function handleLargeReviewResult(
     });
     return;
   }
-
-  const attemptId = randomUUID();
-  // Legacy internal CLI results carry prose only, not proof of supplied files or
-  // immutable revisions. Never infer complete coverage from the model's score.
-  const coverage = unknownReviewCoverage(repo.provider, "Large-review worker did not supply verified changed-file coverage.");
-  const reviewBody = applyReviewCoverage(data.reviewBody, coverage, attemptId);
 
   // 1. Parse findings out of the markdown, then apply the SAME per-category
   // confidence filter + severity cap as the standard path (#652) so the largest,
@@ -288,38 +309,6 @@ export async function handleLargeReviewResult(
 
   // 5. Mark PR completed
   await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
-
-  // 6. Update check run if PR has headSha (best effort — we don't track checkRunId
-  // across the queue boundary, so we recreate-or-skip via a fresh check run.)
-  if (pr.headSha) {
-    try {
-      const checkResult = reviewCheckResult(coverage, shouldRequestChanges, findingsCount);
-      const conclusion = checkResult.conclusion;
-      const summaryText = checkResult.summary;
-
-      const { createCheckRun: ghCreateCheckRun } = await import("@/lib/github");
-      const checkRunId = await ghCreateCheckRun(
-        installationId,
-        owner,
-        repoName,
-        pr.headSha,
-        "Octopus Review (Large PR)",
-      );
-      await ghUpdateCheckRun(
-        installationId,
-        owner,
-        repoName,
-        checkRunId,
-        conclusion,
-        {
-          title: checkResult.title,
-          summary: summaryText,
-        },
-      );
-    } catch (err) {
-      console.error("[large-review-result] Check run update failed:", err);
-    }
-  }
 
   // 7. Pubby + event bus
   await pubby

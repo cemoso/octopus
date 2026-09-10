@@ -1,6 +1,7 @@
+import { reconcileScoreTable, stripDetailedFindings } from "@/lib/review-helpers";
 import { describe, expect, it } from "bun:test";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
-import { prepareReviewInput, inspectReviewPatch, applyReviewCoverage, coverageCounts, unknownReviewCoverage, reviewCheckResult, type ReviewInput } from "@/lib/review-coverage";
+import { sha256, prepareReviewInput, inspectReviewPatch, applyReviewCoverage, coverageCounts, unknownReviewCoverage, reviewCheckResult, type ReviewInput } from "@/lib/review-coverage";
 import { fetchGitHubReviewInput } from "@/lib/github-review-input";
 import { createCoveredReviewRequest } from "@/lib/review-request";
 import { prepareReviewComment } from "@/lib/review-comment-context";
@@ -45,9 +46,11 @@ describe("review input coverage", () => {
     const full = prepareReviewInput(data, { maxChars: 1000 });
     const exact = prepareReviewInput(data, { maxChars: full.diff.length });
     expect(exact.coverage.complete).toBe(true);
+    expect(exact.coverage.files[0].hunks.map(h => h.sha256)).toEqual([sha256(first), sha256(second)]);
+    expect(exact.coverage.files[0].suppliedSha256).toBe(sha256(exact.diff));
     const partial = prepareReviewInput(data, { maxChars: full.diff.length - 1 });
     expect(partial.coverage.files[0].state).toBe("partial");
-    expect(partial.coverage.files[0].hunks).toEqual([{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1 }]);
+    expect(partial.coverage.files[0].hunks).toEqual([{ oldStart: 0, oldLines: 0, newStart: 1, newLines: 1, sha256: sha256(first) }]);
     expect(partial.diff).not.toContain("+two");
     expect(partial.diff.length).toBeLessThan(full.diff.length - 1);
   });
@@ -112,4 +115,33 @@ describe("review input coverage", () => {
     await expect(readReviewJson(new Response(JSON.stringify({ text: "x".repeat(30) })), 20)).rejects.toThrow("fetch budget");
     expect(await readReviewJson(new Response('{"path":"é"}'), 100)).toEqual({ path: "é" });
   });
+});
+
+
+it("reconciles archived and published scores without changing findings JSON", () => {
+  const payload = '<!-- OCTOPUS_FINDINGS_START -->\n[{"description":"example 3/5"}]\n<!-- OCTOPUS_FINDINGS_END -->';
+  const body = "### Score\n| Overall | 3/5 |\n\n" + payload;
+  const plan = prepareReviewInput(input([{ path: "a.ts", change: "added", patch: patch() }]), { maxChars: 1000 });
+  const report = applyReviewCoverage(body, plan.coverage, "attempt");
+  const flags = { hasCritical: false, hasHigh: false, hasMedium: false };
+  const archived = reconcileScoreTable(report, flags);
+  const published = reconcileScoreTable(stripDetailedFindings(report), flags);
+  expect(archived).toContain("| Overall | 4/5 |");
+  expect(archived).toContain(payload);
+  expect(stripDetailedFindings(archived)).toBe(published);
+  expect(reconcileScoreTable(report, { ...flags, hasHigh: true })).toBe(report);
+  const incomplete = applyReviewCoverage(body, unknownReviewCoverage("github", "legacy"), "unknown");
+  expect(stripDetailedFindings(incomplete)).not.toContain("3/5");
+  expect(incomplete).toContain(payload);
+});
+
+it("passes the pinned revision to a failed large-diff handoff", async () => {
+  const error = new Error("large diff");
+  let identity: unknown;
+  await expect(fetchGitHubReviewInput({ expectedHead: head, maxPatchChars: 1000,
+    readJson: async () => ({ head: { sha: head }, base: { sha: base } }),
+    fetchDiff: async () => { throw error; },
+    onDiffError: (caught, revision) => { expect(caught).toBe(error); identity = revision; },
+  })).rejects.toThrow("large diff");
+  expect(identity).toEqual({ headSha: head, baseSha: base });
 });

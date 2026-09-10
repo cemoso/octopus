@@ -9,6 +9,7 @@ export async function fetchGitHubReviewInput(options: {
   readJson: (suffix: string) => Promise<unknown>;
   fetchDiff: () => Promise<string>;
   expectedHead: string | null;
+  onDiffError?: (error: unknown, revision: { headSha: string; baseSha: string }) => void;
   maxPatchChars: number;
 }): Promise<{ input: ReviewInput; rawDiff: string }> {
   const before = await options.readJson("") as PullMetadata;
@@ -17,7 +18,10 @@ export async function fetchGitHubReviewInput(options: {
   }
   // Preserve the existing large-PR delegation boundary. That path must also
   // report unknown coverage until it has an independently verified inventory.
-  const rawDiff = await options.fetchDiff();
+  const rawDiff = await options.fetchDiff().catch(error => {
+    options.onDiffError?.(error, { headSha: before.head!.sha!, baseSha: before.base!.sha! });
+    throw error;
+  });
   const files: ReviewFileInput[] = [];
   let sourceChars = 0, supportingChars = 0;
   let inventoryComplete = false;

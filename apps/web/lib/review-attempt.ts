@@ -10,8 +10,8 @@ export async function saveReviewAttempt(attemptId: string, pullRequestId: string
       id: attemptId, pullRequestId, headSha: coverage.headSha,
       baseSha: coverage.baseSha, coverage: coverageJson, reviewBody,
     } }),
-    prisma.pullRequest.updateMany({ where: { id: pullRequestId, ...(coverage.headSha ? { headSha: coverage.headSha } : {}) }, data: {
+    ...(coverage.headSha ? [prisma.pullRequest.updateMany({ where: { id: pullRequestId, headSha: coverage.headSha }, data: {
       status: "completed", reviewBody, reviewCoverage: coverageJson, errorMessage: null,
-    } }),
+    } })] : []),
   ]);
 }

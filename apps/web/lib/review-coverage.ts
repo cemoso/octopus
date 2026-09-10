@@ -35,7 +35,7 @@ export type FileCoverage = {
   patchSha256: string | null;
   suppliedSha256: string | null;
   suppliedChars: number;
-  hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number }[];
+  hunks: { oldStart: number; oldLines: number; newStart: number; newLines: number; sha256: string }[];
 };
 
 export type ReviewCoverage = {
@@ -82,7 +82,7 @@ export function isProtectedReviewSource(path: string): boolean {
     || /(^|\/)(package\.json|manifest\.json|Dockerfile)$|(^|\/)schemas?\//i.test(path);
 }
 
-type Hunk = FileCoverage["hunks"][number] & { text: string };
+type Hunk = Omit<FileCoverage["hunks"][number], "sha256"> & { text: string };
 
 /** Validate the provider's hunk counts; a present patch is not necessarily complete. */
 export function inspectReviewPatch(patch: string): { hunks: Hunk[]; complete: boolean; additions: number; deletions: number } {
@@ -164,7 +164,7 @@ export function prepareReviewInput(input: ReviewInput, options: { maxChars: numb
     const text = candidate.header + candidate.hunks.map(h => h.text).join("");
     if (text.length > remaining) continue;
     parts.push(text); remaining -= text.length;
-    Object.assign(candidate.record, { state: candidate.complete ? "supplied" : "partial", reason: candidate.complete ? undefined : "Provider patch incomplete", suppliedSha256: sha256(text), suppliedChars: text.length, hunks: candidate.hunks.map(({ text: _text, ...range }) => range) });
+    Object.assign(candidate.record, { state: candidate.complete ? "supplied" : "partial", reason: candidate.complete ? undefined : "Provider patch incomplete", suppliedSha256: sha256(text), suppliedChars: text.length, hunks: candidate.hunks.map(({ text, ...range }) => ({ ...range, sha256: sha256(text) })) });
   }
   for (const candidate of ordered.filter(c => c.record.state === "omitted")) {
     let text = candidate.header;
@@ -175,7 +175,7 @@ export function prepareReviewInput(input: ReviewInput, options: { maxChars: numb
     }
     if (!included.length) continue;
     parts.push(text); remaining -= text.length;
-    Object.assign(candidate.record, { state: "partial", reason: "Review input budget exhausted", suppliedSha256: sha256(text), suppliedChars: text.length, hunks: included.map(({ text: _text, ...range }) => range) });
+    Object.assign(candidate.record, { state: "partial", reason: "Review input budget exhausted", suppliedSha256: sha256(text), suppliedChars: text.length, hunks: included.map(({ text, ...range }) => ({ ...range, sha256: sha256(text) })) });
   }
   coverage.complete = coverage.inventoryComplete && coverage.files.every(f => f.state === "supplied" || f.state === "excluded");
   return { diff: parts.join(""), coverage, inventoryDiff: [...input.files].sort((a, b) => reviewFilePriority(a.path) - reviewFilePriority(b.path)).map(f => header(f) ?? "").join("") };
@@ -208,8 +208,8 @@ export function renderReviewCoverage(coverage: ReviewCoverage, attemptId: string
 }
 
 export function applyReviewCoverage(body: string, coverage: ReviewCoverage, attemptId: string): string {
-  const assessed = coverage.complete ? body : body
+  const assessed = coverage.complete ? body : body.split(/(<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->)/g).map((part, index) => index % 2 ? part : part
     .replace(/^#{1,6} Score\s*\n[\s\S]*?(?=\n#{1,6} |$)/im, "### Score\n\nNot assessed — incomplete review coverage.\n")
-    .replace(/^.*\bOverall\b.*[1-5]\/5.*$/gim, "Overall: not assessed — incomplete review coverage.");
+    .replace(/^.*\bOverall\b.*[1-5]\/5.*$/gim, "Overall: not assessed — incomplete review coverage.")).join("");
   return renderReviewCoverage(coverage, attemptId) + "\n" + assessed;
 }

@@ -421,6 +421,8 @@ export class LargePrError extends Error {
       repo: string;
       prNumber: number;
       reason: "too-many-files" | "diff-too-large";
+      headSha?: string;
+      baseSha?: string;
     },
   ) {
     super(message);
@@ -434,6 +436,9 @@ export async function getPullRequestReviewInput(
   const token = await getInstallationToken(installationId);
   return fetchGitHubReviewInput({
     expectedHead,
+    onDiffError: (error, revision) => {
+      if (error instanceof LargePrError) Object.assign(error.meta, revision);
+    },
     maxPatchChars: MAX_FETCH_DIFF_CHARS,
     fetchDiff: () => getPullRequestDiff(installationId, owner, repo, prNumber, token),
     readJson: async (suffix) => {

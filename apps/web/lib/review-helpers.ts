@@ -118,7 +118,7 @@ export function countFindingsFromTable(reviewBody: string): number {
  */
 export function normalizeScoreDenominators(reviewBody: string): string {
   return reviewBody.replace(
-    /### Score\s*\n[\s\S]*?(?=\n### |\n## |$)/,
+    /### Score\s*\n[\s\S]*?(?=\n### |\n## |<!-- OCTOPUS_FINDINGS_START -->|$)/,
     (section) =>
       section.replace(
         /(\*{0,2})([1-5])\/(\d+)(\*{0,2})/g,
@@ -175,7 +175,7 @@ export function reconcileScoreTable(
   if (findings.hasCritical || findings.hasHigh || findings.hasMedium) return reviewBody;
   const floor = MIN_SCORE_WITHOUT_BLOCKING_FINDINGS;
   return reviewBody.replace(
-    /### Score\s*\n[\s\S]*?(?=\n### |\n## |$)/,
+    /### Score\s*\n[\s\S]*?(?=\n### |\n## |<!-- OCTOPUS_FINDINGS_START -->|$)/,
     (section) =>
       section.replace(
         /(\*{0,2})([1-5])\/5(\*{0,2})/g,

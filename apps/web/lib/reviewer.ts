@@ -1223,7 +1223,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
           prNumber: pr.number,
           prTitle: pr.title,
           prAuthor: pr.author,
-          headSha: pr.headSha ?? null,
+          attemptId,
+          headSha: err.meta.headSha ?? null,
+          baseSha: err.meta.baseSha ?? null,
           reviewCommentId: reviewCommentId ?? null,
           checkRunId: checkRunId ?? null,
           reason: err.meta.reason,
@@ -1277,7 +1279,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
     // pins still win; otherwise mechanical diffs (lockfiles, generated, docs,
     // tests, tiny edits) downshift to a cheaper model. Never emits an unpriced
     // model. Substantive diffs keep the default.
-    const reviewModel = await resolveReviewModel({ orgId: org.id, repoId: repo.id, diff: inventoryDiff + diff });
+    const reviewModel = await resolveReviewModel({ orgId: org.id, repoId: repo.id, diff, coverage });
     console.log(`[reviewer] Using model: ${reviewModel}`);
 
     // Merge PR diff files into the repo tree so new files added by the PR
@@ -2113,6 +2115,10 @@ Rules:
             // Patch mainCommentBody in place (not a copy) so the score
             // reconciliation below posts on top of the patched summary instead of
             // reverting it.
+            effectiveReviewBody = effectiveReviewBody.replace(
+              /### Findings Summary[\s\S]*?(?=\n### |\n## |<!-- OCTOPUS_FINDINGS_START -->|$)/,
+              "### Findings Summary\n\nAll previously raised findings have been addressed. No critical issues found.\n",
+            );
             mainCommentBody = mainCommentBody.replace(
               /### Findings Summary[\s\S]*?(?=\n### |\n## |$)/,
               "### Findings Summary\n\nAll previously raised findings have been addressed. No critical issues found.\n",
@@ -2185,6 +2191,7 @@ Rules:
     // an unactionable score that deadlocks a 4+/5 gate, and one the re-review filter
     // above actively manufactures. When no blocking (critical/high/medium) finding
     // survived, floor the sub-gate categories. See review-helpers.reconcileScoreTable.
+    if (coverage.complete) effectiveReviewBody = reconcileScoreTable(effectiveReviewBody, { hasCritical, hasHigh, hasMedium });
     if (reviewCommentId) {
       const reconciledBody = coverage.complete ? reconcileScoreTable(mainCommentBody, { hasCritical, hasHigh, hasMedium }) : mainCommentBody;
       if (reconciledBody !== mainCommentBody) {
