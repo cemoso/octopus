@@ -148,7 +148,7 @@ See [docker-compose.selfhost.yml](docker-compose.selfhost.yml) (pull) and
 1. **Webhook** — GitHub, GitLab, or Bitbucket sends a PR/MR event to Octopus
 2. **Index** — Octopus clones the repo, chunks the code, and creates vector embeddings in Qdrant
 3. **Analyze** — The codebase is analyzed using AI with relevant code chunks, pinned docs, and org knowledge
-4. **Review** — The diff is reviewed by the LLM, generating findings with severity levels and category-based thresholds
+4. **Review** — The LLM reviews the supplied changed hunks, generating findings with severity levels and category-based thresholds; see [review coverage and incomplete results](docs/review-coverage.md) for scope, checks, and attempt downloads
 5. **Comment** — Findings are posted as inline comments on the PR/MR, with one-click Linear or Jira issue creation
 
 ## Roadmap

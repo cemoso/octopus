@@ -356,3 +356,14 @@ await handleLargeReviewResult(lateSameHeadJob);
 assert.deepEqual(current, sameHeadRequested);
 assert.equal((rows.get(lateSameHeadJob.attemptId)?.coverage as { reviewRequestVersion: number }).reviewRequestVersion, versionB);
 console.log("PASS persisted same-head re-request rejects prior-version worker promotion");
+
+if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+  const download = await request({ authorization: "Bearer owner" });
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/attempt-contract.json`, JSON.stringify({
+    boundary: "Actual request, result and HTTP handlers; mocked database, authentication and provider services",
+    download: { status: download.status, headers: Object.fromEntries(download.headers), body: await download.json() },
+    deliveredEvents: statusEvents.slice(eventStart), dashboardAfterDelayedRequest: dashboard,
+    persistedCurrent: current, originatingCheckUpdates: checks.slice(-4),
+    immutableAttempts: [...rows.values()],
+  }, null, 2));
+}

@@ -1031,7 +1031,8 @@ export async function processReview(pullRequestId: string): Promise<void> {
             contributorCount: indexStats.contributorCount,
             contributors: JSON.parse(JSON.stringify(indexStats.contributors)),
             ...(indexStats.resolvedDefaultBranch ? { defaultBranch: indexStats.resolvedDefaultBranch } : {}),
-          });
+          },
+        });
 
         emitIndexLog(`Indexing complete: ${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors`, "success");
 
@@ -2537,7 +2538,8 @@ Rules:
               diagramType: mermaidBlocks[i].type,
               description: descriptions[i],
               reviewDate,
-            });
+            },
+          });
         }
         console.log(`[reviewer] ${mermaidBlocks.length} diagram(s) stored in vector DB — prId: ${pr.id}`);
       }

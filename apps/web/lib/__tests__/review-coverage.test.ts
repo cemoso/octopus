@@ -38,6 +38,15 @@ describe("review input coverage", () => {
     expect(body).toContain("Review incomplete");
     expect(body).toContain("202/203");
     expect(reviewCheckResult(plan.coverage, false, 0).conclusion).toBe("failure");
+    if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+      const directory = process.env.REVIEW_TEST_EVIDENCE_DIR;
+      await Bun.write(`${directory}/coverage-contract.json`, JSON.stringify({
+        providerRequests: calls, modelRequest: request, coverage: plan.coverage,
+        report: body, nativeCheck: reviewCheckResult(plan.coverage, false, 0),
+      }, null, 2));
+      await Bun.write(`${directory}/incomplete-report.html`, "<!doctype html><meta charset=\"utf-8\"><title>Generated incomplete review report</title>" +
+        Bun.markdown.html(body));
+    }
   });
 
   it("uses complete hunks only and reports per-file overflow", () => {
