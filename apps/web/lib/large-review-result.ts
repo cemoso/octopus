@@ -86,13 +86,13 @@ export async function handleLargeReviewResult(
   }
   const reviewBody = applyReviewCoverage(data.error ? `Large review failed: ${data.error}` : data.reviewBody, coverage, attemptId);
   const redelivery = await hasReviewAttempt(attemptId, pr.id, coverage, reviewBody);
-  if (redelivery && (!data.error || pr.reviewBody !== reviewBody || (pr.status === "failed" && pr.errorMessage === data.error))) return;
   if (coverage.nativeCheckId) {
     const result = reviewCheckResult(coverage, false, 0);
     await ghUpdateCheckRun(installationId, owner, repoName, Number(coverage.nativeCheckId), result.conclusion, {
       title: result.title, summary: result.summary,
-    }).catch(error => console.error("[large-review-result] Check run update failed:", error));
+    });
   }
+  if (redelivery && (!data.error || pr.reviewBody !== reviewBody || (pr.status === "failed" && pr.errorMessage === data.error))) return;
   if (!correlated || coverage.headSha !== pr.headSha) {
     await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody);
     return;
@@ -253,6 +253,7 @@ export async function handleLargeReviewResult(
     .trigger(`presence-org-${org.id}`, "review-status", {
       repoId: repo.id,
       pullRequestId: pr.id,
+      headSha: coverage.headSha,
       number: pr.number,
       status: "completed",
       step: "completed",

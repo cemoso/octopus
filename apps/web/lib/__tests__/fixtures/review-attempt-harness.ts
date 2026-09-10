@@ -36,7 +36,7 @@ const db = {
     },
   },
   pullRequest: {
-    upsert: async () => ({ id: "pr", headSha: currentHead, number: 1, status: "pending", reviewCommentId: current.reviewCommentId }),
+    upsert: async () => ({ id: "pr", headSha: currentHead, number: 1, status: "pending", reviewCommentId: current.reviewCommentId, createdAt: new Date("2026-09-11T00:00:00Z") }),
     findUnique: async () => ({ ...current, id: "pr", headSha: currentHead, number: 1, repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
     updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string; reviewBody?: string } }) => {
       if (where.headSha && where.headSha !== currentHead) return { count: 0 };
@@ -111,12 +111,13 @@ assert.equal(rows.get("55555555-5555-4555-8555-555555555555")?.reviewBody, "Unkn
 console.log("PASS stale-head isolation, immutable attempts, token/session tenant isolation, account hold and cache policy");
 
 const checks: unknown[][] = [];
+let failCheck = false;
 const published: unknown[][] = [];
 let allowPublication = false;
 let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
-  updateCheckRun: async (...args: unknown[]) => { checks.push(args); },
+  updateCheckRun: async (...args: unknown[]) => { checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
   createPullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
   updatePullRequestComment: unexpectedPublication,
   createPullRequestReview: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
@@ -176,10 +177,12 @@ duringConfig = undefined;
 mock.module("@/lib/bitbucket", () => ({}));
 mock.module("@/lib/gitlab", () => ({}));
 mock.module("@/lib/queue", () => ({ enqueue: async () => "queued" }));
-mock.module("@/lib/pubby", () => ({ pubby: { trigger: async () => {} } }));
+const statusEvents: { event: string; data: Record<string, unknown> }[] = [];
+mock.module("@/lib/pubby", () => ({ pubby: { trigger: async (_channel: string, event: string, data: Record<string, unknown>) => { statusEvents.push({ event, data }); } } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: () => {} } }));
 const { startReviewFlow } = await import("../../webhook-shared");
 assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", headSha: currentHead, triggerCommentId: 1, triggerCommentBody: "review" }), { started: true });
+assert.equal((statusEvents.at(-1)?.data.pullRequest as { headSha: string }).headSha, currentHead);
 assert.equal(published.length, 3);
 assert.equal(current.reviewCommentId, 900);
 console.log("PASS review triggers create new comments without editing previous attempts");
@@ -265,3 +268,31 @@ assert.equal(current.reviewCommentId, 456);
 assert.deepEqual(issues, [issue("race winner")]);
 duringPublication = undefined;
 console.log("PASS resumed error publication cannot change a replacement report on the same head");
+
+const retryJob = { pullRequestId: "pr", ...origin, attemptId: "56789abc-5678-4678-8678-56789abcdef0", reviewBody: "Retry result" };
+const beforeRetryState = structuredClone(current);
+const beforeRetryRows = rows.size;
+failCheck = true;
+await assert.rejects(handleLargeReviewResult(retryJob), /Transient check failure/);
+assert.equal(rows.size, beforeRetryRows);
+assert.deepEqual(current, beforeRetryState);
+failCheck = false;
+await handleLargeReviewResult(retryJob);
+assert.equal(rows.size, beforeRetryRows + 1);
+const archivedRetry = structuredClone(rows.get(retryJob.attemptId));
+assert.deepEqual(current, beforeRetryState);
+failCheck = true;
+await assert.rejects(handleLargeReviewResult(retryJob), /Transient check failure/);
+assert.deepEqual(rows.get(retryJob.attemptId), archivedRetry);
+failCheck = false;
+await handleLargeReviewResult(retryJob);
+assert.equal(rows.size, beforeRetryRows + 1);
+assert.deepEqual(rows.get(retryJob.attemptId), archivedRetry);
+assert.deepEqual(current, beforeRetryState);
+assert.deepEqual(checks.slice(-4).map(call => [call[3], call[4]]), Array.from({ length: 4 }, () => [origin.checkRunId, "failure"]));
+const currentJob = { ...retryJob, headSha: currentHead, attemptId: "6789abcd-6789-4789-8789-6789abcdef01" };
+await handleLargeReviewResult(currentJob);
+assert.equal(statusEvents.at(-1)?.event, "review-status");
+assert.equal(statusEvents.at(-1)?.data.headSha, currentHead);
+assert.equal(statusEvents.at(-1)?.data.status, "completed");
+console.log("PASS native-check retry before redelivery return, stable archives and revision-bearing status events");

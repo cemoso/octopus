@@ -201,6 +201,8 @@ export async function startReviewFlow(params: {
         url: pr.url,
         author: pr.author,
         status: pr.status,
+        headSha: pr.headSha,
+        createdAt: pr.createdAt.toISOString(),
       },
     })
     .catch((err) => console.error("[webhook] Pubby trigger failed:", err));
