@@ -5,6 +5,17 @@ import { getActiveProfileName } from "../lib/paths.js";
 import { getJson, postJson, normalizeBaseUrl, isTransportSafe } from "../lib/api.js";
 import { advanceAgentOnboarding, onboardingResult, onboardingExitCode, type Connection, type OnboardingContext } from "../lib/agent-onboarding.js";
 
+// Console output can be buffered in a compiled binary. Await the stream write
+// before returning an exit code so pipe readers receive the entire JSON result.
+function writeResult(result: ReturnType<typeof onboardingResult>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    process.stdout.write(`${JSON.stringify(result)}\n`, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 export function parseAgentOnboardingArgs(argv: string[]): { repo?: string; help?: boolean } {
   let repo: string | undefined;
   const seen = new Set<string>();
@@ -46,7 +57,7 @@ export async function onboardAgentCommand(argv: string[]): Promise<number> {
     }
     context.repository = parsed.repo ?? detectOnboardingRepository();
   } catch (error) {
-    console.log(JSON.stringify(onboardingResult(context, "invalid_input", error instanceof Error ? error.message : "Invalid input.")));
+    await writeResult(onboardingResult(context, "invalid_input", error instanceof Error ? error.message : "Invalid input."));
     return 2;
   }
   try {
@@ -65,10 +76,10 @@ export async function onboardAgentCommand(argv: string[]): Promise<number> {
       status: (id) => getJson(`${baseUrl}/api/cli/repos/${encodeURIComponent(id)}/status`, { headers: { authorization: `Bearer ${creds.token}` }, signal: AbortSignal.timeout(15_000) }),
       start: (id, operation) => postJson(`${baseUrl}/api/cli/repos/${encodeURIComponent(id)}/${operation}`, {}, creds.token, { timeoutMs: 15_000 }),
     });
-    console.log(JSON.stringify(result));
+    await writeResult(result);
     return onboardingExitCode(result);
   } catch {
-    console.log(JSON.stringify(onboardingResult(context, "failed", "Could not complete this setup step. Check server connectivity and local account configuration, then resume. No completion is assumed.")));
+    await writeResult(onboardingResult(context, "failed", "Could not complete this setup step. Check server connectivity and local account configuration, then resume. No completion is assumed."));
     return 1;
   }
 }
