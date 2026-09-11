@@ -44,10 +44,10 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
           where: { pullRequestId: target.pullRequestId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5,
           select: { id: true, headSha: true, createdAt: true },
         });
-        const history = attempts.length ? `\n\n<details>\n<summary>Review history (latest ${attempts.length})</summary>\n\n` + attempts.map(attempt => {
+        const history = attempts.length ? `\n\n### Review history (latest ${attempts.length})\n\n` + attempts.map(attempt => {
           const url = new URL(`/api/review-attempts/${attempt.id}`, process.env.NEXT_PUBLIC_APP_URL ?? "https://octopus-review.ai").href;
-          return `- [${attempt.headSha?.slice(0, 7) ?? "Unknown head"} · ${attempt.createdAt.toISOString()}](${url})`;
-        }).join("\n") + "\n\nReview records require Octopus organization access.\n\n</details>" : "";
+          return `- ${attempt.headSha?.slice(0, 7) ?? "Unknown head"} · ${attempt.createdAt.toISOString()} · ${url}`;
+        }).join("\n") + "\n\nReview records require Octopus organization access." : "";
         // Place history before the footer so consumers can still identify the head.
         const footer = /\n*Last reviewed commit: [0-9a-f]{40}\s*$/i.exec(target.body)?.[0] ?? "";
         const body = (footer ? target.body.slice(0, -footer.length) : target.body) + history + footer;
@@ -59,7 +59,7 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
           await tx.pullRequest.updateMany({ where: { id: target.pullRequestId }, data: { reviewCommentId: reserved } });
           return { reserved };
         }
-        const marker = id < 0 ? `<!-- octopus-summary:${target.pullRequestId}:${-id} -->` : undefined;
+        const marker = id < 0 ? `Octopus publication reference: ${target.pullRequestId}:${-id}` : undefined;
         if (id < 0 && id !== reservation) {
           id = await findPullRequestSummaryComment(target.owner, target.repo, target.prNumber, marker!, token, signal);
           if (id === null) return { pendingCreation: true };

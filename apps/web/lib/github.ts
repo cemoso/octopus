@@ -614,7 +614,7 @@ function compactCoverageReference(body: string): string {
   const preamble = body.slice(header[0].length, header[0].length + 2048);
   const reference = /^(?:Attempt: ([A-Za-z0-9_-]+) (https?:\/\/[^\s<>()`]+)\.\r?\n|Attempt: \[`([A-Za-z0-9_-]+)`\]\((https?:\/\/[^\s<>()`]+)\)\. )Head: `(?:[0-9a-f]{40}|unknown)`\. Base: `(?:[0-9a-f]{40}|unknown)`\.(?=\r?\n|$)/i.exec(preamble);
   if (!reference) {
-    const compact = /^(?:\*\*Overall: not assessed[^\n]+\n\n)?(\[Full coverage and review record\]\(https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+\) · Octopus sign-in required\.)/.exec(preamble);
+    const compact = /^(?:\*\*Overall: not assessed[^\n]+\n\n)?(?:\[Full coverage and review record\]\((https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+)\)|Full coverage and review record: (https?:\/\/[^\s<>()`]+\/api\/review-attempts\/[A-Za-z0-9_-]+)) · Octopus sign-in required\./.exec(preamble);
     return compact ? `**${header[1]}**\n\n${compact[0]}` : "";
   }
   const attemptId = reference[1] ?? reference[3];
@@ -646,7 +646,7 @@ export function truncateForGithubComment(body: string): string {
   if (heading && footer && score) {
     const prefix = /^Review attempt:[^\n]*\n\n/.exec(body)?.[0] ?? "";
     const attemptReference = compactCoverageReference(body);
-    const history = /<details>\n<summary>Review history \(latest [1-5]\)<\/summary>\n\n(?:- \[(?:[0-9a-f]{7}|Unknown head) · [^\]\n]{1,30}\]\(https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+\)\n?){1,5}\n\nReview records require Octopus organization access\.\n\n<\/details>/.exec(body)?.[0] ?? "";
+    const history = /^### Review history \(latest [1-5]\)\n\n(?:- (?:[0-9a-f]{7}|Unknown head) · [^\n]{1,30} · https?:\/\/[^\s<>()`]+\/api\/review-attempts\/[A-Za-z0-9_-]+\n?){1,5}\n\nReview records require Octopus organization access\./m.exec(body)?.[0] ?? "";
     const table = score[1].split("\n").filter(line => {
       const category = line.split("|")[1]?.trim().replaceAll("**", "");
       return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
@@ -701,7 +701,7 @@ export function compactReviewCoverageComment(body: string): string {
   const warning = /^\*\*Overall: not assessed[^\n]+/m.exec(coverage)?.[0];
   // Inventory rows and technical receipts stay in the archive, not the PR feed.
   return header[0] + (warning ? warning + "\n\n" : "")
-    + `[Full coverage and review record](${url}) · Octopus sign-in required.\n`
+    + `Full coverage and review record: ${url} · Octopus sign-in required.\n`
     + body.slice(end.index);
 }
 
@@ -723,7 +723,15 @@ export async function findPullRequestSummaryComment(
     });
     if (!res.ok) throw new Error(`Failed to reconcile PR summary: ${res.status}`);
     const comments = await res.json() as { id: number; body?: string; performed_via_github_app?: { id: number } | null }[];
-    const match = comments.find(comment => String(comment.performed_via_github_app?.id) === String(config.appId) && comment.body?.split("\n").includes(marker));
+    // Existing reservations may have been published by a pre-upgrade replica.
+    // Match only the same opaque reference and App; never adopt by display text.
+    const portable = /^Octopus publication reference: ([A-Za-z0-9_-]+):([1-9][0-9]*)$/.exec(marker);
+    const legacyMarker = portable ? `<!-- octopus-summary:${portable[1]}:${portable[2]} -->` : undefined;
+    const match = comments.find(comment => {
+      if (String(comment.performed_via_github_app?.id) !== String(config.appId)) return false;
+      const lines = comment.body?.split("\n") ?? [];
+      return lines.includes(marker) || (legacyMarker !== undefined && lines.includes(legacyMarker));
+    });
     if (match) return match.id;
     if (comments.length < 100) return null;
   }
