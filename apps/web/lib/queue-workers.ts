@@ -1,6 +1,7 @@
 import type { PgBoss } from "pg-boss";
 import { sendWelcomeEmail } from "./emails/welcome";
 import { processReview } from "./reviewer";
+import { createReviewExecutionWindow } from "./review-capacity";
 import {
   handleLargeReviewResult,
   type LargeReviewResultJob,
@@ -41,12 +42,12 @@ export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promis
 
   await boss.work<ProcessReviewJob>(
     "process-review",
-    { localConcurrency: config.reviewConcurrency },
+    { localConcurrency: config.reviewConcurrency, includeMetadata: true },
     async (jobs) => {
       for (const job of jobs) {
         console.log(`[queue] Processing review for PR ${job.data.pullRequestId}`);
         try {
-          await processReview(job.data.pullRequestId);
+          await processReview(job.data.pullRequestId, createReviewExecutionWindow(job));
         } catch (err) {
           console.error(`[queue] Review failed for PR ${job.data.pullRequestId} (job ${job.id}):`, err);
           throw err;

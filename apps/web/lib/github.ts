@@ -258,6 +258,7 @@ export interface PullRequestDetails {
   url: string;
   author: string;
   headSha: string;
+  baseSha: string | null;
   /** PR description body (may be empty). Untrusted user content. */
   body: string;
 }
@@ -267,11 +268,13 @@ export async function getPullRequestDetails(
   owner: string,
   repo: string,
   prNumber: number,
+  signal?: AbortSignal,
 ): Promise<PullRequestDetails> {
   const token = await getInstallationToken(installationId);
   const res = await fetchWithRetry(
     `${GITHUB_API}/repos/${owner}/${repo}/pulls/${prNumber}`,
     {
+      signal,
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
@@ -290,6 +293,7 @@ export async function getPullRequestDetails(
     url: data.html_url,
     author: data.user?.login ?? "unknown",
     headSha: data.head?.sha ?? "",
+    baseSha: data.base?.sha ?? null,
     body: data.body ?? "",
   };
 }

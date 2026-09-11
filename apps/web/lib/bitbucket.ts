@@ -135,6 +135,7 @@ export interface PullRequestDetails {
   url: string;
   author: string;
   headSha: string;
+  baseSha: string | null;
   /** PR description body (may be empty). Untrusted user content. */
   body: string;
 }
@@ -144,11 +145,12 @@ export async function getPullRequestDetails(
   workspace: string,
   repoSlug: string,
   prId: number,
+  signal?: AbortSignal,
 ): Promise<PullRequestDetails> {
   const token = await getAccessToken(organizationId);
   const res = await fetch(
     `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { Authorization: `Bearer ${token}` }, signal },
   );
 
   if (!res.ok) {
@@ -162,6 +164,7 @@ export async function getPullRequestDetails(
     url: data.links?.html?.href ?? "",
     author: data.author?.display_name ?? data.author?.nickname ?? "unknown",
     headSha: data.source?.commit?.hash ?? "",
+    baseSha: data.destination?.commit?.hash ?? null,
     body: data.summary?.raw ?? data.description ?? "",
   };
 }

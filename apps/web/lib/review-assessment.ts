@@ -3,6 +3,7 @@ import type { AiRequestReceipt } from "@/lib/providers/request-evidence";
 import { sha256, type ReviewCoverage } from "@/lib/review-coverage";
 import { parseRecoveryFindingsSet, recoveryFindingsBody } from "@/lib/review-evidence";
 import { parseFindingsFromJson, type InlineFinding } from "@/lib/review-dedup";
+import { CapacityAdmissionError, markCapacityNotDispatched, type CapacityAdmissionReceipt } from "./review-capacity";
 
 export type FindingsRecoveryEvidence = {
   state: "completed" | "incomplete" | "failed";
@@ -18,6 +19,7 @@ export type FindingsRecoveryEvidence = {
 };
 
 export type ReviewAssessment = {
+  capacityAdmission?: CapacityAdmissionReceipt;
   state: "completed" | "incomplete" | "not-required";
   reason: string;
   model: string | null;
@@ -213,9 +215,17 @@ export async function executeCoveredReview(
   coverage.assessment = assessment;
   let response: AiResponse;
   try {
-    response = await call({ ...request, onRequest: receipt => assessment.requests.push(receipt) });
+    response = await call({ ...request, onRequest: receipt => assessment.requests.push(receipt),
+      ...(request.completeReviewAdmission ? { completeReviewAdmission: { ...request.completeReviewAdmission,
+        onDecision: receipt => { assessment.capacityAdmission = receipt; request.completeReviewAdmission?.onDecision?.(receipt); },
+      } } : {}),
+    });
   } catch (error) {
-    assessment.reason = "Provider request failed or was interrupted";
+    if (error instanceof CapacityAdmissionError) {
+      assessment.capacityAdmission = structuredClone(error.receipt);
+      assessment.reason = error.message;
+      if (error.receipt.primaryDispatch === "not-started" && assessment.requests.length === 0) markCapacityNotDispatched(coverage);
+    } else assessment.reason = "Provider request failed or was interrupted";
     throw error;
   }
   assessment.responseSha256 = sha256(response.text);

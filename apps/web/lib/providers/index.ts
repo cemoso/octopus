@@ -48,6 +48,10 @@ export type ResponseJsonSchema = {
 
 export type AiCreateParams = {
   model: string;
+  /** Internal complete-input admission; never serialized into provider payloads. */
+  completeReviewAdmission?: import("../review-capacity").CompleteReviewAdmission;
+  /** Shares the queue lifetime with supplemental recovery after an admitted primary. */
+  executionWindow?: import("../review-capacity").ReviewExecutionWindow;
   /** Digest-only observation of the final adapter request; never sent to the model. */
   onRequest?: (receipt: import("./request-evidence").AiRequestReceipt) => void;
   maxTokens: number;

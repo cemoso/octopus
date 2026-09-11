@@ -204,6 +204,7 @@ export interface MergeRequestDetails {
   url: string;
   author: string;
   headSha: string;
+  baseSha: string | null;
   /** MR description body (may be empty). Untrusted user content. */
   body: string;
 }
@@ -212,12 +213,13 @@ export async function getPullRequestDetails(
   organizationId: string,
   projectPath: string,
   mrIid: number,
+  signal?: AbortSignal,
 ): Promise<MergeRequestDetails> {
   const token = await getAccessToken(organizationId);
   const host = await getHost(organizationId);
   const res = await fetch(
     `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/merge_requests/${mrIid}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { Authorization: `Bearer ${token}` }, signal },
   );
 
   if (!res.ok) {
@@ -231,6 +233,7 @@ export async function getPullRequestDetails(
     url: data.web_url ?? "",
     author: data.author?.name ?? data.author?.username ?? "unknown",
     headSha: data.sha ?? data.diff_refs?.head_sha ?? "",
+    baseSha: data.diff_refs?.base_sha ?? null,
     body: data.description ?? "",
   };
 }

@@ -76,7 +76,7 @@ mock.module("@/lib/reranker", () => ({ rerankDocuments: async () => [] }));
 mock.module("@/lib/knowledge-context", () => ({ getAlwaysIncludeKnowledge: async () => [], mergeKnowledgeChunks: () => [] }));
 mock.module("@/lib/review-routing", () => ({ resolveReviewModel: async () => "fixture-model" }));
 mock.module("@/lib/ai-usage", () => ({ logAiUsage: async () => {} }));
-mock.module("@/lib/ai-router", () => ({ createAiMessage: async () => ({
+mock.module("@/lib/ai-router", () => ({ getProviderForModel: async () => { throw new Error("Legacy fixture must not resolve adaptive capacity"); }, createAiMessage: async () => ({
   provider: "fixture", text: `Summary\n<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify([finding])}\n<!-- OCTOPUS_FINDINGS_END -->`,
   usage: { inputTokens: 1, outputTokens: 1 },
 }) }));

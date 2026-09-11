@@ -11,6 +11,10 @@ let received: { messages: { role: string; content: string }[] };
 let malformed = false;
 let responseOverride: string | null = null;
 let providerInterrupted = false;
+let adaptiveStage: "before-validator" | "during-validator" | "expired-validator" | "after-save" | null = null;
+let adaptiveAbort = new AbortController();
+let adaptiveRemaining = 900000;
+let validatorCalls = 0;
 class FakeOpenAI {
   chat = { completions: { create: async (request: typeof received) => {
     received = request;
@@ -54,23 +58,42 @@ mock.module("@/lib/qdrant", () => ({
 }));
 mock.module("@/lib/reranker", () => ({ rerankDocuments: async () => [] }));
 mock.module("@/lib/knowledge-context", () => ({ getAlwaysIncludeKnowledge: async () => [], mergeKnowledgeChunks: () => [] }));
-mock.module("@/lib/review-routing", () => ({ resolveReviewModel: async () => "gpt-fixture" }));
-mock.module("@/lib/ai-usage", () => ({ logAiUsage: async () => {} }));
-mock.module("@/lib/ai-router", () => ({ createAiMessage: async (params: AiCreateParams) => {
+mock.module("@/lib/review-routing", () => ({ resolveReviewModel: async () => adaptiveStage ? "claude-fable-5-1" : "gpt-fixture" }));
+mock.module("@/lib/ai-usage", () => ({ logAiUsage: async () => { if (adaptiveStage === "before-validator") adaptiveAbort.abort(); } }));
+mock.module("@/lib/ai-router", () => ({ getProviderForModel: async () => {
+  assert.ok(adaptiveStage, "Legacy fixture must not resolve adaptive capacity"); return "anthropic";
+}, createAiMessage: async (params: AiCreateParams) => {
+  if (adaptiveStage) {
+    assert.ok(params.completeReviewAdmission, "Oversized complete input must use capacity admission");
+    const { observeAiRequest } = await import("@/lib/providers/request-evidence");
+    const { capacityReceipt } = await import("@/lib/review-capacity");
+    const receipt = capacityReceipt(params.completeReviewAdmission, params.model);
+    receipt.state = "admitted"; receipt.primaryDispatch = "started";
+    params.completeReviewAdmission.onDecision?.(receipt);
+    observeAiRequest(params, "anthropic", { model: params.model, messages: params.messages });
+    return { model: params.model, provider: "anthropic", completion: { state: "completed", reason: "end_turn" },
+      text: report, usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } };
+  }
   const { openaiProvider } = await import("@/lib/providers/openai");
   return openaiProvider.create(params, "fixture-key");
 } }));
 mock.module("@/lib/review-validation", () => ({
   gatherCrossFileContext: async () => "",
   gatherVerificationContext: async () => new Map(),
-  validateFindings: async (findings: unknown[]) => findings,
+  validateFindings: async (findings: unknown[]) => {
+    validatorCalls++;
+    if (adaptiveStage === "during-validator") adaptiveAbort.abort();
+    if (adaptiveStage === "expired-validator") adaptiveRemaining = 0;
+    return findings;
+  },
 }));
 
 // Hosted review integration: keep generation, parsing, suppression and finding
 // persistence mapping real; replace external services and unrelated prerequisites.
-const archived: { findings: { title: string }[]; coverage: unknown; body: string }[] = [];
+const archived: { id: string; findings: { title: string }[]; coverage: unknown; body: string }[] = [];
 const summaries: string[] = [];
 const published: { body: string; comments: unknown[] }[] = [];
+const checkConclusions: string[] = [];
 mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async (target: { body: string; headSha: string; reviewRequestVersion: number; expectedReviewBody?: string }) => {
   if (target.expectedReviewBody !== undefined) {
     assert.equal(target.expectedReviewBody, archived.at(-1)?.body);
@@ -84,7 +107,8 @@ mock.module("@/lib/review-attempt", () => ({
   createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
   updateCurrentReview: async () => ({ count: 1 }),
   saveReviewAttempt: async (_id: string, _pr: string, _coverage: unknown, _body: string, findings: { title: string }[]) => {
-    archived.push({ findings, coverage: _coverage, body: _body });
+    archived.push({ id: _id, findings, coverage: structuredClone(_coverage), body: _body });
+    if (adaptiveStage === "after-save" && (_coverage as ReviewCoverage).assessment?.state === "completed") adaptiveAbort.abort();
     return false; // Stop after persistence/publication, before unrelated timeline indexing.
   },
 }));
@@ -93,7 +117,7 @@ mock.module("@/lib/github", () => ({
   getPullRequestReviewInput: async () => ({ rawDiff: diff, input: {
     provider: "github", headSha: pr.headSha, baseSha: "b".repeat(40), inventoryComplete: true,
     expectedFiles: 1, limitations: [],
-    files: [{ path: "src/check.ts", change: "modified", patch: "@@ -1 +1 @@\n-return value;\n+return value.name;\n", additions: 1, deletions: 1 }],
+    files: [{ path: "src/check.ts", change: "modified", patch: `@@ -1 +1 @@\n-return value;\n+return value.name;${adaptiveStage ? " ".repeat(400000) : ""}\n`, additions: 1, deletions: 1 }],
   } }),
   getPullRequestDetails: async () => ({ body: "Handle missing values" }),
   createPullRequestComment: async () => { directComments++; return 123; },
@@ -104,7 +128,7 @@ mock.module("@/lib/github", () => ({
     return 456;
   },
   createCheckRun: async () => 789,
-  updateCheckRun: async () => {},
+  updateCheckRun: async (_installation: number, _owner: string, _repo: string, _id: number, conclusion: string) => { checkConclusions.push(conclusion); },
   getRepositoryTree: async () => ["src/check.ts"],
   getFileContent: async () => "return value.name;",
   listReviewComments: async () => [],
@@ -279,3 +303,34 @@ assert.equal(directComments, 0, "Native failures must not create untracked comme
 assert.ok(summaries.at(-1)?.includes("Missing null check"));
 assert.ok(summaries.at(-1)?.includes("### Score"));
 assert.ok(summaries.at(-1)?.includes("Review coverage"));
+
+// The real hosted post-primary pipeline must not publish a scored completion after cancellation.
+nativeFailure = false;
+for (const stage of ["before-validator", "during-validator", "expired-validator", "after-save"] as const) {
+  adaptiveStage = stage; adaptiveAbort = new AbortController(); adaptiveRemaining = 900000;
+  const before = archived.length, validations = validatorCalls, checks = checkConclusions.length;
+  const errors = console.error; console.error = () => {};
+  try {
+    await processReview("pr", { jobId: "synthetic-adaptive", deadlineEpochMs: Date.now() + 900000,
+      signal: adaptiveAbort.signal, remainingMs: () => adaptiveRemaining });
+  } finally { console.error = errors; }
+  const failed = archived.at(-1)!;
+  const coverage = failed.coverage as ReviewCoverage;
+  assert.equal(coverage.assessment?.state, "incomplete", stage);
+  assert.equal(coverage.assessment?.requests.length, 1, stage);
+  assert.equal(coverage.assessment?.capacityAdmission?.primaryDispatch, "started", stage);
+  assert.equal(coverage.files[0].state, "supplied", stage);
+  assert.ok(coverage.assessment?.reason.includes("cancelled or expired"), stage);
+  assert.ok(!/\|[^\n]*[1-5]\/5/.test(summaries.at(-1)!), stage);
+  assert.ok(summaries.at(-1)!.includes(failed.id), stage);
+  assert.ok(!checkConclusions.slice(checks).includes("success"), stage);
+  if (stage === "before-validator") assert.equal(validatorCalls, validations);
+  else assert.equal(validatorCalls, validations + 1);
+  if (stage === "after-save") {
+    assert.equal(archived.length, before + 2);
+    assert.notEqual(archived.at(-2)!.id, failed.id);
+    assert.equal((archived.at(-2)!.coverage as ReviewCoverage).assessment?.state, "completed");
+    assert.ok(coverage.limitations.some(reason => reason.includes(archived.at(-2)!.id)));
+  } else assert.equal(archived.length, before + 1);
+}
+console.log("PASS adaptive post-primary expiry preserves evidence and suppresses scored publication");
