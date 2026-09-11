@@ -181,3 +181,27 @@ it("passes the pinned revision to a failed large-diff handoff", async () => {
   })).rejects.toThrow("large diff");
   expect(identity).toEqual({ headSha: head, baseSha: base });
 });
+
+
+it("keeps complete input distinct from an invalid assessment and removes every score", () => {
+  const plan = prepareReviewInput(input([{ path: "a.ts", change: "added", patch: patch() }]), { maxChars: 1000 });
+  plan.coverage.assessment = { ...completedAssessment, state: "incomplete", reason: "Findings Summary counts do not match findings JSON" };
+  const payload = '<!-- OCTOPUS_FINDINGS_START -->\n[{"description":"Security 5/5 is an untrusted example"}]\n<!-- OCTOPUS_FINDINGS_END -->';
+  const variants = [
+    "### Score\n| Category | Score | Notes |\n| --- | --- | --- |\n| Security | 5/5 | note |\n| Code Quality | 4/5 | note |\n| **Overall** | **4/5** | note |\n\n### Summary\nKeep the summary.\n",
+    "### Score\n| Security | 5/5 | note |\n| Overall | 4/5 | note |",
+    "### Score\n| Security | 5/5 | note |\n### Score\n| Error Handling | 3/5 | note |\n| Overall | 3/5 | note |",
+    "| Security | 5/5 | note |\n| **Overall** | **4/5** | note |\nPerformance: 4/5\nConsistency: N/A",
+  ];
+  for (const body of variants) {
+    const rendered = applyReviewCoverage(body + "\n" + payload, plan.coverage, "invalid");
+    const visible = stripDetailedFindings(rendered);
+    expect(visible).not.toMatch(/[1-5]\/5|N\/A/);
+    expect(rendered).toContain(payload);
+    expect(rendered).toContain("Input complete; assessment invalid or unavailable");
+    expect(rendered).not.toContain("incomplete coverage");
+    expect(rendered).toContain(plan.coverage.assessment.reason);
+  }
+  expect(plan.coverage.complete).toBe(true);
+  expect(reviewCheckResult(plan.coverage, false, 0).conclusion).toBe("failure");
+});

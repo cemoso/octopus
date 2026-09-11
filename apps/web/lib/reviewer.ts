@@ -54,12 +54,12 @@ import { getGithubAppConfig } from "@/lib/github-app-config";
 import { parseOctopusIgnore, detectBadCommits } from "@/lib/octopus-ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
 import { MAX_DIFF_CHARS } from "@/lib/diff-truncate";
-import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, type ReviewInput, type ReviewCoverage } from "@/lib/review-coverage";
+import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, reviewAssessmentComplete, type ReviewInput, type ReviewCoverage } from "@/lib/review-coverage";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
 import { canRestrictReviewToFollowUp } from "@/lib/review-follow-up";
 import { prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
-import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment } from "@/lib/review-assessment";
+import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
@@ -1799,7 +1799,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
 
     // Re-review with zero new findings: surface this as an explicit positive
     // signal instead of letting the developer wonder if the review failed.
-    if (coverage.complete && isReReview && findingsCount === 0) {
+    if (reviewAssessmentComplete(coverage) && isReReview && findingsCount === 0) {
       const commitSuffix = pr.headSha ? ` (commit \`${pr.headSha.slice(0, 7)}\`)` : "";
       mainCommentBody =
         `> ✅ No new issues detected since the last review${commitSuffix}.\n\n` +
@@ -2477,7 +2477,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
     console.error(`[reviewer] Review failed for PR #${pr.number}:`, err);
 
     // Preserve failed adapter attempts without replacing a previously saved outcome.
-    if (attemptCoverage && !attemptSaved) attemptCoverage.complete = false;
+    if (attemptCoverage && !attemptSaved && attemptCoverage.assessment && attemptCoverage.assessment.state !== "incomplete") {
+      markReviewAssessmentIncomplete(attemptCoverage, "Review processing failed or was interrupted before persistence");
+    }
     const failureBody = attemptCoverage?.assessment && !attemptSaved
       ? applyReviewCoverage("## 🐙 Octopus Review\n\nAssessment failed or was interrupted. No complete assessment is available.", attemptCoverage, attemptId) : null;
     if (failureBody && attemptCoverage) {
