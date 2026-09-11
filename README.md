@@ -33,7 +33,7 @@ AI code review for your pull requests. Get a review summary, severity-ranked fin
 
 1. [Sign in](https://octopus-review.ai/login) with Google, GitHub, Microsoft or an email magic link.
 2. Create your organization, connect GitHub, GitLab or Bitbucket, and choose the repositories to review.
-3. Open a pull request or merge request. Read the review in your code host and continue the conversation there.
+3. Open a pull request or merge request. Read the review in your code host and address the findings there.
 
 <p align="center">
   <a href="https://octopus-review.ai/login"><img src="docs/screenshots/cloud-sign-in.png" width="440" alt="The live Octopus Cloud sign-in screen, with Google, GitHub, Microsoft and email options" /></a>
