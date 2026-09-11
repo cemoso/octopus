@@ -10,6 +10,16 @@ Source, configuration and package/build scripts have priority over test fixtures
 
 Existing `.octopusignore` exclusions are recorded as repository policy. Curated default generated-file exclusions remain explicit. A repository's additional generated labels cannot silently hide source, tests, schemas or configuration; those remain accounted for. Excluded files are not claimed as reviewed.
 
+### Declared binary PNG policy
+
+GitHub changes can include PNG screenshots without text patches. Policy `github-binary-png-v1` records a qualifying PNG as **excluded, image content not reviewed**, while keeping its path in the changed-file inventory. This recognizes GitHub's binary declaration for a PNG path; it does not decode or validate the image bytes, inspect the image visually, or perform a security review of its contents.
+
+The declaration must be an unambiguous, complete raw-diff section for an added or modified same-path `.png` file with regular non-executable mode `100644`. The adapter checks the exact old/new paths, status, explicit zero addition/deletion counts, and a hexadecimal new-blob prefix of at least seven characters against the full GitHub blob SHA. An API patch, patch-retention error, missing metadata or conflicting declaration prevents this exclusion. Renames, copies, deletions, executable files, symlinks, submodules and mode-only changes are outside this policy. Paths must use unquoted ASCII letters, numbers, dots, underscores, hyphens and single directory separators, without `.` or `..` segments. An uninterpretable raw-diff header prevents binary exclusions for that input rather than risking an ambiguous path match.
+
+The GitHub adapter indexes raw sections once and binds each qualifying declaration to its provider, head/base revisions, path, status and blob SHA. Shared preparation revalidates that binding and the raw-section SHA-256 before retaining the declaration and digest in the immutable coverage manifest. Existing revision-drift checks still apply. Recognized images contribute zero supplied characters and zero hunks; their exclusion does not establish model assessment of the remaining text. An excluded-only change uses the existing no-model disposition and receives no numeric quality score.
+
+Other providers and file types retain their existing behavior. A missing or oversized source patch, including source marked `-diff` through Git attributes, remains unavailable and blocks complete coverage unless an existing explicit repository policy already excludes it. This policy adds no ignore patterns or configuration switches and does not change severity thresholds or assessment-completion requirements.
+
 ## Assessment completion and request provenance
 
 Supplied files alone do not establish a completed assessment. The final provider adapters report completion state and capture SHA-256 receipts over their actual SDK request payloads, after model-prefix, caching, thinking and text transformations. Each receipt records whether all requested message contents survived the transformation. The attempt retains these receipts, the selected model, policy/template digests, response-text digest and completion outcome; it does not publish raw prompts, credentials or private source.
