@@ -1847,6 +1847,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
               reviewBody = rejected;
               effectiveReviewBody = rejected;
               mainCommentBody = stripDetailedFindings(rejected);
+              findings = parseFindings(rejected);
             }
           }
           if (followUpFindings && followUpFindings.length > 0) {

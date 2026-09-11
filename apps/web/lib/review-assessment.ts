@@ -1,7 +1,7 @@
 import type { AiCreateParams, AiResponse } from "@/lib/providers";
 import type { AiRequestReceipt } from "@/lib/providers/request-evidence";
 import { sha256, type ReviewCoverage } from "@/lib/review-coverage";
-import { parseReviewFindingsSet, recoveryFindingsBody } from "@/lib/review-evidence";
+import { parseRecoveryFindingsSet, recoveryFindingsBody } from "@/lib/review-evidence";
 import { parseFindingsFromJson, type InlineFinding } from "@/lib/review-dedup";
 
 export type FindingsRecoveryEvidence = {
@@ -102,7 +102,7 @@ export async function executeFindingsRecovery(
     : response.completion?.state !== "completed" ? "Findings recovery completion incomplete or unknown"
       : "Provider completed the findings recovery response; source assessment unchanged";
   const body = recoveryFindingsBody(response.text);
-  const valid = parseReviewFindingsSet(body) !== null;
+  const valid = parseRecoveryFindingsSet(response.text) !== null;
   if (!valid) {
     const reason = "Findings recovery JSON set is malformed";
     evidence.state = "incomplete";

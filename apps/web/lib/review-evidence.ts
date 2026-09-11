@@ -97,6 +97,12 @@ export function parseReviewFindingsSet(body: string): FindingRecord[] | null {
   } catch { return null; }
 }
 
+export function parseRecoveryFindingsSet(raw: string): FindingRecord[] | null {
+  const body = recoveryFindingsBody(raw).trim();
+  if (!body.startsWith("<!-- OCTOPUS_FINDINGS_START -->") || !body.endsWith("<!-- OCTOPUS_FINDINGS_END -->")) return null;
+  return parseReviewFindingsSet(body);
+}
+
 export type ExcludedInputContainment = { body: string; paths: string[]; rejectedFindings: number };
 
 /**
@@ -127,7 +133,6 @@ export function containExcludedInputClaims(body: string, coverage: ReviewCoverag
     return found;
   };
   let rejectedFindings = 0;
-  let retained: FindingRecord[] | undefined;
   let invalidFindings = body.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2
     || body.split("<!-- OCTOPUS_FINDINGS_END -->").length !== 2;
   const blocks: string[] = [];
@@ -140,7 +145,6 @@ export function containExcludedInputClaims(body: string, coverage: ReviewCoverag
         rejectedFindings++;
         return false;
       });
-      retained = kept;
       blocks.push(kept.length === findings.length ? block : `<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify(kept, null, 2)}\n<!-- OCTOPUS_FINDINGS_END -->`);
     } else { invalidFindings = true; unsupported(raw); }
     return "";
@@ -152,14 +156,20 @@ export function containExcludedInputClaims(body: string, coverage: ReviewCoverag
   if (invalidFindings || blocks.length !== 1) {
     // Never turn multiple/partially parsed blocks into a valid-looking findings
     // set or invite extraction recovery. The format failure remains independent.
-    retained = undefined;
     blocks.length = 0;
   }
   // A holistic summary/checklist can repeat a rejected claim without its path.
   // Rebuild prose from policy instead of attempting to repair its reasoning.
+  return { body: excludedInputGapReport([...paths], blocks.join("\n\n")), paths: [...paths], rejectedFindings };
+}
+
+export function excludedInputGapReport(paths: string[], findingsBody: string): string {
+  const blocks = parseReviewFindingsSet(findingsBody) === null ? []
+    : findingsBody.match(FINDINGS_BLOCK) ?? [];
+  const retained = parseReviewFindingsSet(findingsBody);
   const retainedFindings = retained;
   const rows = retainedFindings ? SEVERITIES.map(label => `| ${label} | ${retainedFindings.filter(finding => finding.severity === label.split(" ")[0]).length} |`).join("\n") : "";
   const report = "## 🐙 Octopus Review\n\n### Score\n\nNot assessed — excluded-input claims require verification.\n\n### Summary\n\nA repository assessment could not be completed because the response relied on content outside the supplied review input. Retained findings below remain subject to the normal confidence and severity checks.\n\n" + (rows ? `### Findings Summary\n\n| Severity | Count |\n|----------|-------|\n${rows}\n\n` : "");
   const gap = `### Verification gaps\n\nClaims about absent content in policy-excluded files were withheld because their contents were not supplied. The review has no valid overall assessment. ${retained ? "Unrelated parsed findings remain available." : "The response did not provide one safely parseable findings set; no findings are published from it."} This is not evidence of a repository defect.\n\n${[...paths].map(path => `- ${JSON.stringify(path)}`).join("\n")}`;
-  return { body: [report.trim(), gap, ...blocks].join("\n\n"), paths: [...paths], rejectedFindings };
+  return [report.trim(), gap, ...blocks].join("\n\n");
 }

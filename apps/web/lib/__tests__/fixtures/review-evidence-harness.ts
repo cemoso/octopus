@@ -129,7 +129,10 @@ async function plan(excluded = true) {
 }
 
 const scenarios = [
+  { name: "recovery-malformed-primary-retained", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([security])), excluded: true, valid: false, kept: [security], recovery: [unsupported, null] },
+  { name: "recovery-malformed-trailing-envelope", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([security])), excluded: true, valid: false, kept: [security], recovery: [unsupported], rawRecovery: block([unsupported]) + "\n```json\n[null,]\n```" },
   { name: "recovery-malformed-set", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([])), excluded: true, valid: false, kept: [], recovery: [unsupported, security, null] },
+  ...[block([unsupported, security]), "```json\n" + JSON.stringify([unsupported, security]) + "\n```"].map((rawRecovery, index) => ({ name: `recovery-valid-envelope-${index}`, body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([])), excluded: true, valid: false, kept: [security], recovery: [unsupported, security], rawRecovery })),
   { name: "recovery-excluded-claim", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([])), excluded: true, valid: false, kept: [security], recovery: [unsupported, security] },
   { name: "excluded-subject", body: report([unsupported, security]), excluded: true, valid: true, kept: [security] },
   { name: "excluded-only-claim", body: report([unsupported], "> ✅ No new issues detected since the last review."), excluded: true, valid: true, kept: [] },
@@ -163,21 +166,21 @@ for (const scenario of scenarios) {
 
   let prepared = prepareReviewPresentation(scenario.body, input.coverage);
   if (scenario.recovery) {
-    responseText = JSON.stringify(scenario.recovery);
-    const recovered = await executeFindingsRecovery({ model: "gpt-test", reviewBody: prepared, parsedFindingsCount: 0, tableFindingsTotal: 2 }, input.coverage, params => openaiProvider.create(params, "fixture-key"));
-    assert.deepEqual(recovered.findings, scenario.name === "recovery-malformed-set" ? null : scenario.recovery);
-    if (scenario.name === "recovery-malformed-set") {
+    responseText = scenario.rawRecovery ?? JSON.stringify(scenario.recovery);
+    const recovered = await executeFindingsRecovery({ model: "gpt-test", reviewBody: prepared, parsedFindingsCount: parseFindings(prepared).length, tableFindingsTotal: 2 }, input.coverage, params => openaiProvider.create(params, "fixture-key"));
+    assert.deepEqual(recovered.findings, scenario.name.startsWith("recovery-malformed-") ? null : scenario.recovery);
+    if (scenario.name.startsWith("recovery-malformed-")) {
       assert.equal(input.coverage.assessment!.recoveries![0].state, "incomplete");
       assert.ok(input.coverage.assessment!.reason.includes("Findings recovery JSON set is malformed"));
     }
     const recoveryReceipt = structuredClone(input.coverage.assessment!.recoveries![0]);
-    const contained = prepareRecoveredReviewPresentation(prepared, recovered.text, recovered.findings ?? [], input.coverage);
+    const contained = prepareRecoveredReviewPresentation(prepared, recovered.text, [...parseFindings(prepared), ...(recovered.findings ?? [])], input.coverage);
     assert.notEqual(contained, null);
     prepared = contained!;
     const combinedReason = input.coverage.assessment!.reason;
     assert.ok(combinedReason.startsWith(originalFailure!), "recovery retains the original format failure first");
     assert.ok(combinedReason.includes("Excluded-input claims require verification"));
-    prepareRecoveredReviewPresentation(prepared, recovered.text, recovered.findings ?? [], input.coverage);
+    prepareRecoveredReviewPresentation(prepared, recovered.text, [...parseFindings(prepared), ...(recovered.findings ?? [])], input.coverage);
     assert.equal(input.coverage.assessment!.reason, combinedReason, "repeated containment does not duplicate diagnostics");
     assert.deepEqual(input.coverage.assessment!.recoveries![0], recoveryReceipt);
     assert.equal(recoveryReceipt.responseSha256, sha256(responseText));
@@ -218,6 +221,8 @@ for (const scenario of scenarios) {
     assert.ok(final.report.includes("Generated-file policy"));
     assert.ok(final.report.includes("not assessed"));
     if (scenario.kept.length) {
+      assert.deepEqual(parseFindings(final.report), scenario.kept);
+      assert.ok(`${final.comment}\n${summary}`.includes(security.description));
       assert.ok(summary.includes(security.title));
       assert.ok(inline[0].body.includes(security.description));
     } else {
