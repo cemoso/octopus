@@ -80,7 +80,9 @@ octp onboard --agent --json
 octp --account work onboard --agent --json --repo owner/repository
 ```
 
-The command runs without a TTY and returns one JSON result per invocation.
+The command runs without a TTY and returns one newline-terminated JSON result per
+invocation. It finishes writing the result to stdout before exiting, including
+when a coding agent captures output through a pipe.
 `schemaVersion` is `1`. `state`, `completed`, `nextAction` and `continueWith`
 tell the agent what to do next. Commands are argument arrays, so the agent
 should execute them as arguments without interpolating them into a shell.
