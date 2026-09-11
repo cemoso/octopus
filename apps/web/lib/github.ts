@@ -619,7 +619,10 @@ export function truncateForGithubComment(body: string): string {
       const category = line.split("|")[1]?.trim().replaceAll("**", "");
       return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
     });
-    const compactScore = table.length > 0 ? table.map(line => {
+    const incomplete = /Overall: not assessed|Not assessed — incomplete review coverage/.test(body);
+    const assessment = /^Assessment: [^\n]+/m.exec(body)?.[0] ?? "";
+    const reason = assessment.slice(0, 600).replace(/[\uD800-\uDBFF]$/, "");
+    const compactScore = incomplete ? "Overall: not assessed — incomplete review coverage." : table.length > 0 ? table.map(line => {
       const cells = line.split("|");
       if (cells.length !== 5) return "";
       return `|${cells.slice(1, 4).map(cell => {
@@ -628,7 +631,7 @@ export function truncateForGithubComment(body: string): string {
         return `${shortened}…`;
       }).join("|")}|`;
     }).filter(Boolean).join("\n").replace(/^(.*)\n/, "$1\n| --- | --- | --- |\n") : "Not assessed — incomplete review coverage.";
-    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${attemptLink}${marker}\n\n${footer[0]}`;
+    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${reason}\n\n${attemptLink}${marker}\n\n${footer[0]}`;
     if (compact.length <= MAX_GITHUB_COMMENT_BODY) return compact;
   }
   const room = MAX_GITHUB_COMMENT_BODY - marker.length;

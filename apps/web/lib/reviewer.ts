@@ -16,7 +16,7 @@ import {
   upsertFeedbackPattern,
   searchReviewChunks,
 } from "@/lib/qdrant";
-import { extractAllMermaidBlocks, extractNodeLabels, DIAGRAM_TYPE_LABELS, sanitizeMermaidInMarkdown } from "@/lib/mermaid-utils";
+import { extractAllMermaidBlocks, extractNodeLabels, DIAGRAM_TYPE_LABELS } from "@/lib/mermaid-utils";
 import { loadQueueConfig, computeStaleReclaimMs, enqueue, enqueueAfter } from "@/lib/queue";
 import { createEmbeddings } from "@/lib/embeddings";
 import { generateSparseVector } from "@/lib/sparse-vector";
@@ -57,6 +57,7 @@ import { MAX_DIFF_CHARS } from "@/lib/diff-truncate";
 import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, type ReviewInput, type ReviewCoverage } from "@/lib/review-coverage";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
+import { prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
 import { executeCoveredReview, recordNoModelAssessment } from "@/lib/review-assessment";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import type { ReviewComment } from "@/lib/github";
@@ -76,9 +77,6 @@ import {
   extractCrossFileQueries,
   generateVerificationQueries,
   resolveIndexClaimWait,
-  normalizeScoreDenominators,
-  normalizeLastReviewedCommit,
-  reconcileScoreTable,
   shouldFailReviewCheck,
   formatPastReviews,
   formatPrIntent,
@@ -1755,37 +1753,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       repoConfig: repoConfigUserBlock,
     }), coverage, getSystemPrompt(), request => createAiMessage(request, org.id));
 
-    // Fix malformed mermaid block closings:
-    // 1. Content on same line before closing ```: "unchanged```" → "unchanged\n```"
-    let reviewBody = response.text.replace(/([^\n])```(\n|$)/g, "$1\n```$2");
-    // 2. ``` merged with next line: "```### Checklist" → "```\n\n### Checklist"
-    //    Only match ``` followed by non-language-tag chars to preserve ```mermaid etc.
-    reviewBody = reviewBody.replace(/```([^`\n\sa-z])/g, "```\n\n$1");
-
-    // Fix wrong score denominators ("4/4" → "4/5") in the Score table
-    reviewBody = normalizeScoreDenominators(reviewBody);
-    reviewBody = normalizeLastReviewedCommit(reviewBody, pr.headSha);
-
-    // Strip empty diagram sections: remove "### Diagram" when there's no meaningful mermaid content.
-    // Matches from "### Diagram" up to the next ### heading or end of string.
-    reviewBody = reviewBody.replace(
-      /### Diagram\s*\n[\s\S]*?(?=\n### |\n## |$)/,
-      (match) => {
-        // Check if there's a non-empty mermaid block inside
-        const mermaidMatch = match.match(/```mermaid\s*\n([\s\S]*?)```/);
-        const mermaidContent = mermaidMatch?.[1]?.trim() ?? "";
-        // Keep the section only if there's meaningful mermaid content (at least one diagram keyword)
-        if (mermaidContent.length > 10) return match;
-        return "";
-      },
-    );
-
-    // Sanitize every mermaid block in the review body — fixes unbalanced
-    // activate/deactivate, reserved-keyword participant IDs, escaped quotes,
-    // etc. that would otherwise render as "Unable to render rich display"
-    // on GitHub. Vector-DB storage already runs the same sanitizer; without
-    // this call, the comment posted to the PR is the unsanitized LLM output.
-    reviewBody = sanitizeMermaidInMarkdown(reviewBody);
+    let reviewBody = prepareReviewPresentation(response.text, coverage);
 
     // Prepend build artifact warning if bad files were detected in the diff
     if (badFiles.length > 0) {
@@ -1940,6 +1908,8 @@ Rules:
           console.error("[reviewer] Follow-up findings call failed:", err);
         }
     }
+
+    enforceReviewFindingsIntegrity(response.text, effectiveReviewBody, coverage, true);
 
     // Save all parsed findings before filtering — these will be shown in the summary comment
     let allParsedFindings = [...findings];
@@ -2106,10 +2076,10 @@ Rules:
             // Patch mainCommentBody in place (not a copy) so the score
             // reconciliation below posts on top of the patched summary instead of
             // reverting it.
-            effectiveReviewBody = effectiveReviewBody.replace(
+            effectiveReviewBody = mapReviewPresentation(effectiveReviewBody, presentation => presentation.replace(
               /### Findings Summary[\s\S]*?(?=\n### |\n## |<!-- OCTOPUS_FINDINGS_START -->|$)/,
               "### Findings Summary\n\nAll previously raised findings have been addressed. No critical issues found.\n",
-            );
+            ));
             mainCommentBody = mainCommentBody.replace(
               /### Findings Summary[\s\S]*?(?=\n### |\n## |$)/,
               "### Findings Summary\n\nAll previously raised findings have been addressed. No critical issues found.\n",
@@ -2181,8 +2151,9 @@ Rules:
     // an unactionable score that deadlocks a 4+/5 gate, and one the re-review filter
     // above actively manufactures. When no blocking (critical/high/medium) finding
     // survived, floor the sub-gate categories. See review-helpers.reconcileScoreTable.
-    if (coverage.complete) effectiveReviewBody = reconcileScoreTable(effectiveReviewBody, { hasCritical, hasHigh, hasMedium });
-    if (coverage.complete) mainCommentBody = reconcileScoreTable(mainCommentBody, { hasCritical, hasHigh, hasMedium });
+    ({ report: effectiveReviewBody, comment: mainCommentBody } = finalizeReviewPresentation(
+      response.text, effectiveReviewBody, mainCommentBody, coverage, attemptId, { hasCritical, hasHigh, hasMedium },
+    ));
 
     const threshold = org.checkFailureThreshold || "critical";
     const shouldRequestChanges = shouldFailReviewCheck(
@@ -2419,8 +2390,9 @@ Rules:
 
     // Keep an immutable final result before exposing completion. Retries update
     // the current PR view, but cannot erase this attempt's coverage and body.
-    effectiveReviewBody = normalizeLastReviewedCommit(effectiveReviewBody, coverage.headSha);
-    mainCommentBody = normalizeLastReviewedCommit(mainCommentBody, coverage.headSha);
+    ({ report: effectiveReviewBody, comment: mainCommentBody } = finalizeReviewPresentation(
+      response.text, effectiveReviewBody, mainCommentBody, coverage, attemptId, { hasCritical, hasHigh, hasMedium },
+    ));
     const promoted = await saveReviewAttempt(attemptId, pr.id, coverage, effectiveReviewBody, mergedIssues);
     attemptSaved = true;
 

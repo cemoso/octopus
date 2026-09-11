@@ -35,7 +35,8 @@ const { executeCoveredReview, recordNoModelAssessment } = await import("../../re
 const { prepareReviewInput, applyReviewCoverage, renderReviewCoverage, reviewCheckResult, sha256 } = await import("../../review-coverage");
 const { createCoveredReviewRequest } = await import("../../review-request");
 const { saveReviewAttempt } = await import("../../review-attempt");
-const { normalizeLastReviewedCommit, stripDetailedFindings, reconcileScoreTable } = await import("../../review-helpers");
+const { stripDetailedFindings } = await import("../../review-helpers");
+const { prepareReviewPresentation, finalizeReviewPresentation, enforceReviewFindingsIntegrity, mapReviewPresentation } = await import("../../review-presentation");
 const { parseFindingsFromJson } = await import("../../review-dedup");
 const { updatePullRequestComment, MAX_GITHUB_COMMENT_BODY } = await import("../../github");
 let published: { body: string };
@@ -83,6 +84,8 @@ function plan(oversized = false) {
 const requestFor = (p: ReturnType<typeof plan>, model = "gpt-test"): AiCreateParams => createCoveredReviewRequest({ model, system: "Trusted review template", number: 1, title: "Validators", author: "fixture", diff: p.diff, coverage: p.coverage, comment: "@octopus context", repoConfig: "" });
 for (const [name, text, finish, complete] of [
   ["valid", valid, "stop", true],
+  ["critical-empty-diagram", withFinding.replace("### Findings\n", "### Diagram\n\n").replace("**4/5**", "**3/5**"), "stop", true],
+  ["critical-fence-description", withFinding.replace(JSON.stringify([finding]), JSON.stringify([{ ...finding, description: "Broken ```### Checklist and ```mermaid\nsequenceDiagram\nactivate missing\n``` inside the finding" }])), "stop", true],
   ["turkish-zero", valid.replace("The changed validator is consistent with its documented contract.", "Sorun bulunamadı. Değişiklik belgelenen sözleşmeyle uyumlu."), "stop", true],
   ["zero-empty-table", valid.replace(zeroSummary, summaryHeader), "stop", true],
   ["english-contradictory-prose", valid.replace(zeroSummary, "1 critical issue found."), "stop", false],
@@ -127,22 +130,19 @@ for (const [name, text, finish, complete] of [
   assert.equal(p.coverage.complete, complete, name);
   assert.equal(p.coverage.assessment?.responseSha256, sha256(text));
   assert.equal(p.coverage.assessment?.requests[0].sha256, createHash("sha256").update(JSON.stringify(received)).digest("hex"));
-  const findings = parseFindingsFromJson(text) ?? [];
+  const prepared = prepareReviewPresentation(text, p.coverage);
+  const findings = parseFindingsFromJson(prepared) ?? [];
+  assert.deepEqual(findings, parseFindingsFromJson(text) ?? [], name);
   const flags = { hasCritical: findings.some(f => f.severity === "🔴"), hasHigh: findings.some(f => f.severity === "🟠"), hasMedium: findings.some(f => f.severity === "🟡") };
-  let report = applyReviewCoverage(normalizeLastReviewedCommit(text, p.coverage.headSha), p.coverage, name);
-  let comment = stripDetailedFindings(report);
-  if (p.coverage.complete) {
-    report = reconcileScoreTable(report, flags);
-    comment = reconcileScoreTable(comment, flags);
-  }
-  report = normalizeLastReviewedCommit(report, p.coverage.headSha);
-  comment = normalizeLastReviewedCommit(comment, p.coverage.headSha);
+  const covered = applyReviewCoverage(prepared, p.coverage, name);
+  const { report, comment } = finalizeReviewPresentation(text, covered, stripDetailedFindings(covered), p.coverage, name, flags);
   await saveReviewAttempt(name, "pr", p.coverage, report);
   assert.equal((current.reviewCoverage as typeof p.coverage).complete, complete);
   await updatePullRequestComment(1, "fixture", "review", 123, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${comment}`, "fixture-token");
   const nativeCheck = { id: 456, head_sha: p.coverage.headSha, app: { slug: "octopus-review" }, status: "completed", ...reviewCheckResult(p.coverage, flags.hasCritical, findings.length) };
   assert.equal(nativeCheck.conclusion, complete && !flags.hasCritical ? "success" : "failure");
   assert.equal(rows.get(name)?.reviewBody, report);
+  if (complete) assert.equal(report.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/)?.[0], text.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/)?.[0]);
   if (oversized) {
     assert.ok(comment.length > MAX_GITHUB_COMMENT_BODY);
     assert.ok(published!.body.length <= MAX_GITHUB_COMMENT_BODY);
@@ -164,10 +164,13 @@ for (const [name, text, finish, complete] of [
   if (!complete) {
     assert.ok(!/Overall[^\n]*[1-5]\/5/.test(report), name);
     assert.ok(!/Overall[^\n]*[1-5]\/5/.test(published!.body), name);
+    assert.ok(published!.body.includes("not assessed"), name);
+    assert.ok(published!.body.includes(p.coverage.assessment!.reason), name);
+    if (oversized) assert.ok(!/\|[^\n]*[1-5]\/5/.test(published!.body), name);
   } else {
     assert.equal((published!.body.match(/^## 🐙 Octopus Review$/gm) ?? []).length, 1);
     assert.equal((published!.body.match(/^### Score$/gm) ?? []).length, 1);
-    assert.equal((published!.body.match(/\| \*\*Overall\*\* \| \*\*4\/5\*\*/g) ?? []).length, 1);
+    assert.ok(published!.body.includes(`| **Overall** | **${name === "critical-empty-diagram" ? 3 : 4}/5**`), name);
     assert.equal((report.match(/Last reviewed commit: a{40}/g) ?? []).length, 1);
   }
   if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
@@ -178,6 +181,32 @@ for (const [name, text, finish, complete] of [
   changed.assessment!.requests[0].sha256 = "f".repeat(64);
   await assert.rejects(saveReviewAttempt(name, "pr", changed, report), /identity conflict/);
 }
+for (const corruption of ["lost", "changed", "summary"] as const) {
+  const p = plan();
+  output = { choices: [{ message: { content: withFinding }, finish_reason: "stop" }] };
+  await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
+  let damaged = prepareReviewPresentation(withFinding, p.coverage);
+  if (corruption === "lost") damaged = stripDetailedFindings(damaged);
+  if (corruption === "changed") damaged = damaged.replace(JSON.stringify([finding]), "[]");
+  if (corruption === "summary") damaged = damaged.replace("| 🔴 Critical | 1 |", "| 🔴 Critical | 0 |");
+  if (corruption === "summary") enforceReviewFindingsIntegrity(withFinding, damaged, p.coverage, true);
+  const result = finalizeReviewPresentation(withFinding, damaged, stripDetailedFindings(damaged), p.coverage, corruption, { hasCritical: false, hasHigh: false, hasMedium: false });
+  assert.equal(p.coverage.complete, false);
+  await saveReviewAttempt(corruption, "pr", p.coverage, result.report);
+  await updatePullRequestComment(1, "fixture", "review", 123, result.comment, "fixture-token");
+  assert.ok(published!.body.includes("not assessed"));
+  assert.ok(!/Overall[^\n]*[1-5]\/5/.test(published!.body));
+  assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, "failure");
+}
+const filtered = plan();
+output = { choices: [{ message: { content: withFinding }, finish_reason: "stop" }] };
+await executeCoveredReview(requestFor(filtered), filtered.coverage, "v1", request => openaiProvider.create(request, "fake"));
+const preparedForFilter = prepareReviewPresentation(withFinding, filtered.coverage);
+enforceReviewFindingsIntegrity(withFinding, preparedForFilter, filtered.coverage, true);
+const policyPresentation = mapReviewPresentation(preparedForFilter, body => body.replace("| 🔴 Critical | 1 |", "Filtered by existing policy."));
+const filteredResult = finalizeReviewPresentation(withFinding, policyPresentation, stripDetailedFindings(policyPresentation), filtered.coverage, "filtered", { hasCritical: false, hasHigh: false, hasMedium: false });
+assert.equal(filtered.coverage.complete, true);
+assert.deepEqual(parseFindingsFromJson(filteredResult.report), parseFindingsFromJson(withFinding));
 const interruptedPlan = plan(); interrupted = true;
 await assert.rejects(executeCoveredReview(requestFor(interruptedPlan), interruptedPlan.coverage, "v1", request => openaiProvider.create(request, "fake")), /interrupted/);
 assert.equal(interruptedPlan.coverage.complete, false);
