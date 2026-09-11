@@ -31,7 +31,7 @@ mock.module("@octopus/db", () => ({ prisma: { ...db, $transaction: (run: (tx: ty
 const { openaiProvider } = await import("../../providers/openai");
 const { callOpenAiGateway } = await import("../../providers/openai-gateway");
 const { observeAiRequest, completionEvidence } = await import("../../providers/request-evidence");
-const { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, validReviewResponse } = await import("../../review-assessment");
+const { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, validReviewResponse, reviewResponseValidationError } = await import("../../review-assessment");
 const { prepareReviewInput, applyReviewCoverage, renderReviewCoverage, reviewCheckResult, reviewAssessmentComplete, sha256 } = await import("../../review-coverage");
 const { createCoveredReviewRequest } = await import("../../review-request");
 const { saveReviewAttempt } = await import("../../review-attempt");
@@ -78,9 +78,11 @@ const conflictRisk = "> ⚠️ **Conflict Risk**: This PR modifies high-traffic 
 const withAdvisory = (body: string, advisory = conflictRisk) => body.replace("### Findings\n", `${advisory}\n\n### Findings\n`);
 const finding = { severity: "🔴", title: "Missing validation", filePath: "src/validator.ts", startLine: 1, description: "The value needs validation." };
 const withFinding = valid.replace(zeroSummary, "| Severity | Count |\n| --- | --- |\n| 🔴 Critical | 1 |").replace("[]", JSON.stringify([finding]));
+const unassessed = valid.replace(/\| [1-5]\/5 \|/g, "| N/A |")
+  .replace("**4/5** | Lowest category", "**Not assessed** | Input coverage is incomplete");
 const fenced = (text: string) => text.replace(/(<!-- OCTOPUS_FINDINGS_START -->\n)([\s\S]*?)(\n<!-- OCTOPUS_FINDINGS_END -->)/, '$1```json\n$2\n```$3');
-function plan(oversized = false) {
-  const result = prepareReviewInput({ provider: "github", headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true, expectedFiles: oversized ? 100 : 1, limitations: [], files: Array.from({ length: oversized ? 100 : 1 }, (_, i) => ({ path: oversized ? `src/${i}-${"&".repeat(230)}.ts` : "src/validator.ts", change: "added", patch: "@@ -0,0 +1 @@\n+export const valid = true;\n", additions: 1, deletions: 0 })) }, { maxChars: 300000 });
+function plan(oversized = false, maxChars = 300000) {
+  const result = prepareReviewInput({ provider: "github", headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true, expectedFiles: oversized ? 100 : 1, limitations: [], files: Array.from({ length: oversized ? 100 : 1 }, (_, i) => ({ path: oversized ? `src/${i}-${"&".repeat(230)}.ts` : "src/validator.ts", change: "added", patch: "@@ -0,0 +1 @@\n+export const valid = true;\n", additions: 1, deletions: 0 })) }, { maxChars });
   result.coverage.reviewRequestVersion = 1;
   return result;
 }
@@ -117,6 +119,42 @@ if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
   await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/binary-only-review.md`, binaryReport);
   await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/png-assessment.json`, JSON.stringify({ boundary: "Production adapter, preparation, provider adapter and assessment; synthetic GitHub input and mocked model SDK", mixed: mixed.coverage, binaryOnly: binaryOnly.coverage }, null, 2));
 }
+// Input omissions, output validity and provider completion must remain distinct.
+const unassessedWithFinding = unassessed.replace(zeroSummary, `${summaryHeader}\n| 🔴 Critical | 1 |`).replace("[]", JSON.stringify([finding]));
+for (const [name, text, validationReason] of [
+  ["intentional", unassessed, null],
+  ["intentional-with-finding", unassessedWithFinding, null],
+  ["missing-overall", unassessed.replace(/^\| \*\*Overall\*\*[^\n]*\n/m, ""), "Incomplete-input Overall must be exactly Not assessed, with no duplicate row"],
+  ["ambiguous-overall", unassessed.replace("**Not assessed**", "N/A"), "Incomplete-input Overall must be exactly Not assessed, with no duplicate row"],
+  ["duplicate-overall", unassessed.replace("### Findings Summary", "| **Overall** | **Not assessed** | Incomplete |\n\n### Findings Summary"), "Incomplete-input Overall must be exactly Not assessed, with no duplicate row"],
+  ["numeric-overall", unassessed.replace("**Not assessed**", "**4/5**"), "Incomplete-input Overall must be exactly Not assessed, with no duplicate row"],
+  ["numeric-category", unassessed.replace("| Security | N/A |", "| Security | 4/5 |"), "Score category rows missing, duplicated or malformed"],
+  ["malformed-findings", unassessed.replace("[]", "[null]"), "Findings JSON entries are malformed"],
+  ["missing-findings", unassessed.replace("<!-- OCTOPUS_FINDINGS_START -->", ""), "Findings JSON markers missing or duplicated"],
+  ["mismatched-findings", unassessedWithFinding.replace(JSON.stringify([finding]), "[]"), "Findings Summary counts do not match findings JSON"],
+] as const) {
+  assert.equal(reviewResponseValidationError(text, false), validationReason, name);
+  assert.equal(validReviewResponse(text), name === "numeric-overall", `${name}: complete input still requires a numeric assessment`);
+  for (const finish of ["stop", "length", null] as const) {
+    const p = plan(false, 0);
+    assert.equal(p.coverage.complete, false);
+    output = { choices: [{ message: { content: text }, finish_reason: finish }] };
+    await executeCoveredReview(requestFor(p), p.coverage, "template-unassessed-v2", request => openaiProvider.create(request, "fake"));
+    assert.deepEqual(p.coverage.assessment?.responseValidation, { state: validationReason === null ? "valid" : "invalid", reason: validationReason });
+    assert.equal(p.coverage.assessment?.state, validationReason === null && finish === "stop" ? "completed" : "incomplete");
+    assert.equal(p.coverage.assessment?.responseSha256, sha256(text));
+    if (validationReason) assert.ok(p.coverage.assessment!.reason.includes(validationReason));
+    if (finish !== "stop") assert.ok(p.coverage.assessment!.reason.includes("Provider completion incomplete or unknown"));
+    if (validationReason === null && finish === "stop") assert.match(p.coverage.assessment!.reason, /overall score withheld because input coverage is incomplete/);
+    assert.equal(reviewAssessmentComplete(p.coverage), false);
+    assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, "failure");
+  }
+}
+const unobservedPartial = plan(false, 0);
+await executeCoveredReview(requestFor(unobservedPartial), unobservedPartial.coverage, "template-unassessed-v2", async () => ({ text: unassessed, model: "gpt-test", provider: "openai", usage: { inputTokens: 1, outputTokens: 1 }, completion: completionEvidence("stop", ["stop"]) }));
+assert.equal(unobservedPartial.coverage.assessment?.responseValidation?.state, "valid");
+assert.equal(unobservedPartial.coverage.assessment?.reason, "Actual provider request provenance unavailable");
+assert.equal(reviewAssessmentComplete(unobservedPartial.coverage), false);
 for (const [name, text, finish, complete] of [
   ["adjacent-conflict-risk", withAdvisory(valid), "stop", true],
   ["adjacent-conflict-risk-finding", withAdvisory(withFinding), "stop", true],
@@ -135,6 +173,7 @@ for (const [name, text, finish, complete] of [
   ["advisory-missing-json", withAdvisory(valid.replace(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/, "")), "stop", false],
   ["advisory-incomplete-provider", withAdvisory(valid), "length", false],
   ["valid", valid, "stop", true],
+  ["unassessed-complete-input", unassessed, "stop", false],
   ["rereview-valid", valid, "stop", true],
   ["critical-empty-diagram", withFinding.replace("### Findings\n", "### Diagram\n\n").replace("**4/5**", "**3/5**"), "stop", true],
   ["critical-fence-description", withFinding.replace(JSON.stringify([finding]), JSON.stringify([{ ...finding, description: "Broken ```### Checklist and ```mermaid\nsequenceDiagram\nactivate missing\n``` inside the finding" }])), "stop", true],
@@ -288,11 +327,13 @@ for (const scenario of ["partial-completed", "partial-oversized", "partial-corru
   p.coverage.reviewRequestVersion = 1;
   assert.equal(p.coverage.files[0].state, "partial");
   assert.equal(p.coverage.files[0].hunks.length, 1);
-  const response = scenario === "partial-oversized" ? valid.replace("The changed validator is consistent with its documented contract.", "Subset commentary 🔴 ".repeat(10000)) : valid;
+  const response = scenario === "partial-oversized" ? unassessed.replace("The changed validator is consistent with its documented contract.", "Subset commentary 🔴 ".repeat(10000)) : unassessed;
   output = { choices: [{ message: { content: response }, finish_reason: "stop" }] };
   await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
   const completionEvidence = structuredClone(p.coverage.assessment);
   assert.equal(completionEvidence?.state, "completed");
+  assert.deepEqual(completionEvidence?.responseValidation, { state: "valid", reason: null });
+  assert.match(completionEvidence!.reason, /overall score withheld because input coverage is incomplete/);
   assert.equal(p.coverage.complete, false);
   let report = applyReviewCoverage(prepareReviewPresentation(response, p.coverage), p.coverage, scenario);
   if (scenario === "partial-corrupted") report = report.replace("[]", JSON.stringify([finding]));
