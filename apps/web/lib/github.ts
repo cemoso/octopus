@@ -4,6 +4,7 @@ import { fetchGitHubReviewInput } from "@/lib/github-review-input";
 import crypto from "node:crypto";
 import { getGithubAppConfig } from "@/lib/github-app-config";
 import { MAX_FETCH_DIFF_CHARS, truncateDiff, truncationNotice } from "@/lib/diff-truncate";
+import { formatReviewInlinePipes } from "@/lib/review-comment-markdown";
 
 const GITHUB_API = "https://api.github.com";
 const RETRYABLE_STATUSES = new Set([502, 503, 504]);
@@ -724,7 +725,7 @@ export function compactReviewCoverageComment(body: string): string {
 }
 
 function formatSummaryComment(body: string, marker?: string): string {
-  const compact = truncateForGithubComment(compactReviewCoverageComment(body));
+  const compact = truncateForGithubComment(formatReviewInlinePipes(compactReviewCoverageComment(body)));
   if (!marker) return compact;
   const footer = /\n*Last reviewed commit: [0-9a-f]{40}\s*$/i.exec(compact)?.[0] ?? "";
   return (footer ? compact.slice(0, -footer.length) : compact) + `\n\n${marker}` + footer;
