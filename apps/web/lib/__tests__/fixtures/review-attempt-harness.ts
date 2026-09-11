@@ -172,6 +172,14 @@ for (const headers of [
 }
 const download = await request({ accept: "text/html", "x-user": "alice" }, "?download=1");
 assert.equal(download.status, 200);
+if (process.env.REVIEW_EVIDENCE_DIR) {
+  await Bun.write(`${process.env.REVIEW_EVIDENCE_DIR}/downloaded-review.json`, await download.clone().text());
+  await Bun.write(`${process.env.REVIEW_EVIDENCE_DIR}/record-http.json`, JSON.stringify({
+    boundary: "Actual middleware and GET handler with simulated authentication and in-memory database",
+    browserNavigation: { status: navigation.status, headers: Object.fromEntries(navigation.headers) },
+    explicitDownload: { status: download.status, headers: Object.fromEntries(download.headers) },
+  }, null, 2));
+}
 assert.equal((await download.json()).reviewBody, "First immutable report");
 assert.equal((await request({ accept: "text/html" }, "?download=1")).status, 401);
 member = false;

@@ -2,6 +2,12 @@ import { mock } from "bun:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Prisma } from "@octopus/db";
+import { join } from "node:path";
+
+async function saveEvidence(name: string, markup: string) {
+  if (!process.env.REVIEW_EVIDENCE_DIR) return;
+  await Bun.write(join(process.env.REVIEW_EVIDENCE_DIR, name), `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Saved review rendering evidence</title><link rel="stylesheet" href="review-page.css"></head><body>${markup}</body></html>`);
+}
 
 mock.module("server-only", () => ({}));
 let userId: string | null = "member";
@@ -84,6 +90,7 @@ assert.ok(!html.includes(`/review-attempts/${entries[10].id}`));
 assert.ok(html.includes("Original finding") && html.includes("4/5") && html.includes("<table>"));
 assert.ok(!html.includes("<script") && !html.includes("<img") && !html.includes("tracker.invalid") && !html.includes('href="javascript:'));
 assert.equal(result.record.reviewBody, report, "Rendering preserves the immutable report");
+await saveEvidence("review-page.html", html);
 for (const largeBody of [
   "[".repeat(16_000) + "`a|b`" + "]".repeat(16_000),
   "before ".repeat(10_000) + "<script>alert(1)</script>",
@@ -95,6 +102,7 @@ for (const largeBody of [
   assert.ok(rendered.includes('aria-label="Saved review in plain text"'));
   assert.ok(!rendered.includes("<script"));
   assert.equal(saved.reviewBody, largeBody);
+  await saveEvidence(`review-plain-${largeBody.length}.html`, rendered);
 }
 const { prepareReviewInput, applyReviewCoverage } = await import("../../review-coverage");
 const input = prepareReviewInput({ provider: "github", headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true,
@@ -104,4 +112,5 @@ const archivedBody = applyReviewCoverage("## 🐙 Octopus Review\n\nA saved resp
 const archivedHtml = renderToStaticMarkup(<ReviewRecordView record={{ ...result.record, reviewBody: archivedBody }} />);
 assert.ok(archivedHtml.includes("src/example.ts") && archivedHtml.includes("Assessment:"));
 assert.ok(archivedHtml.includes("Overall: not assessed"), "A complete inventory must not hide invalid assessment status");
+await saveEvidence("review-invalid-assessment.html", archivedHtml);
 console.log("PASS protected readable review history, bounded metadata, original report and safe Markdown");
