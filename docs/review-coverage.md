@@ -30,7 +30,7 @@ Input completeness and assessment validity are independent: `coverage.complete` 
 
 The [system prompt output format](../apps/web/prompts/SYSTEM_PROMPT.md#findings-summary) owns the findings-summary table and JSON contract. For compatibility, a standalone `> ⚠️ **Conflict Risk**:` advisory, including blockquote continuation lines, may follow that table; duplicate tables/headings/markers, malformed rows and mismatched counts still fail. The [conflict prompt](../apps/web/prompts/CONFLICT_DETECTION.md) owns advisory placement for new responses. Structural failure reasons contain fixed diagnostic text rather than response excerpts.
 
-The existing missing-findings recovery call retains separate digest-only request, model/provider, policy/template, response and completion records. Interrupted or unobserved recovery remains explicit. Recovery never upgrades the primary assessment or supplies missing source coverage.
+The existing missing-findings recovery call retains separate digest-only request, model/provider, policy/template, response and completion records. Interrupted or unobserved recovery remains explicit. Recovery never upgrades the primary assessment or supplies missing source coverage. Before parsing or merging findings, recovery validates the entire raw payload: one JSON array, optionally enclosed in a complete `json` fence or a single findings-marker pair (which may contain that fence). Extra content, multiple envelopes or any invalid entry reject the entire recovery set; there is no Markdown fallback. Valid primary findings remain available, including in an unscored verification-gap report when rejected recovery content triggers [excluded-input containment](#claims-about-excluded-input).
 
 ## Results and history
 
