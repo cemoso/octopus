@@ -1,3 +1,4 @@
+import "server-only";
 import { authenticateApiToken } from "@/lib/api-auth";
 import { prisma } from "@octopus/db";
 import { analyzeRepository } from "@/lib/analyzer";
@@ -17,7 +18,7 @@ export async function POST(
   const { id } = await params;
 
   const repo = await prisma.repository.findFirst({
-    where: { id, organizationId: result.org.id, isActive: true },
+    where: { id, organizationId: result.org.id, isActive: true, dismissedAt: null },
   });
 
   if (!repo) {
@@ -39,10 +40,13 @@ export async function POST(
   // transition, then persist the result. analyzeRepository only RETURNS the
   // analysis text (the status writes live in reviewer.ts) — persist it here so
   // this CLI route is self-contained.
-  await prisma.repository.update({
-    where: { id: repo.id },
+  const claim = await prisma.repository.updateMany({
+    where: { id: repo.id, organizationId: result.org.id, isActive: true, dismissedAt: null, analysisStatus: repo.analysisStatus, analyzedAt: repo.analyzedAt, indexStatus: "indexed", indexedAt: repo.indexedAt },
     data: { analysisStatus: "analyzing" },
   });
+  if (!claim.count) {
+    return Response.json({ error: "Repository state changed or work is already in progress" }, { status: 409 });
+  }
 
   analyzeRepository(repo.id, repo.fullName, result.org.id)
     .then(async (analysis) => {

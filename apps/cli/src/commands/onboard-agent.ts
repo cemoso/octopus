@@ -1,0 +1,74 @@
+import { spawnSync } from "node:child_process";
+import { loadCredentials } from "../lib/credentials.js";
+import { loadConfig } from "../lib/config.js";
+import { getActiveProfileName } from "../lib/paths.js";
+import { getJson, postJson, normalizeBaseUrl, isTransportSafe } from "../lib/api.js";
+import { advanceAgentOnboarding, onboardingResult, onboardingExitCode, type Connection, type OnboardingContext } from "../lib/agent-onboarding.js";
+
+export function parseAgentOnboardingArgs(argv: string[]): { repo?: string; help?: boolean } {
+  let repo: string | undefined;
+  const seen = new Set<string>();
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (seen.has(arg)) throw new Error("Duplicate onboarding flag.");
+    seen.add(arg);
+    if (arg === "--repo") {
+      repo = argv[++i];
+      if (!repo || !/^[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+$/.test(repo) || [".", ".."].includes(repo.split("/")[1])) throw new Error("--repo requires a GitHub owner/repository name.");
+    } else if (arg === "--help" || arg === "-h") return { help: true };
+    else if (arg !== "--agent" && arg !== "--json") throw new Error("Unknown agent onboarding argument. Use --repo owner/name, --json or --help.");
+  }
+  return { repo };
+}
+
+export function detectOnboardingRepository(runGit: (args: string[]) => string | null = (args) => {
+  const result = spawnSync("git", args, { encoding: "utf8", timeout: 5000 });
+  return result.status === 0 ? result.stdout.trim() : null;
+}): string {
+  const remotes = runGit(["remote"])?.split("\n").filter(Boolean) ?? [];
+  const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
+  if (!remote) throw new Error("No unambiguous git remote. Supply --repo owner/name for the intended GitHub repository.");
+  const url = runGit(["remote", "get-url", remote]);
+  // Accept github.com only; never print a raw remote URL that may contain credentials.
+  const match = url?.match(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i);
+  if (!match || [".", ".."].includes(match[1].split("/")[1])) throw new Error("Agent onboarding currently supports github.com remotes. Supply --repo owner/name only for a GitHub repository.");
+  return match[1];
+}
+
+export async function onboardAgentCommand(argv: string[]): Promise<number> {
+  const context: OnboardingContext = { account: getActiveProfileName(), repository: "", baseUrl: "https://octopus-review.ai" };
+  let parsed: ReturnType<typeof parseAgentOnboardingArgs>;
+  try {
+    parsed = parseAgentOnboardingArgs(argv);
+    if (parsed.help) {
+      console.log("Usage: octp onboard --agent --json [--repo owner/name]\nRuns one resumable setup step for GitHub. Exit 0: ready; 3: waiting/action needed; 2: invalid input; 1: failed.\nFollow nextAction, wait retryAfterSeconds, then execute continueWith. Browser approvals remain with the user.");
+      return 0;
+    }
+    context.repository = parsed.repo ?? detectOnboardingRepository();
+  } catch (error) {
+    console.log(JSON.stringify(onboardingResult(context, "invalid_input", error instanceof Error ? error.message : "Invalid input.")));
+    return 2;
+  }
+  try {
+    const creds = await loadCredentials();
+    const candidate = creds?.baseUrl ?? (await loadConfig()).selfHostedBaseUrl ?? context.baseUrl;
+    const baseUrl = normalizeBaseUrl(candidate);
+    if (!baseUrl || !isTransportSafe(baseUrl)) throw new Error("unsafe_server");
+    context.baseUrl = baseUrl;
+    if (creds) context.organization = { id: creds.orgId, name: creds.orgName };
+    const result = !creds ? (() => {
+      const result = onboardingResult(context, "authentication_required", "Run login, show its approval URL to the user, wait for login to finish, then resume setup.");
+      result.nextAction = { kind: "run_command" as const, argv: ["octp", "--account", context.account, "login", "--no-open", "--api-url", baseUrl] };
+      return result;
+    })() : await advanceAgentOnboarding(context, {
+      connect: () => postJson<Connection>(`${baseUrl}/api/cli/repos/connect`, { fullName: context.repository }, creds.token, { timeoutMs: 30_000 }),
+      status: (id) => getJson(`${baseUrl}/api/cli/repos/${encodeURIComponent(id)}/status`, { headers: { authorization: `Bearer ${creds.token}` }, signal: AbortSignal.timeout(15_000) }),
+      start: (id, operation) => postJson(`${baseUrl}/api/cli/repos/${encodeURIComponent(id)}/${operation}`, {}, creds.token, { timeoutMs: 15_000 }),
+    });
+    console.log(JSON.stringify(result));
+    return onboardingExitCode(result);
+  } catch {
+    console.log(JSON.stringify(onboardingResult(context, "failed", "Could not complete this setup step. Check server connectivity and local account configuration, then resume. No completion is assumed.")));
+    return 1;
+  }
+}

@@ -6,6 +6,7 @@ import { agentServeCommand } from "./commands/agent-serve.js";
 import { agentWatchCommand } from "./commands/agent-watch.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { reviewCommand } from "./commands/review.js";
+import { onboardAgentCommand } from "./commands/onboard-agent.js";
 import { loginCommand } from "./commands/login.js";
 import { logoutCommand } from "./commands/logout.js";
 import { whoamiCommand } from "./commands/whoami.js";
@@ -64,6 +65,7 @@ function printHelp(): void {
 Usage:
   octp                       Onboarding wizard (first run) or status hint
   octp onboard [--reset]     Run the onboarding wizard
+  octp onboard --agent --json [--repo owner/name]   Resumable GitHub setup for AI agents
 
 Auth & accounts:
   octp login [--token ...]   Sign in (browser device-flow or --token)
@@ -168,6 +170,11 @@ async function main(rawArgv: string[]): Promise<number> {
   }
 
   if (first === "onboard") {
+    if (argv.includes("--agent")) return await onboardAgentCommand(argv.slice(1));
+    if (argv.slice(1).some((arg) => arg !== "--reset")) {
+      console.error("Use octp onboard [--reset] or octp onboard --agent --json [--repo owner/name].");
+      return 2;
+    }
     {
       await renderWizard(argv.includes("--reset"));
       // If signing in under a named account (--account), register + activate it
