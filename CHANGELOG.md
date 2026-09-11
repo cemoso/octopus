@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.145] - 2026-09-11
+
+### Fixed
+- Reviews: feedback-based suppression now checks semantic similarity, preventing search ranking alone from hiding a finding.
+- Operators: feedback matching keeps the existing repository/organization scope and strict cosine threshold above 0.80. No database migration or reindex is required; failed or invalid feedback lookups retain findings.
+
 ## [1.0.144] - 2026-09-11
 
 ### Fixed
