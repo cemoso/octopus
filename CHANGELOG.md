@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Native CLI 0.5.1 finishes writing onboarding JSON before it exits, so coding agents receive complete onboarding results when capturing output through a pipe.
 
+## [1.0.156] - 2026-09-12
+
+### Fixed
+- CLI onboarding reuses the active repository when an inactive historical record shares its GitHub name, avoiding a failed connection or an unnecessary access prompt. Dismissed-only repositories remain dismissed. No database migration is required.
+
 ## [1.0.155] - 2026-09-11
 
 ### Fixed

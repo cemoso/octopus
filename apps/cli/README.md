@@ -100,7 +100,9 @@ link or the existing installation's repository settings link. Once access is
 available, Octopus imports the target repository and the agent follows indexing
 and analysis. Re-running setup reads live server status; completed work is reused.
 Failed jobs remain failed for inspection instead of being retried automatically.
-Deliberately removed repositories require a restore decision.
+An active repository record takes precedence over inactive history with the same
+GitHub name in the organisation. If only a dismissed record remains, setup requires
+a restore decision.
 If work fails or makes no progress for ten minutes, report the exact state and
 continuation command. Opening an approval link does not prove setup completed.
 

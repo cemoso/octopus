@@ -26,6 +26,9 @@ export async function POST(request: Request) {
     }, {
       find: () => prisma.repository.findFirst({
         where: { organizationId: identity.org.id, provider: "github", fullName: { equals: fullName, mode: "insensitive" } },
+        // Repository names are not unique: an inactive historical row may share
+        // the live repo's name after a transfer or recreation on GitHub.
+        orderBy: [{ isActive: "desc" }, { updatedAt: "desc" }, { id: "asc" }],
         select: { id: true, isActive: true, dismissedAt: true, installationId: true },
       }),
       appConfigured: async () => Boolean((await getGithubAppConfig())?.slug),
