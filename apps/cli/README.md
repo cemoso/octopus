@@ -65,6 +65,58 @@ The first invocation of bare `octp` triggers the onboarding wizard:
 
 Each step is small, has phase-state (`running | done | failed | skipped`), and follows the same footer convention: `Enter to continue · Esc to skip · Left to go back`.
 
+## Set up a repository with your AI
+
+Give this prompt to the coding agent already working on your project:
+
+```text
+Set up Octopus for this project using octp onboard --agent --json.
+Install the native CLI if needed. Follow nextAction.argv when a command is
+required. If login prints an approval URL or nextAction.url is returned,
+give me that link and explain the approval needed. Let me complete it.
+Then follow continueWith, waiting retryAfterSeconds between checks.
+Continue until state is ready and summarise the returned analysis.
+If work fails or makes no progress for ten minutes, report the exact state
+and continuation command. Do not claim that opening a link completed setup.
+```
+
+This requires a CLI and server version that include agent onboarding. Older
+servers return an explicit unsupported-server error; use the
+[CLI setup guide](https://octopus-review.ai/docs/cli) for those installations.
+
+```bash
+octp onboard --agent --json
+# Explicit GitHub target, with a named Octopus account:
+octp --account work onboard --agent --json --repo owner/repository
+```
+
+The command runs without a TTY and returns one JSON result per invocation.
+`schemaVersion` is `1`. `state`, `completed`, `nextAction` and `continueWith`
+tell the agent what to do next. Commands are argument arrays, so the agent
+should execute them as arguments without interpolating them into a shell.
+Exit codes: **0** ready, **3** waiting or approval required, **2** invalid input,
+**1** failed. Exit 3 is an expected handoff, not a command failure.
+
+The first run detects the GitHub repository from the current remote. Authentication
+uses `octp login --no-open`, which prints the approval URL and waits for the
+user. The agent keeps that login process running until it finishes, then resumes
+onboarding. Login credentials stay in the existing account store.
+
+For repository access, the command returns the signed GitHub App installation
+link or the existing installation's repository settings link. Once access is
+available, Octopus imports the target repository and the agent follows indexing
+and analysis. Re-running setup reads live server status; completed work is reused.
+Failed jobs remain failed for inspection instead of being retried automatically.
+Deliberately removed repositories require a restore decision.
+
+The first version supports github.com repositories, including self-hosted Octopus
+servers with a configured GitHub App. It keeps existing organisation model and
+billing defaults. It does not configure GitLab/Bitbucket, persist an in-flight login
+across a terminated login process, or make existing server analysis jobs durable
+across server restarts. An organisation owner's pending GitHub approval is described
+at the approval step; the command cannot independently distinguish it from an
+installation that has not yet been completed.
+
 ## Persistence
 
 State lives under `$OCTOPUS_HOME` (default `~/.octopus/`) in three files, all mode `0600` in a mode `0700` directory:

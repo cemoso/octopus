@@ -65,6 +65,24 @@ export async function createAppJwt(): Promise<string> {
   return `${header}.${payload}.${signature}`;
 }
 
+/** Browser settings URL for an installation belonging to this GitHub App. */
+export async function getInstallationSettingsUrl(installationId: number): Promise<string> {
+  const jwt = await createAppJwt();
+  const res = await fetchWithRetry(`${GITHUB_API}/app/installations/${installationId}`, {
+    headers: { Authorization: `Bearer ${jwt}`, Accept: "application/vnd.github+json" },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error("Could not read GitHub installation settings");
+  const data = await res.json();
+  if (data.id !== installationId || typeof data.html_url !== "string") throw new Error("Invalid installation response");
+  const url = new URL(data.html_url);
+  const validPath = new RegExp(`^/(?:settings/installations/${installationId}|organizations/[A-Za-z0-9-]+/settings/installations/${installationId})$`);
+  if (url.origin !== "https://github.com" || url.username || url.password || !validPath.test(url.pathname) || url.search || url.hash) {
+    throw new Error("Invalid installation settings URL");
+  }
+  return url.href;
+}
+
 export async function getInstallationPermissions(
   installationId: number,
 ): Promise<Record<string, string>> {
