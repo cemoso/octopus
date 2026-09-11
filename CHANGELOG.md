@@ -7,11 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.153] - 2026-09-11
+## [1.0.154] - 2026-09-11
 
 ### Fixed
 - Review summaries display literal pipes in inline code without confusing strict evidence readers. Code text, scores and saved review records are preserved.
 - Operators: presentation escaping uses the existing Markdown parser; tables, fenced examples, assessment and coverage gates remain unchanged. No database migration is required.
+
+## [1.0.153] - 2026-09-11
+
+### Added
+- Give your coding AI a copyable homepage prompt to install octp and connect, index and analyse the GitHub repository in your current project. You approve sign-in and GitHub access using direct links; the AI continues setup through the CLI.
+- Native CLI 0.5.0 adds `octp onboard --agent --json` with resumable server status and explicit next actions. Existing CLI installers remain available.
 
 ## [1.0.152] - 2026-09-11
 

@@ -49,6 +49,30 @@ export default function CLIPage() {
         <CodeBlock>{`powershell -c "irm https://octopus-review.ai/install.ps1 | iex"`}</CodeBlock>
       </Section>
 
+      <Section title="Let your AI handle setup">
+        <Paragraph>
+          Give the <Link href="/#agent-setup" className="text-white underline">homepage setup prompt</Link> to the AI working in your project.
+          With octp 0.5.0 or later, it can connect your GitHub repository, start or join indexing and analysis, and check the result through the CLI.
+        </Paragraph>
+        <CodeBlock>octp onboard --agent --json</CodeBlock>
+        <Paragraph>
+          Run this from the project directory, or supply <Mono>--repo owner/name</Mono>.
+          Use <Mono>--account name</Mono> to select an existing Octopus account profile.
+        </Paragraph>
+        <Paragraph>
+          If sign-in is needed, the AI runs the returned login command with <Mono>--no-open</Mono>,
+          gives you the approval URL, and keeps that process running while you approve.
+          GitHub App installation and repository access also return approval links.
+          Approve those in your browser, then let the AI continue through the CLI.
+        </Paragraph>
+        <Paragraph>
+          Agent setup currently supports github.com repositories. Existing organisation settings stay in place;
+          dismissed repositories and failed jobs need explicit attention. If login is interrupted, start it again.
+          See the <Link href="https://github.com/octopusreview/octopus/blob/master/apps/cli/README.md#set-up-a-repository-with-your-ai" className="text-white underline">agent protocol reference</Link> for
+          JSON fields, continuation arguments, exit codes and recovery limits.
+        </Paragraph>
+      </Section>
+
       {/* Auth */}
       <Section title="Authentication">
         <Paragraph>
