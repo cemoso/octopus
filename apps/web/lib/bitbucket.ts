@@ -1,4 +1,5 @@
 import "server-only";
+import { reviewPublicationSignal, type ReviewExecutionWindow } from "./review-capacity";
 import { readReviewJson } from "@/lib/review-fetch";
 import { attachReviewPatches, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
 import { prisma } from "@octopus/db";
@@ -196,11 +197,14 @@ export async function createPullRequestComment(
   repoSlug: string,
   prId: number,
   body: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<number> {
   const token = await getAccessToken(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}/comments`,
     {
+      signal,
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -226,11 +230,14 @@ export async function updatePullRequestComment(
   prId: number,
   commentId: number,
   body: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<void> {
   const token = await getAccessToken(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}/comments/${commentId}`,
     {
+      signal,
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,

@@ -182,3 +182,10 @@ export function completeReviewCandidate(
 export function reviewCandidateSha256(prepared: ReturnType<typeof prepareReviewInput>): string {
   return sha256(JSON.stringify({ diff: prepared.diff, coverage: prepared.coverage }));
 }
+
+export function reviewPublicationSignal(window?: ReviewExecutionWindow, maxMs?: number): AbortSignal | undefined {
+  if (!window) return maxMs === undefined ? undefined : AbortSignal.timeout(maxMs);
+  assertReviewProcessingActive(window);
+  const ms = Math.max(1, Math.floor(Math.min(window.remainingMs(), maxMs ?? Infinity)));
+  return AbortSignal.any([window.signal, AbortSignal.timeout(ms)]);
+}

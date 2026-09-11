@@ -1,8 +1,10 @@
+import "server-only";
 import { prisma } from "@octopus/db";
 import { calcCost, getModelPricing } from "./cost";
 import { deductCredits } from "./credits";
 
 type LogAiUsageParams = {
+  usedOwnKey?: boolean;
   provider: "anthropic" | "openai" | "google" | "cohere" | "grok" | "openrouter" | "alibaba" | "ollama" | "local" | "acp" | "opencode" | "claude-code" | "mock" | "mock-fail";
   model: string;
   operation: string;
@@ -36,7 +38,7 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
       return;
     }
 
-    const hasOwnKey =
+    const hasOwnKey = params.usedOwnKey ?? (
       (params.provider === "anthropic" && !!org.anthropicApiKey) ||
       (params.provider === "openai" && !!org.openaiApiKey) ||
       (params.provider === "google" && !!org.googleApiKey) ||
@@ -56,7 +58,7 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
       params.provider === "opencode" ||
       // Test doubles — zero cost.
       params.provider === "mock" ||
-      params.provider === "mock-fail";
+      params.provider === "mock-fail");
 
     // Compute the platform charge up front (needed for both the deduction and
     // the cost snapshot). Own-key usage is never charged.

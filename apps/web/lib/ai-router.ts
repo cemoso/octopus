@@ -200,7 +200,8 @@ export async function createAiMessage(
   }
 
   try {
-    return await getProvider(provider).create(params, orgKey, orgId);
+    const response = await getProvider(provider).create(params, orgKey, orgId);
+    return window ? { ...response, usedOwnKey: !!orgKey } : response;
   } catch (error) {
     if (error instanceof CapacityAdmissionError) throw error;
     const message = error instanceof Error ? error.message : String(error);

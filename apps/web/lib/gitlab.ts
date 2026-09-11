@@ -1,4 +1,5 @@
 import "server-only";
+import { reviewPublicationSignal, type ReviewExecutionWindow } from "./review-capacity";
 import { readReviewJson } from "@/lib/review-fetch";
 import { reviewFilePriority, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
 import { prisma } from "@octopus/db";
@@ -285,12 +286,15 @@ export async function createPullRequestComment(
   projectPath: string,
   mrIid: number,
   body: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<number> {
   const token = await getAccessToken(organizationId);
   const host = await getHost(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/merge_requests/${mrIid}/notes`,
     {
+      signal,
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -324,12 +328,15 @@ export async function setCommitStatus(
   name: string,
   description: string,
   targetUrl?: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<void> {
   const token = await getAccessToken(organizationId);
   const host = await getHost(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/statuses/${sha}`,
     {
+      signal,
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -359,12 +366,15 @@ export async function updatePullRequestComment(
   mrIid: number,
   noteId: number,
   body: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<void> {
   const token = await getAccessToken(organizationId);
   const host = await getHost(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/merge_requests/${mrIid}/notes/${noteId}`,
     {
+      signal,
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,

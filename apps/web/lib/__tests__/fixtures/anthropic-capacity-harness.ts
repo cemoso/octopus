@@ -12,7 +12,11 @@ let saved: { coverage: import("../../review-coverage").ReviewCoverage; reviewBod
 let claim = { id: "synthetic-pr", headSha: "a".repeat(40), reviewRequestVersion: 3, status: "reviewing" };
 let paused = false;
 let remote = { headSha: "a".repeat(40), baseSha: "b".repeat(40) };
+let usageRow: { usedOwnKey: boolean } | undefined;
+const charges: number[] = [];
+mock.module("../../credits", () => ({ deductCredits: async (_org: string, amount: number) => { charges.push(amount); } }));
 const db = {
+  aiUsage: { create: async ({ data }: { data: { usedOwnKey: boolean } }) => { usageRow = data; return { id: "usage" }; }, update: async () => ({}) },
   availableModel: { findMany: async () => [{ modelId: "claude-fable-5-1", provider, inputPrice: 0, outputPrice: 0 }] },
   organization: { findUnique: async () => org },
   reviewAttempt: { createMany: async ({ data }: { data: NonNullable<typeof saved>[] }) => { saved = structuredClone(data[0]); return { count: 1 }; } },
@@ -59,6 +63,9 @@ class FakeAnthropic {
       generationBody = body;
       return { finalMessage: async () => {
         if (mode === "generation-cancel") { controller.abort(); throw new FakeAnthropic.APIUserAbortError(); }
+        if (mode === "generation-add") org = { ...org, anthropicApiKey: "synthetic-new" };
+        if (mode === "generation-remove") org = { ...org, anthropicApiKey: "" };
+        if (mode === "generation-rotate") org = { ...org, anthropicApiKey: "synthetic-rotated" };
         if (mode === "generation-failure") throw new Error("synthetic transport ambiguity");
         return { content: [{ type: "text", text: mode === "malformed" ? "bad response" : valid }],
           stop_reason: mode === "truncated" ? "max_tokens" : "end_turn",
@@ -71,8 +78,9 @@ mock.module("@anthropic-ai/sdk", () => ({ default: FakeAnthropic }));
 const { anthropicProvider } = await import("../../providers/anthropic");
 // Isolate unrelated providers while exercising the real router and selected adapter.
 mock.module("../../providers", () => ({ getProvider: () => anthropicProvider }));
+const { logAiUsage } = await import("../../ai-usage");
 const { createAiMessage } = await import("../../ai-router");
-const { estimateCompleteReviewCost, getOrgSpendLimitStatus } = await import("../../cost");
+const { estimateCompleteReviewCost, getOrgSpendLimitStatus, getModelPricing } = await import("../../cost");
 const { executeCoveredReview } = await import("../../review-assessment");
 const { prepareReviewInput, applyReviewCoverage, reviewCheckResult, sha256 } = await import("../../review-coverage");
 const { CapacityAdmissionError, COMPLETE_REVIEW_POLICY: policy } = await import("../../review-capacity");
@@ -271,6 +279,23 @@ assert.equal(estimateCompleteReviewCost(low, policy.model, 10, 10, 2, 0.99), nul
 assert.equal(estimateCompleteReviewCost(low, policy.model, 10, 10, 0.1), null);
 assert.equal(estimateCompleteReviewCost(new Map([[policy.model, { input: 20, output: 100 }]]), policy.model, 330000, 64000, 2)?.estimateUsd, 23.52);
 reset(); await refusal("unsupported-route", req => { req.model = "claude-fable-5-1-alias"; });
+
+(await getModelPricing()).set(policy.model, { input: 10, output: 50 });
+for (const [scenario, initialKey] of [["generation-add", ""], ["generation-remove", "synthetic-byok"], ["generation-rotate", "synthetic-byok"]]) {
+  reset(); mode = scenario; org = { ...org, anthropicApiKey: initialKey, creditBalance: 100 };
+  const result = await createAiMessage(request(), "synthetic");
+  assert.equal(result.usedOwnKey, !!initialKey);
+  charges.length = 0;
+  await logAiUsage({ provider: result.provider, model: result.model, operation: "review",
+    ...result.usage, usedOwnKey: result.usedOwnKey, organizationId: "synthetic" });
+  assert.equal(usageRow?.usedOwnKey, !!initialKey);
+  assert.equal(charges.length, initialKey ? 0 : 1);
+  if (!initialKey) assert.ok(charges[0] > 0);
+}
+reset(); org = { ...org, anthropicApiKey: "synthetic-byok" };
+const ordinary = request(); delete ordinary.completeReviewAdmission;
+const ordinaryResult = await createAiMessage(ordinary, "synthetic");
+assert.equal(ordinaryResult.usedOwnKey, undefined);
 reset(); provider = "openrouter";
 const future = Date.now() + 301000;
 const epochSpy = spyOn(Date, "now").mockReturnValue(future);

@@ -7,8 +7,10 @@ let current = { headSha: head, reviewRequestVersion: 1, reviewCommentId: null as
 const archived = [{ id: "11111111-2222-4333-8444-555555555555", headSha: head, createdAt: new Date("2026-09-11T12:00:00Z"), reviewBody: "Original immutable report" }];
 const before = structuredClone(archived);
 let exists = true;
+let duringAuth: (() => Promise<void>) | undefined;
+let duringLock: (() => Promise<void>) | undefined;
 const tx = {
-  $queryRaw: async (_sql: TemplateStringsArray, id: string) => { assert.equal(id, "pr"); return exists ? [{ ...current }] : []; },
+  $queryRaw: async (_sql: TemplateStringsArray, id: string) => { assert.equal(id, "pr"); await duringLock?.(); return exists ? [{ ...current }] : []; },
   reviewAttempt: { findMany: async (query: { where: { pullRequestId: string }; take: number; select: Record<string, boolean> }) => {
     assert.equal(query.where.pullRequestId, "pr");
     assert.equal(query.take, 5);
@@ -50,7 +52,7 @@ const remote = new Map<string, number>();
 let beforeUpdate: (() => Promise<void>) | undefined;
 mock.module("@/lib/github", () => ({
   findPullRequestSummaryComment: async (_owner: string, _repo: string, _number: number, marker: string) => remote.get(marker) ?? null,
-  getInstallationToken: async () => "fixture-token",
+  getInstallationToken: async () => { await duringAuth?.(); return "fixture-token"; },
   createPullRequestComment: async (_installation: number, _owner: string, _repo: string, _number: number, body: string, _token: string, signal: AbortSignal, marker: string) => {
     assert.equal(signal.aborted, false);
     if (rejection) throw new Error(rejection);
@@ -171,3 +173,19 @@ assert.equal(await publishReviewSummary({ ...newer, reviewRequestVersion: 3 }), 
 assert.ok(calls.length >= finalCount);
 assert.deepEqual(archived, before);
 console.log("PASS stable summary, history, stale fencing, concurrency and failure handling");
+
+for (const stage of ["auth", "lock"]) {
+  exists = true;
+  current = { ...current, headSha: head, reviewRequestVersion: 1, status: "completed", reviewBody: "Scored", reviewCommentId: 100n };
+  const controller = new AbortController();
+  const cancel = async () => { await Promise.resolve(); controller.abort(); };
+  duringAuth = stage === "auth" ? cancel : undefined;
+  duringLock = stage === "lock" ? cancel : undefined;
+  const countBefore = calls.length;
+  await assert.rejects(publishReviewSummary({ ...target, body: "Score 5/5", expectedReviewBody: "Scored",
+    executionWindow: { jobId: "job", signal: controller.signal, deadlineEpochMs: Date.now() + 10000, remainingMs: () => 10000 } }));
+  assert.equal(calls.length, countBefore);
+  duringAuth = undefined; duringLock = undefined;
+  await publishReviewSummary({ ...target, body: "Unscored failure", expectedReviewBody: "Scored" });
+  assert.equal(calls.length, countBefore + 1);
+}

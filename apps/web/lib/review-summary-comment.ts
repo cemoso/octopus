@@ -3,7 +3,10 @@ import { prisma, type Prisma } from "@octopus/db";
 import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { createPullRequestComment, updatePullRequestComment, getInstallationToken, findPullRequestSummaryComment } from "@/lib/github";
 
+import { assertReviewProcessingActive, reviewPublicationSignal, type ReviewExecutionWindow } from "./review-capacity";
+
 type SummaryTarget = {
+  executionWindow?: ReviewExecutionWindow;
   pullRequestId: string;
   headSha: string | null;
   reviewRequestVersion: number | undefined;
@@ -28,7 +31,7 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
     let creationRejected = false;
     try {
       const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const signal = AbortSignal.timeout(10_000);
+        const signal = reviewPublicationSignal(target.executionWindow, 10_000)!;
         const [current] = await tx.$queryRaw<{
           headSha: string | null; reviewRequestVersion: number; reviewCommentId: bigint | null; reviewBody: string | null; status: string;
         }[]>`SELECT "headSha", "reviewRequestVersion", "reviewCommentId", "reviewBody", status
@@ -48,6 +51,7 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
         // Place history before the footer so consumers can still identify the head.
         const footer = /\n*Last reviewed commit: [0-9a-f]{40}\s*$/i.exec(target.body)?.[0] ?? "";
         const body = (footer ? target.body.slice(0, -footer.length) : target.body) + history + footer;
+        if (target.executionWindow) assertReviewProcessingActive(target.executionWindow);
         signal.throwIfAborted();
         let id = current.reviewCommentId === null ? null : Number(current.reviewCommentId);
         if (id === null) {
@@ -60,6 +64,8 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
           id = await findPullRequestSummaryComment(target.owner, target.repo, target.prNumber, marker!, token, signal);
           if (id === null) return { pendingCreation: true };
         }
+        if (target.executionWindow) assertReviewProcessingActive(target.executionWindow);
+        signal.throwIfAborted();
         if (id > 0) {
           try {
             await updatePullRequestComment(target.installationId, target.owner, target.repo, id, body, token, signal, marker);
@@ -70,6 +76,7 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
             return { reserved };
           }
         } else {
+          if (target.executionWindow) assertReviewProcessingActive(target.executionWindow);
           signal.throwIfAborted();
           creationAttempted = true;
           try {

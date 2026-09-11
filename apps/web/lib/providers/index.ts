@@ -75,6 +75,7 @@ export type AiCreateParams = {
 };
 
 export type AiResponse = {
+  usedOwnKey?: boolean;
   completion?: { state: "completed" | "incomplete" | "unknown"; reason: string | null };
   text: string;
   provider: AiProvider;

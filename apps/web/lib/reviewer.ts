@@ -244,6 +244,7 @@ Reply ONLY with a JSON array of strings, one per entry, in order. Example: ["dis
 
     await logAiUsage({
       provider: response.provider,
+      usedOwnKey: response.usedOwnKey,
       model: FEEDBACK_CLASSIFICATION_MODEL,
       operation: "feedback-classification",
       inputTokens: response.usage.inputTokens,
@@ -744,34 +745,34 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   };
 
   const attemptLabel = (id = attemptId) => `Review attempt: ${id}. Head: ${pr.headSha ?? "unknown"}.\n\n`;
-  const providerCreateComment = (prNumber: number, body: string, publishedAttemptId = attemptId) =>
+  const providerCreateComment = (prNumber: number, body: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) =>
     isGitHub
       ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body)
       : isGitlab
-        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel(publishedAttemptId) + body)
-        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body);
+        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow)
+        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow);
 
-  const publishMainComment = (body: string, expectedReviewBody?: string, publishedAttemptId = attemptId) => isGitHub
+  const publishMainComment = (body: string, expectedReviewBody?: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) => isGitHub
     ? publishReviewSummary({ pullRequestId: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion,
-      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel(publishedAttemptId) + body, expectedReviewBody })
-    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body, publishedAttemptId));
+      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel(publishedAttemptId) + body, expectedReviewBody, executionWindow: publicationWindow })
+    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body, publishedAttemptId, publicationWindow));
 
-  const providerUpdateComment = async (commentId: number, body: string, publishedAttemptId = attemptId) => {
+  const providerUpdateComment = async (commentId: number, body: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) => {
     if (isGitHub) {
-      reviewCommentId = await publishMainComment(body, undefined, publishedAttemptId);
+      reviewCommentId = await publishMainComment(body, undefined, publishedAttemptId, publicationWindow);
       return;
     }
     try {
       if (isGitlab) {
-        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel(publishedAttemptId) + body);
+        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
       } else {
-        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel(publishedAttemptId) + body);
+        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
       }
     } catch (err) {
       // If the comment was deleted externally, create a new one and update the reference
       if (err instanceof Error && err.message.includes("404")) {
         console.warn(`[reviewer] Comment ${commentId} not found (deleted?), creating new comment`);
-        const newId = await publishMainComment(body, undefined, publishedAttemptId);
+        const newId = await publishMainComment(body, undefined, publishedAttemptId, publicationWindow);
         reviewCommentId = newId;
         return;
       }
@@ -1802,6 +1803,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
 
     await logAiUsage({
       provider: response.provider,
+      usedOwnKey: response.usedOwnKey,
       model: reviewModel,
       operation: "review",
       inputTokens: response.usage.inputTokens,
@@ -1862,6 +1864,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
 
           await logAiUsage({
             provider: followUp.provider,
+            usedOwnKey: followUp.usedOwnKey,
             model: reviewModel,
             operation: "review-findings-followup",
             inputTokens: followUp.usage.inputTokens,
@@ -2380,12 +2383,12 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     // The final scored comment becomes visible only after its immutable outcome is durable.
     assertProcessingActive();
     if (isGitHub) {
-      reviewCommentId = await publishMainComment(mainCommentBody, effectiveReviewBody);
+      reviewCommentId = await publishMainComment(mainCommentBody, effectiveReviewBody, attemptId, completeReviewAdmission?.window);
     } else if (reviewCommentId) {
-      await providerUpdateComment(reviewCommentId, mainCommentBody);
+      await providerUpdateComment(reviewCommentId, mainCommentBody, attemptId, completeReviewAdmission?.window);
       console.log(`[reviewer] Placeholder comment updated — commentId: ${reviewCommentId}`);
     } else {
-      const newCommentId = await publishMainComment(mainCommentBody);
+      const newCommentId = await publishMainComment(mainCommentBody, undefined, attemptId, completeReviewAdmission?.window);
       reviewCommentId = newCommentId;
       console.log(`[reviewer] New review comment created — commentId: ${newCommentId}`);
     }
@@ -2410,14 +2413,14 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       await ghUpdateCheckRun(installationId, owner, repoName, checkRunId, conclusion, {
         title: checkResult.title,
         summary: summaryText,
-      });
+      }, completeReviewAdmission?.window);
       console.log(`[reviewer] Check run updated — conclusion: ${conclusion} (threshold: ${threshold})`);
     }
 
     if (pr.headSha && isGitlab) {
       const state = checkResult.conclusion === "failure" ? "failed" : "success";
       await gitlab
-        .setCommitStatus(org.id, projectPath, pr.headSha, state, GITLAB_STATUS_NAME, summaryText)
+        .setCommitStatus(org.id, projectPath, pr.headSha, state, GITLAB_STATUS_NAME, summaryText, undefined, completeReviewAdmission?.window)
         .catch((err) => console.error("[reviewer] Failed to set GitLab commit status:", err));
       console.log(`[reviewer] GitLab commit status set — state: ${state} (threshold: ${threshold})`);
     }
