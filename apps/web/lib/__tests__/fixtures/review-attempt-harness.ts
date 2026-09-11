@@ -128,8 +128,8 @@ assert.equal(rows.get(first)?.reviewBody, "First immutable report");
 assert.equal(current.reviewBody, "Second immutable report");
 await assert.rejects(saveReviewAttempt(first, "pr", coverage, "overwrite"), /identity conflict/);
 assert.equal(rows.get(first)?.reviewBody, "First immutable report");
-const request = async (headers: Record<string, string>) => {
-  const req = new NextRequest("https://example.test/api/review-attempts/" + first, { headers });
+const request = async (headers: Record<string, string>, suffix = "") => {
+  const req = new NextRequest("https://example.test/api/review-attempts/" + first + suffix, { headers });
   const routed = middleware(req);
   if (routed.headers.get("x-middleware-next") !== "1") return routed;
   return GET(req, { params: Promise.resolve({ id: first }) });
@@ -150,6 +150,30 @@ assert.equal((await authorized.json()).reviewBody, "First immutable report");
 assert.equal(authorized.headers.get("cache-control"), "private, no-store");
 assert.equal((await request({ "x-user": "bob" })).status, 404);
 assert.equal((await request({ "x-user": "alice" })).status, 200);
+const beforeNavigation = queries;
+const navigation = await request({ accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" });
+assert.equal(navigation.status, 307);
+assert.equal(navigation.headers.get("location"), `/review-attempts/${first}`);
+assert.equal(navigation.headers.get("cache-control"), "private, no-store");
+assert.equal(navigation.headers.get("vary"), "Accept");
+assert.equal(await navigation.text(), "");
+assert.equal(queries, beforeNavigation, "Browser redirect does not fetch private records");
+const pageRedirect = middleware(new NextRequest(`https://example.test/review-attempts/${first}`));
+assert.equal(new URL(pageRedirect.headers.get("location")!).searchParams.get("callbackUrl"), `/review-attempts/${first}`);
+for (const headers of [
+  { accept: "text/html;q=0,application/json", "x-user": "alice" },
+  { accept: "application/json", "x-user": "alice" },
+  { accept: "text/html", authorization: "Bearer owner" },
+]) {
+  const result = await request(headers);
+  assert.equal(result.status, 200);
+  assert.equal(result.headers.get("content-disposition"), `attachment; filename="review-attempt-${first}.json"`);
+  assert.equal((await result.json()).reviewBody, "First immutable report");
+}
+const download = await request({ accept: "text/html", "x-user": "alice" }, "?download=1");
+assert.equal(download.status, 200);
+assert.equal((await download.json()).reviewBody, "First immutable report");
+assert.equal((await request({ accept: "text/html" }, "?download=1")).status, 401);
 member = false;
 assert.equal((await request({ "x-user": "alice" })).status, 404);
 currentHead = "b".repeat(40);

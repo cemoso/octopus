@@ -84,6 +84,7 @@ it("preserves exact new and stored legacy attempt references through compact PAT
       await updatePullRequestComment(1, "fixture", "review", 123, body, "fixture-token");
       const output = published.at(-1)!;
       expect(output).toContain(`Full coverage and review record: ${url}`);
+      expect(output).not.toContain("sign-in required");
       expect(output).toContain("| Overall | 4/5 | Bounded |");
       expect(output).toContain("Assessment: Completed fixture.");
       expect(output).toContain("Comment truncated");
@@ -154,14 +155,18 @@ it("publishes coverage totals and the record link without a file inventory", asy
   } finally { globalThis.fetch = originalFetch; }
 });
 
-it("retains bounded review history when a scored report exceeds the GitHub limit", () => {
+it("retains compact and historical review links when a scored report exceeds the GitHub limit", () => {
   const head = "a".repeat(40);
-  const history = `### Review history (latest 1)\n\n- aaaaaaa · 2026-09-11T12:00:00.000Z · https://octopus-review.ai/api/review-attempts/11111111-2222-4333-8444-555555555555\n\nReview records require Octopus organization access.`;
+  for (const history of [
+    `Review history: https://octopus-review.ai/review-attempts/11111111-2222-4333-8444-555555555555`,
+    `### Review history (latest 1)\n\n- aaaaaaa · 2026-09-11T12:00:00.000Z · https://octopus-review.ai/api/review-attempts/11111111-2222-4333-8444-555555555555\n\nReview records require Octopus organization access.`,
+  ]) {
   const body = `## 🐙 Octopus Review\n\n### Score\n| Category | Score | Notes |\n| --- | --- | --- |\n| Overall | 4/5 | Bounded |\n\n### Findings\n${"Long finding ".repeat(6000)}\n\n${history}\n\nLast reviewed commit: ${head}`;
   const result = truncateForGithubComment(body);
   expect(result).toContain(history);
   expect(result.length).toBeLessThanOrEqual(MAX_GITHUB_COMMENT_BODY);
   expect(result.endsWith(`Last reviewed commit: ${head}`)).toBe(true);
+  }
 });
 
 

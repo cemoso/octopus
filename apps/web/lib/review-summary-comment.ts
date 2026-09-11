@@ -41,13 +41,12 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
         if (target.expectedReviewBody === undefined && current.status === "completed") return null;
 
         const attempts = await tx.reviewAttempt.findMany({
-          where: { pullRequestId: target.pullRequestId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 5,
-          select: { id: true, headSha: true, createdAt: true },
+          where: { pullRequestId: target.pullRequestId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 1,
+          select: { id: true },
         });
-        const history = attempts.length ? `\n\n### Review history (latest ${attempts.length})\n\n` + attempts.map(attempt => {
-          const url = new URL(`/api/review-attempts/${attempt.id}`, process.env.NEXT_PUBLIC_APP_URL ?? "https://octopus-review.ai").href;
-          return `- ${attempt.headSha?.slice(0, 7) ?? "Unknown head"} · ${attempt.createdAt.toISOString()} · ${url}`;
-        }).join("\n") + "\n\nReview records require Octopus organization access." : "";
+        const history = attempts[0]
+          ? `\n\nReview history: ${new URL(`/review-attempts/${attempts[0].id}`, process.env.NEXT_PUBLIC_APP_URL ?? "https://octopus-review.ai").href}`
+          : "";
         // Place history before the footer so consumers can still identify the head.
         const footer = /\n*Last reviewed commit: [0-9a-f]{40}\s*$/i.exec(target.body)?.[0] ?? "";
         const body = (footer ? target.body.slice(0, -footer.length) : target.body) + history + footer;

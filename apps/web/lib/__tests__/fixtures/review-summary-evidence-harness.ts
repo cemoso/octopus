@@ -51,7 +51,8 @@ assert.ok(published.includes("74/236 files fully supplied, 0 partial, 51 omitted
 assert.ok(published.includes("Overall: not assessed"));
 assert.ok(published.includes("Retained finding"));
 assert.ok(!published.includes("src/file-0.ts"));
-assert.ok(published.includes("Review history (latest 5)"));
+assert.ok(published.includes(`Review history: https://octopus-review.ai/review-attempts/${archives[0].id}`));
+assert.ok(!published.includes("Review history (latest") && !published.includes("organization access") && !published.includes("sign-in required"));
 assert.ok(published.includes("Full coverage and review record: https://"));
 assert.ok(calls.every(call => !/<details>|<summary>|<!-- octopus-summary:|\[Full coverage and review record\]/.test(call.body)));
 assert.ok(calls[0].body.includes("Octopus publication reference: fixture-pr:"));
@@ -67,4 +68,4 @@ if (process.env.REVIEW_EVIDENCE_DIR) {
   await Bun.write(join(dir, "publication-sequence.json"), JSON.stringify({ boundary: "Real publisher and GitHub HTTP adapter; in-memory database and simulated GitHub responses", calls, historicalComment: comments.get(12) }, null, 2));
   await Bun.write(join(dir, "github-summary.html"), `<!doctype html><meta charset="utf-8"><title>Generated GitHub summary</title><body><p>Actual emitted Markdown rendered locally; simulated GitHub transport.</p><article>${Bun.markdown.html(published)}</article></body>`);
 }
-console.log("PASS real publisher and HTTP formatter: queued → running → completed update comment 100; five history links; immutable archive and historical comment retained");
+console.log("PASS real publisher and HTTP formatter: queued → running → completed update comment 100; one readable history link; immutable archive and historical comment retained");
