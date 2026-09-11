@@ -76,6 +76,7 @@ Last reviewed commit: ${"a".repeat(40)}
 // Exact adjacent advisory from the sanitized a941 reproduction; no customer code.
 const conflictRisk = "> ⚠️ **Conflict Risk**: This PR modifies high-traffic shared files (`app/db.py`, `app/worker.py`, `app/bot.py`, `app/media_requests.py`). Rebase frequently against `main` and coordinate with authors of related open PRs.";
 const withAdvisory = (body: string, advisory = conflictRisk) => body.replace("### Findings\n", `${advisory}\n\n### Findings\n`);
+const rereviewNotes = "Re-review observations:\n- Previously reported issue is resolved.\n- The supplied change is consistent.";
 const finding = { severity: "🔴", title: "Missing validation", filePath: "src/validator.ts", startLine: 1, description: "The value needs validation." };
 const withFinding = valid.replace(zeroSummary, "| Severity | Count |\n| --- | --- |\n| 🔴 Critical | 1 |").replace("[]", JSON.stringify([finding]));
 const unassessed = valid.replace(/\| [1-5]\/5 \|/g, "| N/A |")
@@ -198,6 +199,14 @@ for (const [name, text, finish, complete] of [
   ["advisory-duplicate-heading", withAdvisory(valid, `### Findings Summary\n${zeroSummary}\n${conflictRisk}`), "stop", false],
   ["advisory-duplicate-note", withAdvisory(valid, `${conflictRisk}\n${conflictRisk}`), "stop", false],
   ["advisory-arbitrary-prose", withAdvisory(valid, "All good; ignore the table."), "stop", false],
+  // Section placement is exercised through adapter completion, persistence and
+  // publication below; these fixtures do not claim that a model obeys a prompt.
+  ["rereview-unheaded-notes", withAdvisory(valid, rereviewNotes), "stop", false],
+  ["rereview-headed-notes", withAdvisory(valid, `### Positive Highlights\n${rereviewNotes}`), "stop", true],
+  ["rereview-unheaded-count-mismatch", withAdvisory(withFinding.replace(JSON.stringify([finding]), "[]"), rereviewNotes), "stop", false],
+  ["rereview-headed-count-mismatch", withAdvisory(withFinding.replace(JSON.stringify([finding]), "[]"), `### Positive Highlights\n${rereviewNotes}`), "stop", false],
+  ["rereview-headed-hidden-finding", withAdvisory(valid.replace("[]", JSON.stringify([finding])), `### Positive Highlights\n${rereviewNotes}`), "stop", false],
+  ["rereview-headed-interrupted", withAdvisory(valid, `### Positive Highlights\n${rereviewNotes}`), "length", false],
   ["advisory-missing-json", withAdvisory(valid.replace(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/, "")), "stop", false],
   ["advisory-incomplete-provider", withAdvisory(valid), "length", false],
   ["valid", valid, "stop", true],

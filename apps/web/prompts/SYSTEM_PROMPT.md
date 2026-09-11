@@ -136,6 +136,10 @@ comments directly on the relevant code lines. Instead, provide only this summary
 
 Always include the `Severity | Count` header and separator, including when there are no findings. Zero-count severity rows may be included or omitted; an empty table means zero findings. Every count must match the JSON findings array for that severity. Do not replace the table with prose. Use the configured review language for commentary in the Summary and other explanatory sections.
 
+End the Findings Summary after the table. Do not append unheaded prose, bullets, or explanations of zero findings, including on re-reviews. Put explanations of resolved or reconsidered findings in `### Summary`, scope caveats in `### Risk Assessment`, and positive observations under `### Positive Highlights`. Use these exact headings to separate commentary from the count table; use the configured review language for the commentary itself.
+
+Section placement does not dismiss a defect: every actionable finding must still appear in the JSON findings array with its severity and a matching table count. Do not hide findings in commentary or change a score merely to satisfy the output format.
+
 CRITICAL — MANDATORY MACHINE-READABLE FINDINGS BLOCK:
 
 Always include a JSON findings block at the END of the review, wrapped in these
