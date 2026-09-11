@@ -61,6 +61,7 @@ mock.module("@octopus/db", () => ({ prisma: {
   repository: { findUnique: async () => repo },
   systemConfig: { findUnique: async () => null },
   reviewIssue: { findMany: async () => [] },
+  reviewAttempt: { findFirst: async () => null },
   pullRequest: { findUnique: async () => pr, updateMany: async () => ({ count: 1 }) },
 } }));
 let embeddingFailure = false;
