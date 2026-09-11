@@ -87,17 +87,17 @@ function plan(oversized = false, maxChars = 300000) {
   return result;
 }
 const requestFor = (p: ReturnType<typeof plan>, model = "gpt-test"): AiCreateParams => createCoveredReviewRequest({ model, system: "Trusted review template", number: 1, title: "Validators", author: "fixture", diff: p.diff, coverage: p.coverage, comment: "@octopus context", repoConfig: "" });
-// Exercise the PNG adapter through the actual assessment and report interfaces.
+// Exercise every v2 asset kind through assessment, persistence and publication.
 const { fetchGitHubReviewInput } = await import("../../github-review-input");
-const pngPath = "docs/screenshot.png";
-const pngDeclaration = `diff --git a/${pngPath} b/${pngPath}\nnew file mode 100644\nindex 0000000..ccccccc\nBinary files /dev/null and b/${pngPath} differ\n`;
+const assetPaths = ["png", "jpg", "jpeg", "ttf", "woff2", "zip"].map(ext => `assets/example.${ext}`);
+const pngDeclaration = assetPaths.map(pngPath => `diff --git a/${pngPath} b/${pngPath}\nnew file mode 100644\nindex 0000000..ccccccc\nBinary files /dev/null and b/${pngPath} differ\n`).join("");
 const mixedInput = await fetchGitHubReviewInput({
   expectedHead: "a".repeat(40), maxPatchChars: 10000,
   fetchDiff: async () => pngDeclaration,
   readJson: async suffix => suffix ? [
     { filename: "README.md", status: "added", additions: 1, deletions: 0, patch: "@@ -0,0 +1 @@\n+Product documentation\n" },
-    { filename: pngPath, status: "added", additions: 0, deletions: 0, sha: "c".repeat(40) },
-  ] : { head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) }, changed_files: 2 },
+    ...assetPaths.map(filename => ({ filename, status: "added", additions: 0, deletions: 0, sha: "c".repeat(40) })),
+  ] : { head: { sha: "a".repeat(40) }, base: { sha: "b".repeat(40) }, changed_files: 7 },
 });
 const mixed = prepareReviewInput(mixedInput.input, { maxChars: 10000 });
 assert.equal(reviewCheckResult(mixed.coverage, false, 0).conclusion, "failure");
@@ -105,11 +105,15 @@ output = { choices: [{ message: { content: valid }, finish_reason: "stop" }] };
 await executeCoveredReview(requestFor(mixed), mixed.coverage, "template-v1", request => openaiProvider.create(request, "fake"));
 assert.equal(mixed.coverage.assessment?.state, "completed");
 assert.equal(reviewCheckResult(mixed.coverage, false, 0).conclusion, "success");
-assert.equal(mixed.coverage.files.find(file => file.path === pngPath)?.state, "excluded");
+for (const path of assetPaths) {
+  const file = mixed.coverage.files.find(file => file.path === path);
+  assert.equal(file?.state, "excluded");
+  assert.equal(file?.binaryEvidence?.policy, "github-binary-assets-v2");
+}
 const mixedReport = applyReviewCoverage(valid, mixed.coverage, "mixed-png");
 assert.ok(mixedReport.includes("not reviewed"));
 assert.ok(mixedReport.includes("**4/5**"));
-const binaryOnly = prepareReviewInput({ ...mixedInput.input, expectedFiles: 1, files: mixedInput.input.files.slice(1) }, { maxChars: 0 });
+const binaryOnly = prepareReviewInput({ ...mixedInput.input, expectedFiles: 6, files: mixedInput.input.files.slice(1) }, { maxChars: 0 });
 recordNoModelAssessment(binaryOnly.coverage);
 const binaryReport = applyReviewCoverage("No changed text hunks were supplied for review.", binaryOnly.coverage, "binary-only");
 assert.equal(reviewCheckResult(binaryOnly.coverage, false, 0).conclusion, "success");
@@ -155,6 +159,30 @@ await executeCoveredReview(requestFor(unobservedPartial), unobservedPartial.cove
 assert.equal(unobservedPartial.coverage.assessment?.responseValidation?.state, "valid");
 assert.equal(unobservedPartial.coverage.assessment?.reason, "Actual provider request provenance unavailable");
 assert.equal(reviewAssessmentComplete(unobservedPartial.coverage), false);
+// Capture the actual outbound GitHub body, with external services mocked.
+const missingText = prepareReviewInput(mixedInput.input, { maxChars: 0 });
+recordNoModelAssessment(missingText.coverage);
+assert.equal(missingText.coverage.assessment?.state, "incomplete");
+for (const [name, plan, body] of [
+  ["mixed-assets", mixed, valid],
+  ["binary-assets-only", binaryOnly, "No changed text hunks were supplied for review."],
+  ["assets-missing-text", missingText, valid],
+] as const) {
+  const covered = applyReviewCoverage(body, plan.coverage, name);
+  const { report, comment } = finalizeReviewPresentation(body, covered, stripDetailedFindings(covered), plan.coverage, name, { hasCritical: false, hasHigh: false, hasMedium: false });
+  await saveReviewAttempt(name, "pr", plan.coverage, report);
+  await updatePullRequestComment(1, "fixture", "review", 123, comment, "fixture-token");
+  assert.ok(!published!.body.includes("| File | Input coverage | Reason |"));
+  assert.equal(rows.get(name)?.reviewBody, report);
+  if (name !== "assets-missing-text") assert.ok(report.includes("not reviewed"));
+  if (name === "mixed-assets") assert.ok(published!.body.includes("**4/5**"));
+  else assert.ok(!/[1-5]\/5/.test(published!.body));
+  assert.equal(reviewCheckResult(plan.coverage, false, 0).conclusion, name === "assets-missing-text" ? "failure" : "success");
+  if (process.env.BINARY_TEST_EVIDENCE_DIR) {
+    await Bun.write(`${process.env.BINARY_TEST_EVIDENCE_DIR}/${name}-github-comment.md`, published!.body);
+    await Bun.write(`${process.env.BINARY_TEST_EVIDENCE_DIR}/${name}-attempt.json`, JSON.stringify({ boundary: "Synthetic GitHub inputs and mocked model SDK, database and HTTP; production acquisition, assessment, persistence and publication functions", stored: rows.get(name), check: reviewCheckResult(plan.coverage, false, 0) }, null, 2));
+  }
+}
 for (const [name, text, finish, complete] of [
   ["adjacent-conflict-risk", withAdvisory(valid), "stop", true],
   ["adjacent-conflict-risk-finding", withAdvisory(withFinding), "stop", true],

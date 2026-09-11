@@ -1,5 +1,5 @@
 import { reviewFilePriority, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
-import { createBinaryPngEvidence, indexGitHubBinaryPngSections } from "@/lib/review-binary-assets";
+import { createBinaryAssetEvidence, indexGitHubBinarySections } from "@/lib/review-binary-assets";
 import { indexGitHubDiffSections } from "@/lib/github-diff-sections";
 import { recoverAddedGitHubTextPatch } from "@/lib/github-text-patches";
 
@@ -25,7 +25,7 @@ export async function fetchGitHubReviewInput(options: {
     options.onDiffError?.(error, { headSha: before.head!.sha!, baseSha: before.base!.sha! });
     throw error;
   });
-  const binarySections = indexGitHubBinaryPngSections(rawDiff);
+  const binarySections = indexGitHubBinarySections(rawDiff);
   const textSections = indexGitHubDiffSections(rawDiff);
   const revision = { provider: "github", headSha: before.head.sha, baseSha: before.base.sha };
   const files: ReviewFileInput[] = [];
@@ -49,7 +49,7 @@ export async function fetchGitHubReviewInput(options: {
       else supportingChars += patch?.length ?? 0;
       reviewFile.patch = patch;
       reviewFile.unavailable = typeof availablePatch === "string" && patch === undefined ? "File exceeds retained patch budget" : undefined;
-      if (file.patch === undefined) reviewFile.binaryEvidence = createBinaryPngEvidence(reviewFile, revision, binarySections.get(file.filename));
+      if (file.patch === undefined) reviewFile.binaryEvidence = createBinaryAssetEvidence(reviewFile, revision, binarySections.get(file.filename));
       files.push(reviewFile);
     }
     if (response.length < 100 || (expectedFiles !== null && files.length >= expectedFiles)) {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.150] - 2026-09-11
+
+### Fixed
+- Incomplete reviews distinguish a deliberately withheld score from malformed output. A valid partial-input response stays unscored, while malformed findings and interrupted provider calls retain their own failure reasons.
+- Operators: response validation is recorded independently from input coverage, actual request provenance and provider completion. Complete reviews still require a valid numeric assessment; input limits, exclusions and severity/confidence gates remain in effect. No database migration is required.
+
+## [1.0.149] - 2026-09-11
+
+### Fixed
+- GitHub reviews recognize declared binary JPEG images, TTF/WOFF2 fonts and ZIP archives alongside PNGs. Coverage explicitly excludes these assets and states that their contents were not reviewed; archives are not opened or checked for safety. Supplied text remains eligible, including code that handles these assets.
+- Operators: `github-binary-assets-v2` receipts bind the asset kind to verified declarations, file metadata and exact revisions. Historical PNG receipts retain their original policy and format. Input allowances and assessment gates remain in effect; text-budget omissions can still leave a review unassessed. No database migration is required.
+
 ## [1.0.148] - 2026-09-11
 
 ### Fixed
