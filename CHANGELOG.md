@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.150] - 2026-09-11
+
+### Fixed
+- Incomplete reviews distinguish a deliberately withheld score from malformed output. A valid partial-input response stays unscored, while malformed findings and interrupted provider calls retain their own failure reasons.
+- Operators: response validation is recorded independently from input coverage, actual request provenance and provider completion. Complete reviews still require a valid numeric assessment; input limits, exclusions and severity/confidence gates remain in effect. No database migration is required.
+
 ## [1.0.149] - 2026-09-11
 
 ### Fixed
