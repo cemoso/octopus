@@ -7,7 +7,7 @@ mock.module("server-only", () => ({}));
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 mock.module("@/lib/github-app-config", () => ({ getGithubAppConfig: async () => ({ appId: "1", privateKey: privateKey.export({ type: "pkcs8", format: "pem" }) }) }));
 const head = "a".repeat(40);
-let current = { headSha: head, reviewRequestVersion: 1, reviewCommentId: null as number | null, status: "pending", reviewBody: null as string | null };
+const current = { headSha: head, reviewRequestVersion: 1, reviewCommentId: null as number | null, status: "pending", reviewBody: null as string | null };
 const archives = Array.from({ length: 7 }, (_, i) => ({ id: `11111111-2222-4333-8444-${String(i).padStart(12, "0")}`, headSha: head, createdAt: new Date(`2026-09-${String(11-i).padStart(2,"0")}T12:00:00Z`), reviewBody: `Immutable report ${i}` }));
 const originalArchives = structuredClone(archives);
 const db = {
