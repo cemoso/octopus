@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Reviews now use similarity consistently when suppressing findings that match previously dismissed feedback.
+
 ## [1.0.143] - 2026-09-11
 
 ### Fixed

@@ -11,7 +11,6 @@ import {
   ensureDiagramCollection,
   upsertDiagramChunk,
   deleteDiagramChunksByPR,
-  searchFeedbackPatterns,
   ensureFeedbackCollection,
   upsertFeedbackPattern,
   searchReviewChunks,
@@ -19,6 +18,7 @@ import {
 import { extractAllMermaidBlocks, extractNodeLabels, DIAGRAM_TYPE_LABELS } from "@/lib/mermaid-utils";
 import { loadQueueConfig, computeStaleReclaimMs, enqueue, enqueueAfter } from "@/lib/queue";
 import { createEmbeddings } from "@/lib/embeddings";
+import { suppressFindingsFromFeedback } from "@/lib/feedback-suppression";
 import { generateSparseVector } from "@/lib/sparse-vector";
 import { substitutePromptVars } from "@/lib/prompt-substitute";
 import { rerankDocuments } from "@/lib/reranker";
@@ -1906,39 +1906,8 @@ export async function processReview(pullRequestId: string): Promise<void> {
       }
     }
 
-    // Semantic feedback matching: suppress findings that match known false positive patterns
-    try {
-      await ensureFeedbackCollection();
-
-      // Build texts for ALL parsed findings (used for both inline filtering and summary filtering)
-      const allFindingTexts = allParsedFindings.map((f) => `${f.title} ${f.description}`);
-      if (allFindingTexts.length > 0) {
-        const allFindingVectors = await createEmbeddings(allFindingTexts, {
-          organizationId: org.id,
-          operation: "embedding",
-          repositoryId: repo.id,
-        });
-
-        const suppressedAllIndexes = new Set<number>();
-        for (let i = 0; i < allParsedFindings.length; i++) {
-          const matches = await searchFeedbackPatterns(repo.id, allFindingVectors[i], 3, org.id, allFindingTexts[i]);
-          const falsePositiveMatch = matches.find(
-            (m) => m.feedback === "down" && m.score > 0.80,
-          );
-          if (falsePositiveMatch) {
-            suppressedAllIndexes.add(i);
-          }
-        }
-
-        if (suppressedAllIndexes.size > 0) {
-          // Suppress dismissed-pattern findings from the union (single source).
-          allParsedFindings = allParsedFindings.filter((_, i) => !suppressedAllIndexes.has(i));
-          console.log(`[reviewer] Suppressed ${suppressedAllIndexes.size} findings via semantic feedback matching`);
-        }
-      }
-    } catch (err) {
-      console.warn("[reviewer] Semantic feedback matching failed, continuing:", err);
-    }
+    // Apply the shared policy to the full union before validation/presentation.
+    allParsedFindings = await suppressFindingsFromFeedback(allParsedFindings, { repoId: repo.id, orgId: org.id });
 
     // Two-pass validation: re-score confidence on the FULL union with cross-file
     // context. Runs once on allParsedFindings so both the summary table and the
