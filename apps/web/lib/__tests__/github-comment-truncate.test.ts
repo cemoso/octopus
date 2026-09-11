@@ -1,6 +1,6 @@
 import { describe, it, expect, mock } from "bun:test";
 mock.module("server-only", () => ({}));
-const { MAX_GITHUB_COMMENT_BODY, truncateForGithubComment, createPullRequestReview } = await import("@/lib/github");
+const { MAX_GITHUB_COMMENT_BODY, truncateForGithubComment, createPullRequestReview, updatePullRequestComment } = await import("@/lib/github");
 
 describe("truncateForGithubComment", () => {
   it("returns short bodies unchanged", () => {
@@ -55,6 +55,56 @@ describe("truncateForGithubComment", () => {
     // Sanity: re-encoding through JSON preserves all code points.
     expect(() => JSON.parse(JSON.stringify({ body: out }))).not.toThrow();
   });
+});
+
+it("preserves exact new and stored legacy attempt references through compact PATCH publication", async () => {
+  const head = "a".repeat(40), base = "b".repeat(40);
+  const attemptId = "11111111-2222-4333-8444-555555555555";
+  const url = `https://octopus-review.ai/api/review-attempts/${attemptId}`;
+  const revision = `Head: \`${head}\`. Base: \`${base}\`.`;
+  const references = [
+    `Attempt: ${attemptId} ${url}.\n${revision}`,
+    `Attempt: [\`${attemptId}\`](${url}). ${revision}`,
+  ];
+  const prefix = `Review attempt: ${attemptId}. Head: ${head}.\n\n`;
+  const canonical = `## 🐙 Octopus Review\n\n### Score\n| Category | Score | Notes |\n| --- | --- | --- |\n| Overall | 4/5 | Bounded |\n\n### Findings\n${"long explanation ".repeat(6000)}\n\nLast reviewed commit: ${head}`;
+  const originalFetch = globalThis.fetch;
+  const published: string[] = [];
+  globalThis.fetch = (async (request: unknown, init?: RequestInit) => {
+    expect(String(request)).toBe("https://api.github.com/repos/fixture/review/issues/comments/123");
+    expect(init?.method).toBe("PATCH");
+    published.push(JSON.parse(String(init?.body)).body);
+    return Response.json({ id: 123 });
+  }) as typeof fetch;
+  try {
+    const banners = ["", "> ✅ No new issues detected since the last review.\n\n", `> ✅ No new issues detected since the last review (commit \`${head.slice(0, 7)}\`).\n\n`];
+    for (const reference of references) for (const banner of banners) {
+      const body = `${prefix}${banner}### Review coverage\n\n**Review scope complete: 1/1 files fully supplied.**\n\n${reference}\n\nAssessment: Completed fixture.\n\n${canonical}`;
+      await updatePullRequestComment(1, "fixture", "review", 123, body, "fixture-token");
+      const output = published.at(-1)!;
+      expect(output).toContain(reference);
+      expect(output).toContain("| Overall | 4/5 | Bounded |");
+      expect(output).toContain("Assessment: Completed fixture.");
+      expect(output).toContain("Comment truncated");
+      expect(output.startsWith(prefix)).toBe(true);
+      expect(output.endsWith(`Last reviewed commit: ${head}`)).toBe(true);
+      expect(output.length).toBeLessThanOrEqual(MAX_GITHUB_COMMENT_BODY);
+    }
+    // A finding's arbitrary link or mismatched attempt download is not evidence metadata.
+    for (const invalid of [
+      `Attempt: [unrelated](https://example.test/unrelated).`,
+      references[0].replace(`/api/review-attempts/${attemptId}`, "/api/review-attempts/other-attempt"),
+    ]) {
+      const body = `${prefix}### Review coverage\n\n**Review scope complete: 1/1 files fully supplied.**\n\n${invalid}\n\nAssessment: Completed fixture.\n\n${canonical}`;
+      await updatePullRequestComment(1, "fixture", "review", 123, body, "fixture-token");
+      expect(published.at(-1)).not.toContain(invalid);
+    }
+    const arbitraryPrefix = `${prefix}> An arbitrary finding, not the provider re-review banner.\n\n### Review coverage\n\n**Review scope complete: 1/1 files fully supplied.**\n\n${references[0]}\n\n${canonical}`;
+    await updatePullRequestComment(1, "fixture", "review", 123, arbitraryPrefix, "fixture-token");
+    expect(published.at(-1)).not.toContain(references[0]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 it("pins submitted review records to the originating commit", async () => {

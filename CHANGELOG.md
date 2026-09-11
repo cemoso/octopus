@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Review coverage tables now use ordinary Markdown instead of HTML. Attempt URLs and revision details remain visible, including in shortened GitHub comments and retries of older report formats.
+
 ## [1.0.141] - 2026-09-11
 
 ### Fixed
