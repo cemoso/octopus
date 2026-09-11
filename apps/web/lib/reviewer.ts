@@ -743,35 +743,35 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     }
   };
 
-  const attemptLabel = `Review attempt: ${attemptId}. Head: ${pr.headSha ?? "unknown"}.\n\n`;
-  const providerCreateComment = (prNumber: number, body: string) =>
+  const attemptLabel = (id = attemptId) => `Review attempt: ${id}. Head: ${pr.headSha ?? "unknown"}.\n\n`;
+  const providerCreateComment = (prNumber: number, body: string, publishedAttemptId = attemptId) =>
     isGitHub
-      ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel + body)
+      ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body)
       : isGitlab
-        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel + body)
-        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel + body);
+        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel(publishedAttemptId) + body)
+        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body);
 
-  const publishMainComment = (body: string, expectedReviewBody?: string) => isGitHub
+  const publishMainComment = (body: string, expectedReviewBody?: string, publishedAttemptId = attemptId) => isGitHub
     ? publishReviewSummary({ pullRequestId: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion,
-      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel + body, expectedReviewBody })
-    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body));
+      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel(publishedAttemptId) + body, expectedReviewBody })
+    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body, publishedAttemptId));
 
-  const providerUpdateComment = async (commentId: number, body: string) => {
+  const providerUpdateComment = async (commentId: number, body: string, publishedAttemptId = attemptId) => {
     if (isGitHub) {
-      reviewCommentId = await publishMainComment(body);
+      reviewCommentId = await publishMainComment(body, undefined, publishedAttemptId);
       return;
     }
     try {
       if (isGitlab) {
-        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel + body);
+        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel(publishedAttemptId) + body);
       } else {
-        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel + body);
+        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel(publishedAttemptId) + body);
       }
     } catch (err) {
       // If the comment was deleted externally, create a new one and update the reference
       if (err instanceof Error && err.message.includes("404")) {
         console.warn(`[reviewer] Comment ${commentId} not found (deleted?), creating new comment`);
-        const newId = await publishMainComment(body);
+        const newId = await publishMainComment(body, undefined, publishedAttemptId);
         reviewCommentId = newId;
         return;
       }
@@ -2549,11 +2549,12 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
 
     // Update placeholder comment with error if possible
     if (isGitHub && failureBody) {
-      await publishMainComment(failureBody, failureBody).catch((e) => console.error("[reviewer] Failed to publish archived failure:", e));
+      await publishMainComment(failureBody, failureBody, failureAttemptId).catch((e) => console.error("[reviewer] Failed to publish archived failure:", e));
     } else if (reviewCommentId) {
       await providerUpdateComment(
         reviewCommentId,
         failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
+        failureAttemptId,
       ).catch((e) => console.error("[reviewer] Failed to update placeholder with error:", e));
     }
 

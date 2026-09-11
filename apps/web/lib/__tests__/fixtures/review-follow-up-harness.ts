@@ -322,7 +322,8 @@ for (const stage of ["before-validator", "during-validator", "expired-validator"
   assert.equal(coverage.files[0].state, "supplied", stage);
   assert.ok(coverage.assessment?.reason.includes("cancelled or expired"), stage);
   assert.ok(!/\|[^\n]*[1-5]\/5/.test(summaries.at(-1)!), stage);
-  assert.ok(summaries.at(-1)!.includes(failed.id), stage);
+  assert.ok(summaries.at(-1)!.startsWith(`Review attempt: ${failed.id}. Head:`), stage);
+  assert.ok(summaries.at(-1)!.includes(`/api/review-attempts/${failed.id}`), stage);
   assert.ok(!checkConclusions.slice(checks).includes("success"), stage);
   if (stage === "before-validator") assert.equal(validatorCalls, validations);
   else assert.equal(validatorCalls, validations + 1);
