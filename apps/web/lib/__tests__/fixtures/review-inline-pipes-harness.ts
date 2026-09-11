@@ -55,3 +55,31 @@ for (const expectedMethod of ["POST", "PATCH"]) {
   assert.deepEqual(archived, before);
 }
 console.log("PASS actual POST/PATCH keeps rendered pipe text, score and immutable records");
+
+// Run pathological Markdown only in this killable child process. A synchronous
+// parser cannot be interrupted by a timer in its own event loop.
+const { formatReviewInlinePipes } = await import("../../review-comment-markdown");
+for (const source of [
+  "[".repeat(30_000) + "`a|b`" + "]".repeat(30_000),
+  "[x ".repeat(8_000) + "`a|b`" + " ]".repeat(8_000),
+  "a".repeat(64_000) + " `a|b`",
+  "!".repeat(2_046) + " `a|b`", // Aggregate punctuation, including the span, exceeds 2,048.
+]) {
+  assert.equal(formatReviewInlinePipes(source), source);
+  const body = `## 🐙 Octopus Review\n\n${source}\n\n${score}\n\nLast reviewed commit: ${head}`;
+  current.reviewBody = body;
+  archived[0].reviewBody = body;
+  const saved = structuredClone(archived);
+  await publishReviewSummary({ ...target, body, expectedReviewBody: body });
+  const output = calls.at(-1)!;
+  assert.equal(output.method, "PATCH");
+  if (body.length < 60_500) assert.ok(output.body.includes(source));
+  else assert.ok(output.body.length <= 64_000);
+  assert.equal(current.reviewBody, body);
+  assert.deepEqual(archived, saved);
+}
+for (const source of ["a".repeat(63_995) + "`a|b`", "!".repeat(2_045) + " `a|b`"]) {
+  assert.notEqual(formatReviewInlinePipes(source), source);
+  assert.equal(formatReviewInlinePipes(formatReviewInlinePipes(source)), formatReviewInlinePipes(source));
+}
+console.log("PASS bounded formatting retains unsupported inputs and immutable records");

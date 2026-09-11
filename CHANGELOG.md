@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Review summaries display literal pipes in inline code without confusing strict evidence readers. Code text, scores and saved review records are preserved.
-- Operators: presentation escaping uses the existing Markdown parser; tables, fenced examples, assessment and coverage gates remain unchanged. No database migration is required.
+- Operators: presentation escaping uses the existing Markdown parser with conservative size and punctuation admission limits; unsupported input remains unchanged. Tables, fenced examples, assessment and coverage gates remain unchanged. No database migration is required.
 
 ## [1.0.153] - 2026-09-11
 

@@ -9,6 +9,17 @@ const protectedNodes = new Set(["table", "code", "html", "link", "linkReference"
 /** Keep literal pipes visible without placing them inside consumer-sensitive code spans. */
 export function formatReviewInlinePipes(body: string): string {
   if (!body.includes("|") || !body.includes("`")) return body;
+  // Optional formatting must not monopolize publication on adversarial Markdown.
+  // These conservative admission limits bound the demonstrated parser hot path;
+  // unsupported input retains its bytes and the existing downstream size/gates.
+  if (body.length > 64_000) return body;
+  let punctuation = 0;
+  for (let i = 0; i < body.length; i++) {
+    const code = body.charCodeAt(i);
+    if (((code >= 33 && code <= 47) || (code >= 58 && code <= 64) ||
+         (code >= 91 && code <= 96) || (code >= 123 && code <= 126)) &&
+        ++punctuation > 2_048) return body;
+  }
   const edits: { start: number; end: number; value: string }[] = [];
   function visit(node: Nodes, prose = false): void {
     if (protectedNodes.has(node.type)) return;
