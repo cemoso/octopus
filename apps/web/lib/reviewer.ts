@@ -687,6 +687,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   const repo = pr.repository;
   const org = repo.organization;
   const attemptId = crypto.randomUUID();
+  let adaptiveProcessingWindow: ReviewExecutionWindow | undefined;
   let attemptCoverage: ReviewCoverage | undefined;
   let attemptSaved = false;
 
@@ -1778,6 +1779,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       author: pr.author, diff, coverage, comment: pr.triggerCommentBody ?? "",
       repoConfig: repoConfigUserBlock,
     });
+    adaptiveProcessingWindow = completeReviewAdmission?.window;
     const response = await executeCoveredReview({ ...primaryRequest, ...(completeReviewAdmission ? { completeReviewAdmission } : {}) },
       coverage, getSystemPrompt(), request => createAiMessage(request, org.id));
     const assertProcessingActive = () => { if (completeReviewAdmission) assertReviewProcessingActive(completeReviewAdmission.window); };
@@ -2421,7 +2423,10 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       const state = checkResult.conclusion === "failure" ? "failed" : "success";
       await gitlab
         .setCommitStatus(org.id, projectPath, pr.headSha, state, GITLAB_STATUS_NAME, summaryText, undefined, completeReviewAdmission?.window)
-        .catch((err) => console.error("[reviewer] Failed to set GitLab commit status:", err));
+        .catch((err) => {
+          assertProcessingActive();
+          console.error("[reviewer] Failed to set GitLab commit status:", err);
+        });
       console.log(`[reviewer] GitLab commit status set — state: ${state} (threshold: ${threshold})`);
     }
 
@@ -2524,6 +2529,10 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
 
     console.log(`[reviewer] Review completed for PR #${pr.number}`);
   } catch (err) {
+    if (adaptiveProcessingWindow
+      && (adaptiveProcessingWindow.signal.aborted || adaptiveProcessingWindow.remainingMs() <= 0)) {
+      err = new ReviewProcessingExpiredError();
+    }
     const errorMessage =
       err instanceof Error ? err.message : "Unknown error";
     console.error(`[reviewer] Review failed for PR #${pr.number}:`, err);
