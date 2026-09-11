@@ -2,6 +2,7 @@ import Link from "next/link";
 import { IconDownload, IconGitPullRequest, IconHistory } from "@tabler/icons-react";
 import { RepositoryAnalysisMarkdown } from "@/components/repository-analysis-markdown";
 import { Button } from "@/components/ui/button";
+import { canRenderReviewMarkdown } from "@/lib/review-markdown-budget";
 
 type HistoryEntry = { id: string; headSha: string | null; createdAt: Date };
 export type ReviewRecord = HistoryEntry & {
@@ -51,15 +52,23 @@ export function ReviewRecordView({ record }: { record: ReviewRecord }) {
             <h2 className="text-lg font-semibold">Review from {reviewDate(record.createdAt)}</h2>
             <p className="text-sm text-muted-foreground">Commit <code>{record.headSha?.slice(0, 7) ?? "not recorded"}</code></p>
           </div>
-          <div className="min-w-0 break-words text-sm [&_table]:my-4 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2 [&_th]:text-left">
+          <div className="min-w-0 break-words text-sm [&_table]:my-4 [&_table]:block [&_table]:max-h-96 [&_table]:max-w-full [&_table]:overflow-auto [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2 [&_th]:text-left">
+            {canRenderReviewMarkdown(record.reviewBody) ? (
             <RepositoryAnalysisMarkdown content={record.reviewBody} components={{
               h1: ({ children }) => <h3 className="my-4 text-lg font-semibold">{children}</h3>,
               h2: ({ children }) => <h3 className="my-4 text-lg font-semibold">{children}</h3>,
               h3: ({ children }) => <h4 className="my-3 font-semibold">{children}</h4>,
+              h4: ({ children }) => <h5 className="my-3 font-semibold">{children}</h5>,
             }} />
+            ) : (
+              <>
+                <p className="mb-3 text-muted-foreground">Showing this review as plain text. Download JSON includes the original record.</p>
+                <pre className="max-h-160 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-muted p-4 text-sm" tabIndex={0} aria-label="Saved review in plain text">{record.reviewBody}</pre>
+              </>
+            )}
           </div>
           <details className="mt-6 border-t pt-4 text-sm">
-            <summary className="cursor-pointer py-2 font-medium">Record details</summary>
+            <summary className="min-h-11 cursor-pointer py-3 font-medium">Record details</summary>
             <dl className="mt-3 space-y-3 break-all text-muted-foreground">
               <div><dt className="font-medium text-foreground">Review ID</dt><dd>{record.id}</dd></div>
               <div><dt className="font-medium text-foreground">Head commit</dt><dd>{record.headSha ?? "Not recorded"}</dd></div>

@@ -84,4 +84,24 @@ assert.ok(!html.includes(`/review-attempts/${entries[10].id}`));
 assert.ok(html.includes("Original finding") && html.includes("4/5") && html.includes("<table>"));
 assert.ok(!html.includes("<script") && !html.includes("<img") && !html.includes("tracker.invalid") && !html.includes('href="javascript:'));
 assert.equal(result.record.reviewBody, report, "Rendering preserves the immutable report");
+for (const largeBody of [
+  "[".repeat(16_000) + "`a|b`" + "]".repeat(16_000),
+  "before ".repeat(10_000) + "<script>alert(1)</script>",
+  Array.from({ length: 2_050 }, () => "sentence with punctuation! ").join(""),
+]) {
+  const saved = { ...result.record, reviewBody: largeBody };
+  const rendered = renderToStaticMarkup(<ReviewRecordView record={saved} />);
+  assert.ok(rendered.includes("Showing this review as plain text"));
+  assert.ok(rendered.includes('aria-label="Saved review in plain text"'));
+  assert.ok(!rendered.includes("<script"));
+  assert.equal(saved.reviewBody, largeBody);
+}
+const { prepareReviewInput, applyReviewCoverage } = await import("../../review-coverage");
+const input = prepareReviewInput({ provider: "github", headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true,
+  expectedFiles: 1, limitations: [], files: [{ path: "src/example.ts", change: "added", patch: "@@ -0,0 +1 @@\n+export const example = 1;\n" }],
+}, { maxChars: 10_000 });
+const archivedBody = applyReviewCoverage("## 🐙 Octopus Review\n\nA saved response without a valid numeric assessment.\n\n<!-- OCTOPUS_FINDINGS_START -->\n[]\n<!-- OCTOPUS_FINDINGS_END -->", input.coverage, id);
+const archivedHtml = renderToStaticMarkup(<ReviewRecordView record={{ ...result.record, reviewBody: archivedBody }} />);
+assert.ok(archivedHtml.includes("src/example.ts") && archivedHtml.includes("Assessment:"));
+assert.ok(archivedHtml.includes("Overall: not assessed"), "A complete inventory must not hide invalid assessment status");
 console.log("PASS protected readable review history, bounded metadata, original report and safe Markdown");
