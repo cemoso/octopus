@@ -58,9 +58,6 @@ export default function CLIPage() {
         <Paragraph>
           Run this from the project directory, or supply <Mono>--repo owner/name</Mono>.
           Use <Mono>--account name</Mono> to select an existing Octopus account profile.
-          Each invocation returns one JSON result with a state, <Mono>nextAction</Mono>,
-          and a <Mono>continueWith</Mono> argument array. Follow those instructions and
-          respect <Mono>retryAfterSeconds</Mono> while waiting for work to finish.
         </Paragraph>
         <Paragraph>
           If sign-in is needed, the AI runs the returned login command with <Mono>--no-open</Mono>,
@@ -69,10 +66,10 @@ export default function CLIPage() {
           Approve those in your browser, then let the AI continue through the CLI.
         </Paragraph>
         <Paragraph>
-          Exit codes: <Mono>0</Mono> means ready, <Mono>3</Mono> means waiting or human action required,
-          <Mono>2</Mono> means invalid input, and <Mono>1</Mono> means failure.
           Agent setup currently supports github.com repositories. Existing organisation settings stay in place;
           dismissed repositories and failed jobs need explicit attention. If login is interrupted, start it again.
+          See the <Link href="https://github.com/octopusreview/octopus/blob/master/apps/cli/README.md#set-up-a-repository-with-your-ai" className="text-white underline">agent protocol reference</Link> for
+          JSON fields, continuation arguments, exit codes and recovery limits.
         </Paragraph>
       </Section>
 

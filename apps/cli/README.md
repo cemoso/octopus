@@ -67,18 +67,8 @@ Each step is small, has phase-state (`running | done | failed | skipped`), and f
 
 ## Set up a repository with your AI
 
-Give this prompt to the coding agent already working on your project:
-
-```text
-Set up Octopus for this project using octp onboard --agent --json.
-Install the native CLI if needed. Follow nextAction.argv when a command is
-required. If login prints an approval URL or nextAction.url is returned,
-give me that link and explain the approval needed. Let me complete it.
-Then follow continueWith, waiting retryAfterSeconds between checks.
-Continue until state is ready and summarise the returned analysis.
-If work fails or makes no progress for ten minutes, report the exact state
-and continuation command. Do not claim that opening a link completed setup.
-```
+Give the [homepage setup prompt](https://octopus-review.ai/#agent-setup) to the
+coding agent already working on your project.
 
 This requires a CLI and server version that include agent onboarding. Older
 servers return an explicit unsupported-server error; use the
@@ -94,6 +84,7 @@ The command runs without a TTY and returns one JSON result per invocation.
 `schemaVersion` is `1`. `state`, `completed`, `nextAction` and `continueWith`
 tell the agent what to do next. Commands are argument arrays, so the agent
 should execute them as arguments without interpolating them into a shell.
+Respect `retryAfterSeconds` between status checks.
 Exit codes: **0** ready, **3** waiting or approval required, **2** invalid input,
 **1** failed. Exit 3 is an expected handoff, not a command failure.
 
@@ -108,6 +99,8 @@ available, Octopus imports the target repository and the agent follows indexing
 and analysis. Re-running setup reads live server status; completed work is reused.
 Failed jobs remain failed for inspection instead of being retried automatically.
 Deliberately removed repositories require a restore decision.
+If work fails or makes no progress for ten minutes, report the exact state and
+continuation command. Opening an approval link does not prove setup completed.
 
 The first version supports github.com repositories, including self-hosted Octopus
 servers with a configured GitHub App. It keeps existing organisation model and
