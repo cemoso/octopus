@@ -1,3 +1,4 @@
+import "server-only";
 import Link from "@/components/link";
 import { ORGANIZATION_ENTITY } from "@/lib/structured-data";
 import { headers } from "next/headers";
@@ -9,7 +10,7 @@ import { TrackedLink, TrackedAnchor } from "@/components/tracked-link";
 import { LandingFooter } from "@/components/landing-footer";
 import { LandingMobileNav } from "@/components/landing-mobile-nav";
 import { LandingDesktopNav } from "@/components/landing-desktop-nav";
-import { RotatingHeroText } from "@/components/landing-rotating-hero";
+import { LandingAgentPrompt } from "@/components/landing-agent-prompt";
 import { LandingTerminalHero } from "@/components/landing-terminal-hero";
 import { NewsletterForm } from "@/components/landing-newsletter";
 import { CliInstallSection } from "@/components/landing-cli-install";
@@ -147,62 +148,38 @@ export default async function LandingPage() {
         <div className="mx-auto grid max-w-6xl grid-cols-1 items-center gap-12 lg:grid-cols-2 lg:gap-12">
          <div className="text-center lg:text-left">
           <h1 className="animate-fade-in text-4xl font-bold leading-[1.1] tracking-tight text-white [animation-delay:100ms] sm:text-5xl md:text-6xl">
-            Review every PR
+            Give your AI this prompt.
             <br />
-            <span className="text-[#777]">with repo context.</span>
+            <span className="text-[#10D8BE]">Let it handle the rest.</span>
           </h1>
 
-          <p className="animate-fade-in mx-auto mt-6 min-h-16 max-w-2xl text-base leading-relaxed text-[#777] [animation-delay:200ms] sm:text-lg lg:mx-0">
-            <RotatingHeroText
-              texts={[
-                "Octopus indexes your codebase, applies team standards,\nand leaves source-backed comments with severity on every pull request.",
-                "Octopus reviews every pull request with deep context awareness.\nCatch bugs, enforce standards, and ship with confidence.",
-                "Learns your codebase and reviews PRs like your senior engineer",
-                "Catches bugs, security issues, and anti-patterns before production",
-                "Deep context awareness across your entire codebase",
-                "Indexes every file, function, and relationship in your repo",
-                "Posts inline comments with severity levels directly on your PRs",
-                "Works with GitHub, GitLab, and Bitbucket out of the box",
-                "Source-available and self-hostable, your code never leaves your servers",
-                "Improves over time with team feedback on every finding",
-                "Powered by Claude, understands any language, any framework",
-                "Reviews every PR in under 2 minutes, 24/7",
-              ]}
-              interval={3000}
-            />
+          <p className="mx-auto mt-6 max-w-2xl text-base leading-relaxed text-[#a0a0a0] sm:text-lg lg:mx-0">
+            Set up Octopus with the AI already working in your project.
+            It installs the CLI, connects your GitHub repository, and gets
+            your code indexed and analysed for context-aware PR reviews.
           </p>
-
-          <div className="animate-fade-in mt-10 flex flex-col items-center gap-4 [animation-delay:300ms] sm:flex-row sm:justify-center lg:justify-start">
-            <TrackedLink
-              href="/login"
-              event="cta_click"
-              eventParams={{ location: "hero", label: "get_started_free" }}
-              className="inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-medium text-[#0c0c0c] transition-colors hover:bg-[#e0e0e0]"
-            >
-              Get Started Free
-              <IconArrowRight className="size-4" />
-            </TrackedLink>
-            <TrackedAnchor
-              href="https://github.com/octopusreview"
-              target="_blank"
-              rel="noopener noreferrer"
-              event="cta_click"
-              eventParams={{ location: "hero", label: "view_on_github" }}
-              className="inline-flex items-center gap-2 rounded-full border border-white/[0.1] px-6 py-3 text-sm font-medium text-[#999] transition-colors hover:text-white"
-            >
-              <IconBrandGithub className="size-4" />
-              View on GitHub
-            </TrackedAnchor>
+          <p className="mt-4 text-sm leading-relaxed text-[#a0a0a0]">
+            You approve sign-in and GitHub access through the links it gives you.
+            Your AI handles the commands and checks when everything is ready.
+          </p>
+          <div className="mt-8 flex flex-wrap justify-center gap-6 text-sm lg:justify-start">
+            <a href="#agent-setup" className="text-white underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">Get the setup prompt</a>
+            <a href="#cli" className="text-[#a0a0a0] underline underline-offset-4 hover:text-white focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">Install the CLI yourself</a>
           </div>
          </div>
 
           <div className="min-w-0 animate-fade-in [animation-delay:400ms]">
-            <LandingTerminalHero className="mx-auto w-full max-w-xl lg:mx-0" />
+            <LandingAgentPrompt />
           </div>
         </div>
       </section>
 
-      {/* Install the CLI — right below the terminal hero */}
+      <section className="relative z-10 mx-auto max-w-3xl px-6 pb-12" aria-label="Example AI setup session">
+        <p className="mb-4 text-center text-sm text-[#a0a0a0]">An example of your AI handling setup through octp</p>
+        <LandingTerminalHero />
+      </section>
+
+      {/* Native CLI installers remain available */}
       <CliInstallSection />
 
       {/* How it works */}
@@ -215,10 +192,10 @@ export default async function LandingPage() {
             <div className="mx-auto max-w-2xl text-center">
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-[#555]">How it works</span>
               <h2 className="mt-4 text-3xl font-bold tracking-tight text-white sm:text-4xl">
-                Three steps to better reviews
+                Your AI does the setup
               </h2>
               <p className="mt-4 text-[#888]">
-                Connect your repos, and Octopus starts reviewing automatically.
+                Give the prompt to Codex, Claude Code, or another AI with terminal access in your project.
               </p>
             </div>
 
@@ -226,27 +203,21 @@ export default async function LandingPage() {
               <StepCard
                 step="01"
                 icon={<IconPlugConnected className="size-5" />}
-                title="Connect repositories"
-                description="Connect your source provider and choose which repositories Octopus should monitor."
+                title="Share the prompt"
+                description="Your AI reads the GitHub remote in your current project and installs octp. No need to paste your code into the prompt."
               >
-                <div className="mt-5 flex flex-wrap gap-2">
-                  <ProviderChip name="GitHub" status="Live" />
-                  <ProviderChip name="Bitbucket" status="Live" />
-                  <ProviderChip name="GitLab" status="Live" />
-                  <ProviderChip name="Gitea" status="Planned" muted />
-                </div>
               </StepCard>
               <StepCard
                 step="02"
                 icon={<IconBrain className="size-5" />}
-                title="AI Learns Your Code"
-                description="Octopus indexes your codebase, understands patterns and architecture."
+                title="Approve access"
+                description="Your AI gives you the sign-in and GitHub App links. Authorise your organisation and repository, then let the AI continue."
               />
               <StepCard
                 step="03"
                 icon={<IconRocket className="size-5" />}
-                title="Reviews on Autopilot"
-                description="Every new PR gets an instant, context-aware review automatically."
+                title="Let your AI finish"
+                description="Your AI starts or joins indexing and analysis, checks progress, and reports the real result. Octopus then reviews new PRs with repository context."
               />
             </div>
 
@@ -474,19 +445,17 @@ export default async function LandingPage() {
       <section className="relative z-10 px-6 py-24 md:px-8 md:py-32">
         <div className="relative mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-            Ready to transform your
-            <br />
-            code review workflow?
+            Your next step is one prompt.
           </h2>
-          <p className="mt-4 text-[#666] sm:text-lg">Start reviewing in two minutes on our managed cloud — free credits, no card.</p>
+          <p className="mt-4 text-[#666] sm:text-lg">Paste it into your AI’s session in the project you want to connect.</p>
           <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
             <TrackedLink
-              href="/login"
+              href="#agent-setup"
               event="cta_click"
-              eventParams={{ location: "bottom_cta", label: "get_started_free" }}
+              eventParams={{ location: "bottom_cta", label: "agent_setup_prompt" }}
               className="inline-flex items-center gap-2 rounded-full bg-white px-6 py-3 text-sm font-medium text-[#0c0c0c] transition-colors hover:bg-[#e0e0e0]"
             >
-              Get Started — It&apos;s Free
+              Get the setup prompt
               <IconArrowRight className="size-4" />
             </TrackedLink>
           </div>
@@ -542,21 +511,5 @@ function StepCard({
       <p className="mt-2 text-sm leading-relaxed text-[#888]">{description}</p>
       {children}
     </div>
-  );
-}
-
-function ProviderChip({ name, status, muted = false }: { name: string; status: "Live" | "Planned"; muted?: boolean }) {
-  return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium ${
-        muted
-          ? "border-white/[0.08] bg-white/[0.03] text-[#777]"
-          : "border-[#10D8BE]/25 bg-[#10D8BE]/10 text-[#d8fffa]"
-      }`}
-    >
-      <span className={`size-1.5 rounded-full ${muted ? "bg-[#666]" : "bg-[#10D8BE]"}`} />
-      {name}
-      <span className={muted ? "text-[#666]" : "text-[#10D8BE]"}>{status}</span>
-    </span>
   );
 }
