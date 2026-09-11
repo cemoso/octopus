@@ -31,7 +31,7 @@ mock.module("@octopus/db", () => ({ prisma: { ...db, $transaction: (run: (tx: ty
 const { openaiProvider } = await import("../../providers/openai");
 const { callOpenAiGateway } = await import("../../providers/openai-gateway");
 const { observeAiRequest, completionEvidence } = await import("../../providers/request-evidence");
-const { executeCoveredReview, recordNoModelAssessment } = await import("../../review-assessment");
+const { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment } = await import("../../review-assessment");
 const { prepareReviewInput, applyReviewCoverage, renderReviewCoverage, reviewCheckResult, sha256 } = await import("../../review-coverage");
 const { createCoveredReviewRequest } = await import("../../review-request");
 const { saveReviewAttempt } = await import("../../review-attempt");
@@ -259,6 +259,85 @@ assert.equal(interruptedPlan.coverage.complete, false);
 assert.equal(interruptedPlan.coverage.assessment?.requests.length, 1);
 assert.equal(interruptedPlan.coverage.assessment?.responseSha256, null);
 interrupted = false;
+
+// Exercise the same recovery request boundary used by the reviewer, including
+// the adapter's final SDK payload and immutable persistence of its provenance.
+const malformedReview = withFinding.replace(JSON.stringify([finding]), "[]");
+for (const [name, finish, outcome] of [
+  ["completed", "stop", "completed"],
+  ["length", "length", "incomplete"],
+  ["unknown", null, "incomplete"],
+  ["interrupted", "stop", "failed"],
+  ["unobserved", "stop", "incomplete"],
+] as const) {
+  const p = plan();
+  output = { choices: [{ message: { content: malformedReview }, finish_reason: "stop" }] };
+  await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
+  const primary = structuredClone(p.coverage.assessment!);
+  assert.equal(primary.state, "incomplete");
+  output = { choices: [{ message: { content: JSON.stringify([finding]) }, finish_reason: finish }] };
+  interrupted = name === "interrupted";
+  const recover = (reviewBody = malformedReview) => executeFindingsRecovery({ model: "gpt-test", reviewBody, parsedFindingsCount: 0, tableFindingsTotal: 1 }, p.coverage, request => {
+    // An uninstrumented adapter must remain explicitly unobserved.
+    return openaiProvider.create(name === "unobserved" ? { ...request, onRequest: undefined } : request, "fake");
+  });
+  if (interrupted) await assert.rejects(recover(), /interrupted/);
+  else assert.equal((await recover()).text, JSON.stringify([finding]));
+  interrupted = false;
+  const recovery = p.coverage.assessment!.recoveries![0];
+  const primaryAfter = { ...p.coverage.assessment! };
+  delete primaryAfter.recoveries;
+  assert.deepEqual(primaryAfter, primary, `${name}: recovery must not rewrite the primary assessment`);
+  assert.equal(p.coverage.complete, false);
+  assert.equal(recovery.state, outcome, name);
+  assert.equal(recovery.model, "gpt-test");
+  assert.equal(recovery.responseModel, name === "interrupted" ? null : "gpt-test");
+  assert.equal(recovery.responseProvider, name === "interrupted" ? null : "openai");
+  assert.equal(recovery.requests.length, name === "unobserved" ? 0 : 1);
+  if (name !== "unobserved") {
+    assert.equal(recovery.requests[0].sha256, sha256(JSON.stringify(received)));
+    assert.equal(recovery.requests[0].inputPreserved, true);
+  }
+  assert.equal(recovery.responseSha256, name === "interrupted" ? null : sha256(JSON.stringify([finding])));
+  assert.deepEqual(recovery.completion, name === "interrupted" ? null : completionEvidence(finish, ["stop"]));
+  assert.match(recovery.policySha256, /^[a-f0-9]{64}$/);
+  assert.match(recovery.templateSha256, /^[a-f0-9]{64}$/);
+  assert.ok(!JSON.stringify(recovery).includes("Missing validation"));
+  const report = applyReviewCoverage(malformedReview, p.coverage, `recovery-${name}`);
+  await saveReviewAttempt(`recovery-${name}`, "pr", p.coverage, report);
+  assert.equal(await saveReviewAttempt(`recovery-${name}`, "pr", structuredClone(p.coverage), report), false);
+  assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, "failure");
+  for (const mutation of ["policy", "outcome", "response"] as const) {
+    const changed = structuredClone(p.coverage);
+    const evidence = changed.assessment!.recoveries![0];
+    if (mutation === "policy") evidence.policySha256 = sha256("different recovery policy");
+    if (mutation === "outcome") evidence.state = outcome === "completed" ? "incomplete" : "completed";
+    if (mutation === "response") evidence.responseSha256 = sha256("different recovery output");
+    await assert.rejects(saveReviewAttempt(`recovery-${name}`, "pr", changed, report), /identity conflict/);
+  }
+  if (name === "completed") {
+    const original = structuredClone(p.coverage);
+    p.coverage.assessment = structuredClone(primary);
+    await recover(malformedReview + "\nAdditional recovery input");
+    assert.notEqual(p.coverage.assessment.recoveries![0].requests[0].sha256, recovery.requests[0].sha256);
+    await assert.rejects(saveReviewAttempt(`recovery-${name}`, "pr", p.coverage, report), /identity conflict/);
+    p.coverage.assessment = { ...structuredClone(primary), policySha256: sha256("changed repository policy") };
+    await recover();
+    assert.notEqual(p.coverage.assessment.recoveries![0].policySha256, recovery.policySha256);
+    await assert.rejects(saveReviewAttempt(`recovery-${name}`, "pr", p.coverage, report), /identity conflict/);
+    p.coverage.assessment = structuredClone(primary);
+    await recover();
+    assert.deepEqual(p.coverage, original);
+    assert.equal(await saveReviewAttempt(`recovery-${name}`, "pr", p.coverage, report), false);
+    p.coverage.assessment = structuredClone(primary);
+    output = { choices: [{ message: { content: JSON.stringify([finding]) }, finish_reason: "length" }] };
+    await recover();
+    assert.equal(p.coverage.assessment.recoveries![0].requests[0].sha256, recovery.requests[0].sha256);
+    assert.equal(p.coverage.assessment.recoveries![0].responseSha256, recovery.responseSha256);
+    assert.equal(p.coverage.assessment.recoveries![0].state, "incomplete");
+    await assert.rejects(saveReviewAttempt(`recovery-${name}`, "pr", p.coverage, report), /identity conflict/);
+  }
+}
 
 for (const status of ["completed", "incomplete", undefined]) {
   const p = plan(); output = { status, output_text: valid };

@@ -1,5 +1,6 @@
 import "server-only";
-import { prisma, Prisma } from "@octopus/db";
+import { prisma } from "@octopus/db";
+import { admitReviewRequest, type ReviewRequestRejection } from "@/lib/review-request-admission";
 import { createReviewAttemptComment } from "@/lib/review-attempt";
 import { pubby } from "@/lib/pubby";
 import { enqueue } from "@/lib/queue";
@@ -34,7 +35,7 @@ async function postSkippedCheckRun(
 }
 
 /**
- * Shared flow: upsert PR -> post placeholder comment -> notify dashboard -> start review.
+ * Shared flow: admit the current head -> post placeholder comment -> notify dashboard -> start review.
  * Works for GitHub, Bitbucket, and GitLab.
  */
 /**
@@ -42,8 +43,9 @@ async function postSkippedCheckRun(
  * (CLI / MCP) use it to say why nothing ran instead of "Review started".
  */
 export type StartReviewResult =
-  | { started: true }
-  | { started: false; reason: "org_paused" | "already_in_progress" | "author_blocked"; message: string };
+  | { started: true; pullRequestId: string }
+  | ReviewRequestRejection
+  | { started: false; reason: "org_paused" | "author_blocked"; message: string };
 
 export async function startReviewFlow(params: {
   provider: "github" | "bitbucket" | "gitlab";
@@ -59,7 +61,7 @@ export async function startReviewFlow(params: {
   prTitle: string;
   prUrl: string;
   prAuthor: string;
-  headSha: string;
+  headSha: string | null;
   triggerCommentId: number;
   triggerCommentBody: string;
 }): Promise<StartReviewResult> {
@@ -75,8 +77,6 @@ export async function startReviewFlow(params: {
     prUrl,
     prAuthor,
     headSha,
-    triggerCommentId,
-    triggerCommentBody,
   } = params;
 
   const [owner, repoName] = repoFullName.split("/");
@@ -98,32 +98,6 @@ export async function startReviewFlow(params: {
     return { started: false, reason: "org_paused", message: "Reviews are paused for this organization" };
   }
 
-  // Check existing PR status to prevent duplicate reviews (cheap indexed lookup first)
-  const existingPr = await prisma.pullRequest.findUnique({
-    where: {
-      repositoryId_number: { repositoryId: repoId, number: prNumber },
-    },
-    select: { id: true, status: true, headSha: true, updatedAt: true },
-  });
-
-  if (existingPr && (existingPr.status === "reviewing" || existingPr.status === "pending")) {
-    const stuckThresholdMs = 3 * 60 * 1000; // 3 minutes
-    const isStuck = Date.now() - existingPr.updatedAt.getTime() > stuckThresholdMs;
-
-    if (isStuck) {
-      console.log(`[webhook] Review for PR #${prNumber} stuck for >3min, marking as failed and restarting`);
-      await prisma.pullRequest.updateMany({
-        where: { id: existingPr.id, headSha: existingPr.headSha, updatedAt: existingPr.updatedAt },
-        data: { status: "failed", errorMessage: "Review timed out after 3 minutes" },
-      });
-    } else if (existingPr.headSha === headSha) {
-      console.log(`[webhook] Review already in progress/queued for PR #${prNumber} (same SHA), skipping`);
-      return { started: false, reason: "already_in_progress", message: `Review already in progress for PR #${prNumber}` };
-    } else {
-      console.log(`[webhook] New SHA detected for PR #${prNumber}, restarting review`);
-    }
-  }
-
   // Check if PR author is blocked from triggering reviews
   if (prAuthor) {
     const globalBlocked = (systemConfig?.blockedAuthors as string[]) ?? [];
@@ -134,48 +108,19 @@ export async function startReviewFlow(params: {
     );
     if (isBlocked) {
       console.log(`[webhook] PR author "${prAuthor}" is blocked for org ${orgId}, skipping PR #${prNumber}`);
-      await postSkippedCheckRun(provider, installationId, repoFullName, headSha, `PR author "${prAuthor}" is in the blocked list`);
+      await postSkippedCheckRun(provider, installationId, repoFullName, headSha || "", `PR author "${prAuthor}" is in the blocked list`);
       return { started: false, reason: "author_blocked", message: `PR author "${prAuthor}" is in the blocked list` };
     }
   }
 
-  // Upsert PullRequest record
-  console.log(`[webhook] Upserting PullRequest — repo: ${repoId}, PR #${prNumber}, status: pending`);
-  const pr = await prisma.pullRequest.upsert({
-    where: {
-      repositoryId_number: { repositoryId: repoId, number: prNumber },
-    },
-    create: {
-      number: prNumber,
-      title: prTitle,
-      url: prUrl,
-      author: prAuthor,
-      headSha: headSha || null,
-      status: "pending",
-      reviewRequestVersion: 1,
-      triggerCommentId,
-      triggerCommentBody,
-      repositoryId: repoId,
-    },
-    update: {
-      title: prTitle,
-      url: prUrl,
-      author: prAuthor,
-      headSha: headSha || null,
-      status: "pending",
-      reviewRequestVersion: { increment: 1 },
-      triggerCommentId,
-      triggerCommentBody,
-      reviewBody: null,
-      reviewCoverage: Prisma.DbNull,
-      errorMessage: null,
-    },
-  });
-  console.log(`[webhook] PullRequest upserted — id: ${pr.id}, number: ${pr.number}`);
+  const admission = await admitReviewRequest(params);
+  if (!admission.started) return admission;
+  const pr = admission.pullRequest;
+  console.log(`[webhook] PullRequest admitted — id: ${pr.id}, number: ${pr.number}`);
 
-  const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${headSha || "unknown"}\`. A separate review attempt will report the result.`;
+  const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${pr.headSha || "unknown"}\`. A separate review attempt will report the result.`;
   try {
-    await createReviewAttemptComment(pr.id, headSha || null, pr.reviewRequestVersion, async () => {
+    await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, async () => {
       if (provider === "github" && installationId) {
         return github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
       }
@@ -221,5 +166,5 @@ export async function startReviewFlow(params: {
 
   // Enqueue review job — pg-boss persists it in DB, survives container restarts
   await enqueue("process-review", { pullRequestId: pr.id });
-  return { started: true };
+  return { started: true, pullRequestId: pr.id };
 }

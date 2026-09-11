@@ -3,6 +3,19 @@ import type { AiRequestReceipt } from "@/lib/providers/request-evidence";
 import { sha256, type ReviewCoverage } from "@/lib/review-coverage";
 import { parseFindingsFromJson } from "@/lib/review-dedup";
 
+export type FindingsRecoveryEvidence = {
+  state: "completed" | "incomplete" | "failed";
+  reason: string;
+  model: string;
+  responseModel: string | null;
+  responseProvider: AiResponse["provider"] | null;
+  policySha256: string;
+  templateSha256: string;
+  requests: AiRequestReceipt[];
+  responseSha256: string | null;
+  completion: AiResponse["completion"] | null;
+};
+
 export type ReviewAssessment = {
   state: "completed" | "incomplete" | "not-required";
   reason: string;
@@ -12,7 +25,83 @@ export type ReviewAssessment = {
   requests: AiRequestReceipt[];
   responseSha256: string | null;
   completion: AiResponse["completion"] | null;
+  /** Supplemental extraction evidence; never repairs the primary assessment. */
+  recoveries?: FindingsRecoveryEvidence[];
 };
+
+const FINDINGS_RECOVERY_TEMPLATE = `You previously wrote this code review but {{missingDescription}}. The Findings Summary table shows {{total}} total findings.
+
+Here is the review you wrote:
+{{reviewBody}}
+
+Now output ONLY the {{missingRequest}} as a JSON array. Each finding must have this exact structure:
+
+[
+  {
+    "severity": "🔴",
+    "title": "Issue title",
+    "filePath": "path/to/file.ts",
+    "startLine": 42,
+    "endLine": 58,
+    "category": "Bug",
+    "description": "Clear explanation of the issue",
+    "suggestion": "suggested fix code or empty string",
+    "confidence": 85
+  }
+]
+
+Rules:
+- severity: one of 🔴 🟠 🟡 🔵 💡
+- filePath: relative path only, no backticks, no :L suffix
+- startLine/endLine: integers
+- confidence: integer 0-100 (90-100 = certain, 70-89 = clear, 50-69 = likely, below 50 = do not include)
+- Output ONLY valid JSON array. No markdown, no explanation, no code fences.`;
+
+/** Record the existing extraction call separately from source assessment. */
+export async function executeFindingsRecovery(
+  input: { model: string; reviewBody: string; parsedFindingsCount: number; tableFindingsTotal: number },
+  coverage: ReviewCoverage,
+  call: (request: AiCreateParams) => Promise<AiResponse>,
+): Promise<AiResponse> {
+  const assessment = coverage.assessment;
+  if (!assessment) throw new Error("Primary review assessment unavailable for findings recovery");
+  const { model, reviewBody, parsedFindingsCount, tableFindingsTotal } = input;
+  const values: Record<string, string> = {
+    missingDescription: parsedFindingsCount === 0 ? "omitted the findings block" : `only included ${parsedFindingsCount} of ${tableFindingsTotal} findings`,
+    total: String(tableFindingsTotal),
+    reviewBody,
+    missingRequest: parsedFindingsCount === 0 ? "missing findings" : `${tableFindingsTotal - parsedFindingsCount} missing finding(s)`,
+  };
+  // One replacement pass leaves placeholder-like text in the supplied review intact.
+  const content = FINDINGS_RECOVERY_TEMPLATE.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key]);
+  const evidence: FindingsRecoveryEvidence = {
+    state: "incomplete", reason: "Provider did not return a completed findings recovery", model,
+    responseModel: null, responseProvider: null,
+    policySha256: sha256(JSON.stringify({ policy: "findings-recovery-v1", primaryPolicySha256: assessment.policySha256,
+      primaryTemplateSha256: assessment.templateSha256, primaryResponseSha256: assessment.responseSha256 })),
+    templateSha256: sha256(FINDINGS_RECOVERY_TEMPLATE), requests: [], responseSha256: null, completion: null,
+  };
+  (assessment.recoveries ??= []).push(evidence);
+  let response: AiResponse;
+  try {
+    response = await call({ model, maxTokens: 4096, messages: [{ role: "user", content }], onRequest: receipt => evidence.requests.push(receipt) });
+  } catch (error) {
+    evidence.state = "failed";
+    evidence.reason = "Findings recovery failed or was interrupted";
+    throw error;
+  }
+  evidence.responseSha256 = sha256(response.text);
+  evidence.responseModel = response.model;
+  evidence.responseProvider = response.provider;
+  evidence.completion = response.completion ?? null;
+  const observed = evidence.requests.length === 1 && evidence.requests[0].model === response.model
+    && evidence.requests[0].provider === response.provider && evidence.requests[0].inputPreserved;
+  evidence.state = observed && response.completion?.state === "completed" ? "completed" : "incomplete";
+  evidence.reason = !observed ? "Actual findings recovery request provenance unavailable"
+    : response.completion?.state !== "completed" ? "Findings recovery completion incomplete or unknown"
+      : "Provider completed the findings recovery response; source assessment unchanged";
+  return response;
+}
 
 /** Validate the emitted report contract, independently of provider termination. */
 export function validReviewResponse(text: string): boolean {

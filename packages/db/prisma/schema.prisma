@@ -434,8 +434,23 @@ model ReviewAttempt {
   reviewBody    String
   createdAt     DateTime @default(now())
 
+  delivery ReviewAttemptDelivery?
+
   @@index([pullRequestId, createdAt])
   @@map("review_attempts")
+}
+
+// Mutable delivery progress is separate from the immutable assessment result.
+model ReviewAttemptDelivery {
+  attemptId        String @id
+  attempt          ReviewAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  mainCommentId    BigInt?
+  summaryPublished Boolean @default(false)
+  completedAt      DateTime?
+  leaseToken       String?
+  leaseUntil       DateTime?
+
+  @@map("review_attempt_deliveries")
 }
 
 model ReviewIssue {

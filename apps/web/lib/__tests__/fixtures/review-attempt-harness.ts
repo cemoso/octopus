@@ -8,6 +8,11 @@ const rows = new Map<string, Row>();
 let current: Record<string, unknown> = {};
 let currentHead = "a".repeat(40);
 let currentVersion = 1;
+let currentUpdatedAt = new Date("2026-09-11T00:00:00Z");
+let providerHead = currentHead;
+let failArchive = false;
+type Delivery = { attemptId: string; mainCommentId: bigint | null; summaryPublished: boolean; completedAt: Date | null; leaseToken: string | null; leaseUntil: Date | null };
+const deliveries = new Map<string, Delivery>();
 let member = true;
 let queries = 0;
 mock.module("server-only", () => ({}));
@@ -15,6 +20,7 @@ const db = {
   organization: { findUnique: async () => ({ reviewsPaused: false, blockedAuthors: [] }) },
   reviewAttempt: {
     createMany: async ({ data, skipDuplicates }: { data: Row[]; skipDuplicates: boolean }) => {
+      if (failArchive) throw new Error("Archive unavailable");
       let count = 0;
       for (const row of data) {
         if (rows.has(row.id)) {
@@ -37,19 +43,39 @@ const db = {
     },
   },
   pullRequest: {
-    upsert: async ({ create, update }: { create: { reviewRequestVersion: number }; update: { headSha: string; reviewRequestVersion: { increment: number } } }) => {
-      assert.equal(create.reviewRequestVersion, 1);
-      currentVersion += update.reviewRequestVersion.increment;
-      currentHead = update.headSha;
-      current = { ...current, status: "pending", reviewBody: null };
-      return { id: "pr", headSha: currentHead, reviewRequestVersion: currentVersion, number: 1, status: "pending", reviewCommentId: current.reviewCommentId, createdAt: new Date("2026-09-11T00:00:00Z") };
+    updateManyAndReturn: async ({ data, where }: { data: Record<string, unknown> & { headSha: string; reviewRequestVersion: { increment: number } }; where: { headSha: string; reviewRequestVersion: number; status: string; updatedAt: Date } }) => {
+      if (where.headSha !== currentHead || where.reviewRequestVersion !== currentVersion || where.status !== current.status || where.updatedAt.getTime() !== currentUpdatedAt.getTime()) return [];
+      currentVersion += data.reviewRequestVersion.increment;
+      currentHead = data.headSha;
+      currentUpdatedAt = new Date();
+      current = { ...current, ...data, reviewRequestVersion: currentVersion };
+      return [{ ...current, id: "pr", headSha: currentHead, reviewRequestVersion: currentVersion, number: 1, createdAt: new Date("2026-09-11T00:00:00Z") }];
     },
-    findUnique: async () => ({ ...current, id: "pr", headSha: currentHead, reviewRequestVersion: currentVersion, number: 1, updatedAt: new Date(), repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
+    findUnique: async () => ({ ...current, id: "pr", headSha: currentHead, reviewRequestVersion: currentVersion, number: 1, updatedAt: currentUpdatedAt, repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
     updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string; reviewRequestVersion?: number; reviewBody?: string } }) => {
       if (where.reviewRequestVersion !== undefined && where.reviewRequestVersion !== currentVersion) return { count: 0 };
       if (where.headSha && where.headSha !== currentHead) return { count: 0 };
       if (where.reviewBody !== undefined && current.reviewBody !== where.reviewBody) return { count: 0 };
       current = { ...current, ...structuredClone(data) };
+      return { count: 1 };
+    },
+  },
+  reviewAttemptDelivery: {
+    createMany: async ({ data }: { data: { attemptId: string }[] }) => {
+      for (const row of data) if (!deliveries.has(row.attemptId)) {
+        assert.ok(rows.has(row.attemptId), "Delivery requires an archived result");
+        deliveries.set(row.attemptId, { ...row, mainCommentId: null, summaryPublished: false, completedAt: null, leaseToken: null, leaseUntil: null });
+      }
+    },
+    findUniqueOrThrow: async ({ where }: { where: { attemptId: string } }) => { const row = deliveries.get(where.attemptId); assert.ok(row); return structuredClone(row); },
+    updateMany: async ({ where, data }: { where: { attemptId: string; completedAt?: null; leaseToken?: string; leaseUntil?: { gt: Date }; OR?: { leaseUntil: null | { lte: Date } }[] }; data: Partial<Delivery> }) => {
+      const row = deliveries.get(where.attemptId);
+      if (!row || (where.completedAt === null && row.completedAt !== null)
+        || (where.leaseToken !== undefined && where.leaseToken !== row.leaseToken)
+        || (where.leaseUntil && (!row.leaseUntil || row.leaseUntil <= where.leaseUntil.gt))
+        || (where.OR && row.leaseUntil && row.leaseUntil > where.OR[1].leaseUntil!.lte)) return { count: 0 };
+      Object.assign(row, structuredClone(data));
+      if (row.mainCommentId !== null) row.mainCommentId = BigInt(row.mainCommentId);
       return { count: 1 };
     },
   },
@@ -83,6 +109,8 @@ mock.module("@/lib/api-auth", () => ({ authenticateApiToken: async (request: Req
 const { saveReviewAttempt, updateCurrentReview, createReviewAttemptComment } = await import("../../review-attempt");
 const { unknownReviewCoverage, prepareReviewInput } = await import("../../review-coverage");
 const { GET } = await import("../../../app/api/review-attempts/[id]/route");
+const { NextRequest } = await import("next/server");
+const { middleware } = await import("../../../middleware");
 const first = "11111111-1111-4111-8111-111111111111", second = "22222222-2222-4222-8222-222222222222";
 const coverage = { ...unknownReviewCoverage("github", "fixture"), headSha: currentHead, reviewRequestVersion: currentVersion };
 await saveReviewAttempt(first, "pr", coverage, "First immutable report");
@@ -92,7 +120,17 @@ assert.equal(rows.get(first)?.reviewBody, "First immutable report");
 assert.equal(current.reviewBody, "Second immutable report");
 await assert.rejects(saveReviewAttempt(first, "pr", coverage, "overwrite"), /identity conflict/);
 assert.equal(rows.get(first)?.reviewBody, "First immutable report");
-const request = (headers: Record<string, string>) => GET(new Request("https://example.test/api/review-attempts/" + first, { headers }), { params: Promise.resolve({ id: first }) });
+const request = async (headers: Record<string, string>) => {
+  const req = new NextRequest("https://example.test/api/review-attempts/" + first, { headers });
+  const routed = middleware(req);
+  if (routed.headers.get("x-middleware-next") !== "1") return routed;
+  return GET(req, { params: Promise.resolve({ id: first }) });
+};
+for (const pathname of ["/api/review-attempts-extra/" + first, "/dashboard"]) {
+  const response = middleware(new NextRequest("https://example.test" + pathname, { headers: { authorization: "Bearer owner" } }));
+  assert.equal(response.status, 307);
+  assert.equal(new URL(response.headers.get("location")!).pathname, "/login");
+}
 assert.equal((await request({})).status, 401);
 assert.equal(queries, 0);
 assert.equal((await request({ authorization: "Bearer foreign" })).status, 404);
@@ -120,15 +158,17 @@ console.log("PASS stale-head isolation, immutable attempts, token/session tenant
 
 const checks: unknown[][] = [];
 let failCheck = false;
+let failSummary = false;
 const published: unknown[][] = [];
 let allowPublication = false;
 let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
-  updateCheckRun: async (...args: unknown[]) => { checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
-  createPullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
+  getPullRequestDetails: async () => ({ headSha: providerHead }),
+  updateCheckRun: async (...args: unknown[]) => { assert.ok([...rows.values()].some(row => (row.coverage as { nativeCheckId?: string }).nativeCheckId === String(args[3])), "Native completion requires a durable archive"); checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
+  createPullRequestComment: async (...args: unknown[]) => { if (failSummary && String(args[4]).includes("Large PR —")) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
   updatePullRequestComment: unexpectedPublication,
-  createPullRequestReview: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
+  createPullRequestReview: async (...args: unknown[]) => { if (failSummary) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
 }));
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: unexpectedPublication } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: unexpectedPublication } }));
@@ -176,8 +216,7 @@ assert.equal(current.reviewCommentId, 200);
 assert.equal(current.reviewBody, "Newer final report");
 assert.equal(current.status, "completed");
 assert.deepEqual(issues, [issue("new finding")]);
-assert.equal(published.length, 2);
-assert.equal(published[1][8], origin.headSha);
+assert.equal(published.length, 0);
 assert.equal(rows.get("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")?.headSha, origin.headSha);
 console.log("PASS publication races preserve current comments, findings and status while archiving stale attempts");
 
@@ -189,9 +228,10 @@ const statusEvents: { event: string; data: Record<string, unknown> }[] = [];
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: async (_channel: string, event: string, data: Record<string, unknown>) => { statusEvents.push({ event, data }); } } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: () => {} } }));
 const { startReviewFlow } = await import("../../webhook-shared");
-assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", headSha: currentHead, triggerCommentId: 1, triggerCommentBody: "review" }), { started: true });
+providerHead = currentHead;
+assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", headSha: currentHead, triggerCommentId: 1, triggerCommentBody: "review" }), { started: true, pullRequestId: "pr" });
 assert.equal((statusEvents.at(-1)?.data.pullRequest as { headSha: string }).headSha, currentHead);
-assert.equal(published.length, 3);
+assert.equal(published.length, 1);
 assert.equal(current.reviewCommentId, 900);
 console.log("PASS review triggers create new comments without editing previous attempts");
 
@@ -283,7 +323,8 @@ const beforeRetryState = structuredClone(current);
 const beforeRetryRows = rows.size;
 failCheck = true;
 await assert.rejects(handleLargeReviewResult(retryJob), /Transient check failure/);
-assert.equal(rows.size, beforeRetryRows);
+assert.equal(rows.size, beforeRetryRows + 1);
+assert.ok(rows.get(retryJob.attemptId));
 assert.deepEqual(current, beforeRetryState);
 failCheck = false;
 await handleLargeReviewResult(retryJob);
@@ -299,6 +340,74 @@ assert.equal(rows.size, beforeRetryRows + 1);
 assert.deepEqual(rows.get(retryJob.attemptId), archivedRetry);
 assert.deepEqual(current, beforeRetryState);
 assert.deepEqual(checks.slice(-4).map(call => [call[3], call[4]]), Array.from({ length: 4 }, () => [origin.checkRunId, "failure"]));
+const archiveFailureJob = { ...retryJob, headSha: currentHead, reviewRequestVersion: currentVersion, attemptId: "12121212-1212-4212-8212-121212121212" };
+const beforeArchiveFailure = { checks: checks.length, comments: published.length, current: structuredClone(current) };
+failArchive = true;
+await assert.rejects(handleLargeReviewResult(archiveFailureJob), /Archive unavailable/);
+failArchive = false;
+assert.equal(rows.has(archiveFailureJob.attemptId), false);
+assert.equal(checks.length, beforeArchiveFailure.checks);
+assert.equal(published.length, beforeArchiveFailure.comments);
+assert.deepEqual(current, beforeArchiveFailure.current);
+
+const interruptedSuccess = { ...archiveFailureJob, attemptId: "13131313-1313-4313-8313-131313131313" };
+failCheck = true;
+await assert.rejects(handleLargeReviewResult(interruptedSuccess), /Transient check failure/);
+const savedSuccess = structuredClone(rows.get(interruptedSuccess.attemptId));
+assert.ok(savedSuccess);
+assert.equal(published.length, beforeArchiveFailure.comments);
+failCheck = false;
+allowPublication = false;
+await assert.rejects(handleLargeReviewResult(interruptedSuccess), /Delayed result published/);
+assert.equal(deliveries.get(interruptedSuccess.attemptId)?.leaseToken, null);
+assert.equal(deliveries.get(interruptedSuccess.attemptId)?.completedAt, null);
+allowPublication = true;
+failSummary = true;
+const summaryErrors: unknown[][] = [];
+const originalConsoleError = console.error;
+console.error = (...args: unknown[]) => { summaryErrors.push(args); };
+try { await assert.rejects(handleLargeReviewResult(interruptedSuccess), /Transient summary failure/); }
+finally { console.error = originalConsoleError; }
+assert.equal(summaryErrors.length, 1);
+assert.match(String(summaryErrors[0][1]), /Transient summary failure/);
+assert.equal(published.length, beforeArchiveFailure.comments + 1);
+assert.equal(deliveries.get(interruptedSuccess.attemptId)?.mainCommentId, 900n);
+assert.equal(deliveries.get(interruptedSuccess.attemptId)?.summaryPublished, false);
+failSummary = false;
+await handleLargeReviewResult(interruptedSuccess);
+assert.equal(published.length, beforeArchiveFailure.comments + 2);
+assert.ok(deliveries.get(interruptedSuccess.attemptId)?.completedAt);
+assert.deepEqual(rows.get(interruptedSuccess.attemptId), savedSuccess);
+await handleLargeReviewResult(interruptedSuccess);
+assert.equal(published.length, beforeArchiveFailure.comments + 2);
+assert.deepEqual(rows.get(interruptedSuccess.attemptId), savedSuccess);
+
+const concurrentDelivery = { ...archiveFailureJob, attemptId: "14141414-1414-4414-8414-141414141414" };
+let releaseDelivery!: () => void;
+let reachedDelivery!: () => void;
+const publishing = new Promise<void>(resolve => { reachedDelivery = resolve; });
+duringPublication = async () => { reachedDelivery(); await new Promise<void>(resolve => { releaseDelivery = resolve; }); };
+const firstDelivery = handleLargeReviewResult(concurrentDelivery);
+await publishing;
+const concurrentArchive = structuredClone(rows.get(concurrentDelivery.attemptId));
+await assert.rejects(handleLargeReviewResult(concurrentDelivery), /delivery is already in progress/);
+releaseDelivery();
+await firstDelivery;
+duringPublication = undefined;
+assert.deepEqual(rows.get(concurrentDelivery.attemptId), concurrentArchive);
+assert.ok(deliveries.get(concurrentDelivery.attemptId)?.completedAt);
+
+const abandonedDelivery = { ...archiveFailureJob, attemptId: "15151515-1515-4515-8515-151515151515" };
+allowPublication = false;
+await assert.rejects(handleLargeReviewResult(abandonedDelivery), /Delayed result published/);
+const abandoned = deliveries.get(abandonedDelivery.attemptId)!;
+abandoned.leaseToken = "dead-worker";
+abandoned.leaseUntil = new Date(Date.now() - 1);
+allowPublication = true;
+await handleLargeReviewResult(abandonedDelivery);
+assert.ok(deliveries.get(abandonedDelivery.attemptId)?.completedAt);
+console.log("PASS archive-before-effects, success publication/check retries, delivery checkpoints and concurrent/abandoned lease recovery");
+
 const currentJob = { ...retryJob, headSha: currentHead, reviewRequestVersion: currentVersion, attemptId: "6789abcd-6789-4789-8789-6789abcdef01" };
 await handleLargeReviewResult(currentJob);
 assert.equal(statusEvents.at(-1)?.event, "review-status");
@@ -319,9 +428,11 @@ duringPublication = async () => {
 };
 const requestArgs = { provider: "github" as const, installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", triggerCommentId: 1, triggerCommentBody: "review" };
 const eventStart = statusEvents.length;
+providerHead = "a".repeat(40);
 const requestA = startReviewFlow({ ...requestArgs, headSha: "a".repeat(40) });
 await aAtPublication;
 const versionA = currentVersion;
+providerHead = "b".repeat(40);
 await startReviewFlow({ ...requestArgs, headSha: "b".repeat(40) });
 const versionB = currentVersion;
 assert.equal(versionB, versionA + 1);

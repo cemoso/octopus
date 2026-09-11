@@ -3,6 +3,7 @@ import { pubby } from "@/lib/pubby";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@octopus/db";
 import { enqueue } from "@/lib/queue";
+import { admitReviewRequest } from "@/lib/review-request-admission";
 
 const STALE_REVIEW_MS = 3 * 60 * 1000;
 
@@ -33,7 +34,16 @@ export async function POST(
       status: true,
       updatedAt: true,
       repositoryId: true,
-      repository: { select: { organizationId: true } },
+      title: true,
+      url: true,
+      author: true,
+      headSha: true,
+      triggerCommentId: true,
+      triggerCommentBody: true,
+      repository: { select: {
+        organizationId: true, provider: true, fullName: true, installationId: true,
+        organization: { select: { githubInstallationId: true } },
+      } },
     },
   });
 
@@ -54,15 +64,28 @@ export async function POST(
     }
   }
 
-  const requested = await prisma.pullRequest.update({
-    where: { id: pr.id },
-    data: {
-      status: "pending",
-      reviewRequestVersion: { increment: 1 },
-      errorMessage: null,
-      reviewBody: null,
-    },
+  const provider = pr.repository.provider;
+  if (provider !== "github" && provider !== "bitbucket" && provider !== "gitlab") {
+    return NextResponse.json({ error: "Unsupported review provider" }, { status: 422 });
+  }
+  const admission = await admitReviewRequest({
+    provider,
+    installationId: pr.repository.installationId ?? pr.repository.organization.githubInstallationId ?? undefined,
+    organizationId: pr.repository.organizationId,
+    repoFullName: pr.repository.fullName,
+    repoId: pr.repositoryId,
+    prNumber: pr.number,
+    prTitle: pr.title,
+    prUrl: pr.url,
+    prAuthor: pr.author,
+    headSha: pr.headSha,
+    triggerCommentId: pr.triggerCommentId,
+    triggerCommentBody: pr.triggerCommentBody,
   });
+  if (!admission.started) {
+    return NextResponse.json({ error: admission.message, reason: admission.reason }, { status: 409 });
+  }
+  const requested = admission.pullRequest;
 
   await pubby.trigger(`presence-org-${pr.repository.organizationId}`, "review-requested", {
     repoId: pr.repositoryId,

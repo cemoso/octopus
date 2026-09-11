@@ -58,7 +58,7 @@ import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckRe
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
 import { prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
-import { executeCoveredReview, recordNoModelAssessment } from "@/lib/review-assessment";
+import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment } from "@/lib/review-assessment";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
@@ -1822,44 +1822,10 @@ export async function processReview(pullRequestId: string): Promise<void> {
       const missingCount = tableFindingsTotal - findings.length;
       console.warn(`[reviewer] ⚠️ Findings table reports ${tableFindingsTotal} but only ${findings.length} parsed (${missingCount} missing) — requesting findings via follow-up call`);
       try {
-          const followUp = await createAiMessage(
-            {
-              model: reviewModel,
-              maxTokens: 4096,
-              messages: [
-                {
-                  role: "user",
-                  content: `You previously wrote this code review but ${findings.length === 0 ? "omitted the findings block" : `only included ${findings.length} of ${tableFindingsTotal} findings`}. The Findings Summary table shows ${tableFindingsTotal} total findings.
-
-Here is the review you wrote:
-${reviewBody}
-
-Now output ONLY the ${findings.length === 0 ? "missing findings" : `${missingCount} missing finding(s)`} as a JSON array. Each finding must have this exact structure:
-
-[
-  {
-    "severity": "🔴",
-    "title": "Issue title",
-    "filePath": "path/to/file.ts",
-    "startLine": 42,
-    "endLine": 58,
-    "category": "Bug",
-    "description": "Clear explanation of the issue",
-    "suggestion": "suggested fix code or empty string",
-    "confidence": 85
-  }
-]
-
-Rules:
-- severity: one of 🔴 🟠 🟡 🔵 💡
-- filePath: relative path only, no backticks, no :L suffix
-- startLine/endLine: integers
-- confidence: integer 0-100 (90-100 = certain, 70-89 = clear, 50-69 = likely, below 50 = do not include)
-- Output ONLY valid JSON array. No markdown, no explanation, no code fences.`,
-                },
-              ],
-            },
-            org.id,
+          const followUp = await executeFindingsRecovery(
+            { model: reviewModel, reviewBody, parsedFindingsCount: findings.length, tableFindingsTotal },
+            coverage,
+            request => createAiMessage(request, org.id),
           );
 
           const findingsBlock = followUp.text;

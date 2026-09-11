@@ -1,6 +1,6 @@
+import "server-only";
 import { authenticateApiToken } from "@/lib/api-auth";
 import { prisma } from "@octopus/db";
-import { processReview } from "@/lib/reviewer";
 import * as github from "@/lib/github";
 import * as gitlab from "@/lib/gitlab";
 import * as bitbucket from "@/lib/bitbucket";
@@ -35,73 +35,52 @@ export async function POST(
   // Provider-aware wording: GitLab calls them "merge requests".
   const prLabel = repo.provider === "gitlab" ? "Merge request" : "Pull request";
 
-  const pr = await prisma.pullRequest.findFirst({
-    where: { repositoryId: repo.id, number: prNumber },
-  });
-
-  if (!pr) {
-    // On-demand: the PR/MR exists on the provider but isn't synced into our DB yet
-    // (e.g. opened before the repo was connected, so no webhook ever fired for it).
-    // Fetch it straight from the provider API and kick off the full review flow.
-    const parts = repo.fullName.split("/");
-    if (parts.length < 2) {
-      return Response.json({ error: "Invalid repository name" }, { status: 500 });
-    }
-    const [owner, repoName] = parts;
-    try {
-      let details;
-      if (repo.provider === "github") {
-        if (!repo.installationId) throw new Error("Missing installation id");
-        details = await github.getPullRequestDetails(repo.installationId, owner, repoName, prNumber);
-      } else if (repo.provider === "gitlab") {
-        details = await gitlab.getPullRequestDetails(result.org.id, repo.fullName, prNumber);
-      } else if (repo.provider === "bitbucket") {
-        details = await bitbucket.getPullRequestDetails(result.org.id, owner, repoName, prNumber);
-      } else {
-        return Response.json({ error: `${prLabel} not found` }, { status: 404 });
-      }
-
-      const outcome = await startReviewFlow({
-        provider: repo.provider as "github" | "gitlab" | "bitbucket",
-        installationId: repo.installationId ?? undefined,
-        organizationId: result.org.id,
-        repoFullName: repo.fullName,
-        repoId: repo.id,
-        orgId: result.org.id,
-        prNumber: details.number,
-        prTitle: details.title,
-        prUrl: details.url,
-        prAuthor: details.author,
-        headSha: details.headSha,
-        triggerCommentId: 0,
-        triggerCommentBody: "",
-      });
-
-      if (!outcome.started) {
-        // Blocked author / paused org / duplicate: tell the caller instead of
-        // claiming a review started that never will.
-        const status = outcome.reason === "already_in_progress" ? 409 : 422;
-        return Response.json({ error: outcome.message, reason: outcome.reason }, { status });
-      }
-      return Response.json({ message: "Review started", prNumber: details.number });
-    } catch (err) {
-      console.error(`[cli] Failed to fetch ${repo.provider} ${prLabel} #${prNumber}:`, err);
+  // Refresh provider details for both existing and newly discovered PRs.
+  // Shared admission validates that head again after taking its DB snapshot.
+  const parts = repo.fullName.split("/");
+  if (parts.length < 2) {
+    return Response.json({ error: "Invalid repository name" }, { status: 500 });
+  }
+  const [owner, repoName] = parts;
+  const installationId = repo.installationId ?? result.org.githubInstallationId;
+  try {
+    let details;
+    if (repo.provider === "github") {
+      if (!installationId) throw new Error("Missing installation id");
+      details = await github.getPullRequestDetails(installationId, owner, repoName, prNumber);
+    } else if (repo.provider === "gitlab") {
+      details = await gitlab.getPullRequestDetails(result.org.id, repo.fullName, prNumber);
+    } else if (repo.provider === "bitbucket") {
+      details = await bitbucket.getPullRequestDetails(result.org.id, owner, repoName, prNumber);
+    } else {
       return Response.json({ error: `${prLabel} not found` }, { status: 404 });
     }
+
+    const outcome = await startReviewFlow({
+      provider: repo.provider as "github" | "gitlab" | "bitbucket",
+      installationId: installationId ?? undefined,
+      organizationId: result.org.id,
+      repoFullName: repo.fullName,
+      repoId: repo.id,
+      orgId: result.org.id,
+      prNumber: details.number,
+      prTitle: details.title,
+      prUrl: details.url,
+      prAuthor: details.author,
+      headSha: details.headSha,
+      triggerCommentId: 0,
+      triggerCommentBody: "",
+    });
+
+    if (!outcome.started) {
+      // Blocked author / paused org / duplicate: tell the caller instead of
+      // claiming a review started that never will.
+      const status = ["already_in_progress", "stale_head", "request_contended"].includes(outcome.reason) ? 409 : 422;
+      return Response.json({ error: outcome.message, reason: outcome.reason }, { status });
+    }
+    return Response.json({ message: "Review started", pullRequestId: outcome.pullRequestId, prNumber: details.number });
+  } catch (err) {
+    console.error(`[cli] Failed to fetch ${repo.provider} ${prLabel} #${prNumber}:`, err);
+    return Response.json({ error: `${prLabel} not found` }, { status: 404 });
   }
-
-  if (pr.status === "reviewing") {
-    return Response.json({ error: "Review already in progress" }, { status: 409 });
-  }
-
-  // Start review in the background
-  processReview(pr.id).catch((err) => {
-    console.error(`[cli] Review failed for PR #${prNumber}:`, err);
-  });
-
-  return Response.json({
-    message: "Review started",
-    pullRequestId: pr.id,
-    prNumber: pr.number,
-  });
 }

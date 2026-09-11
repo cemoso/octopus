@@ -24,6 +24,8 @@ const publicPrefixes = [
   "/api/slack/commands",
   "/api/stripe",
   "/api/cli",
+  // This endpoint validates API tokens or sessions in its own handler.
+  "/api/review-attempts/",
   "/api/agent",
   "/api/presence",
   "/api/admin",
