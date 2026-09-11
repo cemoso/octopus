@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.148] - 2026-09-11
+
+### Fixed
+- GitHub reviews recover complete newly added text files when the files API omits their patch but the full diff contains it. Recovered content must match the file's exact Git blob hash.
+- Operators: recovered patches use the existing acquisition and review allowances. Binary exclusions, provider selection and completeness gates are unchanged; oversized reviews can still remain unassessed. No database migration is required.
+
 ## [1.0.147] - 2026-09-11
 
 ### Fixed

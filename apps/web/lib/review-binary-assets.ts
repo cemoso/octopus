@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { indexGitHubDiffSections } from "@/lib/github-diff-sections";
 
 const policy = "github-binary-png-v1" as const;
 const fullSha = /^[0-9a-f]{40}$/;
@@ -47,20 +48,9 @@ function parseBinarySection(rawSection: string): BinarySection | undefined {
 /** Index once; any duplicate old/new path invalidates its candidate evidence. */
 export function indexGitHubBinaryPngSections(rawDiff: string): Map<string, BinarySection> {
   const candidates = new Map<string, BinarySection>();
-  const seen = new Set<string>();
-  const conflicts = new Set<string>();
-  for (const section of rawDiff.split(/(?=^diff --git )/m)) {
-    if (!section) continue;
-    const paths = /^diff --git a\/(.+?) b\/(.+)\n/.exec(section);
-    // Uninterpretable headers could alias another path (for example Git's
-    // quoted path syntax). Do not authorize new exclusions in that case.
-    if (!paths) return new Map();
-    for (const path of new Set([paths[1], paths[2]])) {
-      if (seen.has(path)) { conflicts.add(path); candidates.delete(path); }
-      seen.add(path);
-    }
+  for (const section of indexGitHubDiffSections(rawDiff).values()) {
     const parsed = parseBinarySection(section);
-    if (parsed && !conflicts.has(parsed.path)) candidates.set(parsed.path, parsed);
+    if (parsed) candidates.set(parsed.path, parsed);
   }
   return candidates;
 }
