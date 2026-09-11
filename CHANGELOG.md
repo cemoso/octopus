@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Reviews: a standalone Conflict Risk advisory after the Findings Summary no longer invalidates an otherwise valid review. Invalid assessments explicitly distinguish complete input from an unassessed result and show no category or overall scores.
+- Operators: response validation records a specific structural failure reason without retaining response excerpts. Complete changed-file input alone cannot pass the review check; malformed findings, missing request evidence and incomplete provider responses still fail. No database migration is required.
+
 ## [1.0.145] - 2026-09-11
 
 ### Fixed

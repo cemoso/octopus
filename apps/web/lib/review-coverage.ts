@@ -49,6 +49,7 @@ export type ReviewCoverage = {
   baseSha: string | null;
   inventoryComplete: boolean;
   expectedFiles: number | null;
+  /** Changed-input completeness only; assessment validity is recorded separately. */
   complete: boolean;
   files: FileCoverage[];
   limitations: string[];
@@ -203,14 +204,14 @@ export function reviewAssessmentComplete(coverage: ReviewCoverage): boolean {
 }
 
 export function reviewCheckResult(coverage: ReviewCoverage, blocking: boolean, findings: number): { conclusion: "failure" | "success"; title: string; summary: string } {
-  if (!reviewAssessmentComplete(coverage)) return { conclusion: "failure", title: "Review incomplete — coverage or assessment missing", summary: coverageSummary(coverage) };
+  if (!reviewAssessmentComplete(coverage)) return { conclusion: "failure", title: coverage.complete ? "Input complete — assessment invalid or unavailable" : "Review incomplete — input coverage missing", summary: coverageSummary(coverage) };
   if (coverage.assessment?.state === "not-required") return { conclusion: "success", title: "No eligible changes under repository policy", summary: coverage.assessment.reason };
   return { conclusion: blocking ? "failure" : "success", title: `${coverageCounts(coverage).total} changed files, ${findings} findings`, summary: blocking ? "Issues above the configured severity threshold require attention." : findings > 0 ? "Review scope complete. No issues above the configured threshold." : "Review scope complete. No issues found in the reviewed files." };
 }
 
 export function coverageSummary(coverage: ReviewCoverage): string {
   const c = coverageCounts(coverage);
-  return `${reviewAssessmentComplete(coverage) ? "Review scope complete" : "Review incomplete"}: ${c.supplied}/${coverage.expectedFiles === null && !coverage.inventoryComplete ? "unknown" : c.total} files fully supplied, ${c.partial} partial, ${c.omitted} omitted, ${c.unavailable} unavailable, ${c.excluded} excluded${coverage.inventoryComplete ? "" : "; changed-file inventory incomplete"}.`;
+  return `${reviewAssessmentComplete(coverage) ? "Review scope complete" : coverage.complete ? "Input complete; assessment invalid or unavailable" : "Review incomplete"}: ${c.supplied}/${coverage.expectedFiles === null && !coverage.inventoryComplete ? "unknown" : c.total} files fully supplied, ${c.partial} partial, ${c.omitted} omitted, ${c.unavailable} unavailable, ${c.excluded} excluded${coverage.inventoryComplete ? "" : "; changed-file inventory incomplete"}.`;
 }
 
 function safeCell(value: string): string { return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("|", "&#124;").replaceAll("`", "&#96;").replace(/[\r\n]/g, " "); }
@@ -228,13 +229,24 @@ export function renderReviewCoverage(coverage: ReviewCoverage, attemptId: string
     rows.push(row);
     renderedChars += row.length + 1;
   }
-  return `### Review coverage\n\n**${summary}**\n\nAttempt: ${attemptId} ${attemptUrl}.\nHead: \`${coverage.headSha ?? "unknown"}\`. Base: \`${coverage.baseSha ?? "unknown"}\`.\n\n${coverage.comment ? `Author context: ${coverage.comment.suppliedChars}/${coverage.comment.receivedChars} characters supplied${coverage.comment.truncated ? " (truncated)" : ""}; source excerpts and hashes remain unverified and do not add changed-file coverage.\n\n` : ""}${reviewAssessmentComplete(coverage) ? "Coverage describes the supplied review scope and assessment disposition; excluded files were not reviewed." : "**Overall: not assessed — incomplete coverage.** Findings apply only to the supplied material; this is not a complete PR assessment."}\n\n#### Changed-file coverage (${coverage.files.length} known paths)\n\n| File | Input coverage | Reason |\n| --- | --- | --- |\n${rows.join("\n")}\n${coverage.files.length > rows.length ? "\nThe full inventory is stored with this review attempt.\n" : ""}\n`;
+  return `### Review coverage\n\n**${summary}**\n\nAttempt: ${attemptId} ${attemptUrl}.\nHead: \`${coverage.headSha ?? "unknown"}\`. Base: \`${coverage.baseSha ?? "unknown"}\`.\n\n${coverage.comment ? `Author context: ${coverage.comment.suppliedChars}/${coverage.comment.receivedChars} characters supplied${coverage.comment.truncated ? " (truncated)" : ""}; source excerpts and hashes remain unverified and do not add changed-file coverage.\n\n` : ""}${reviewAssessmentComplete(coverage) ? "Coverage describes the supplied review scope and assessment disposition; excluded files were not reviewed." : `**Overall: not assessed — ${unassessedReason(coverage)}.** Findings apply only to the supplied material; this is not a complete PR assessment.`}\n\n#### Changed-file coverage (${coverage.files.length} known paths)\n\n| File | Input coverage | Reason |\n| --- | --- | --- |\n${rows.join("\n")}\n${coverage.files.length > rows.length ? "\nThe full inventory is stored with this review attempt.\n" : ""}\n`;
+}
+
+function unassessedReason(coverage: ReviewCoverage): string {
+  if (coverage.assessment?.state === "not-required") return "no eligible changes under repository policy";
+  return coverage.complete ? "assessment invalid or unavailable" : "incomplete coverage";
 }
 
 export function applyReviewCoverage(body: string, coverage: ReviewCoverage, attemptId: string): string {
-  const assessed = reviewAssessmentComplete(coverage) && coverage.assessment?.state !== "not-required" ? body : body.split(/(<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->)/g).map((part, index) => index % 2 ? part : part
-    .replace(/^#{1,6} Score\s*\n[\s\S]*?(?=\n#{1,6} |$)/im, "### Score\n\nNot assessed — incomplete review coverage.\n")
-    .replace(/^.*\bOverall\b.*[1-5]\/5.*$/gim, "Overall: not assessed — incomplete review coverage.")).join("");
-  const resultBody = coverage.assessment?.state === "not-required" ? assessed.replaceAll("incomplete review coverage", "no eligible changes under repository policy") : assessed;
+  const reason = unassessedReason(coverage);
+  const resultBody = reviewAssessmentComplete(coverage) && coverage.assessment?.state === "completed" ? body
+    : body.split(/(<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->)/g).map((part, index) => index % 2 ? part : part
+      // Multiline `$` ends at a line boundary, not the end of a score section.
+      .replace(/^#{1,6}[ \t]+(?:\*\*)?Score(?:\*\*)?[ \t]*\r?\n[\s\S]*?(?=^#{1,6} |(?![\s\S]))/gim,
+        `### Score\n\nNot assessed — ${reason}.\n\n`)
+      // Also suppress orphaned category/overall rows from malformed reports.
+      .split("\n").filter(line => !(/(?:\d+(?:\.\d+)?[ \t]*\/[ \t]*\d+|N\/A)/i.test(line)
+        && (line.trimStart().startsWith("|") || /\b(?:Security|Code Quality|Performance|Error Handling|Consistency|Overall)\b/i.test(line))))
+      .join("\n")).join("");
   return renderReviewCoverage(coverage, attemptId) + `\nAssessment: ${coverage.assessment?.reason ?? "Completion evidence unavailable"}.\n\n` + resultBody;
 }

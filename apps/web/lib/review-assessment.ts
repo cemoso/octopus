@@ -103,52 +103,81 @@ export async function executeFindingsRecovery(
   return response;
 }
 
-/** Validate the emitted report contract, independently of provider termination. */
-export function validReviewResponse(text: string): boolean {
-  if ((text.match(/^## 🐙 Octopus Review\s*$/gm) ?? []).length !== 1
-    || (text.match(/^### Score\s*$/gm) ?? []).length !== 1
-    || !/^### Summary\s*\n\s*\S/m.test(text)) return false;
-  const score = /^### Score\s*\n([\s\S]*?)(?=\n#{1,6} |(?![\s\S]))/m.exec(text)?.[1] ?? "";
-  if (!/^\|\s*Category\s*\|\s*Score\s*\|\s*Notes\s*\|\s*$/m.test(score)) return false;
+/** Fixed diagnostic messages only: never include untrusted response excerpts. */
+export function reviewResponseValidationError(text: string): string | null {
+  if ((text.match(/^## 🐙 Octopus Review[ \t]*\r?$/gm) ?? []).length !== 1
+    || (text.match(/^### Score[ \t]*\r?$/gm) ?? []).length !== 1
+    || (text.match(/^### Summary[ \t]*\r?$/gm) ?? []).length !== 1
+    || !/^### Summary[ \t]*\r?\n\s*\S/m.test(text)) return "Review headings missing or duplicated";
+  const score = /^### Score[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |(?![\s\S]))/m.exec(text)?.[1] ?? "";
+  if ((score.match(/^\|[ \t]*Category[ \t]*\|[ \t]*Score[ \t]*\|[ \t]*Notes[ \t]*\|[ \t]*\r?$/gm) ?? []).length !== 1) return "Score table header missing or duplicated";
   for (const category of ["Security", "Code Quality", "Performance", "Error Handling", "Consistency"]) {
     const rows = score.split("\n").filter(line => line.split("|")[1]?.trim().replaceAll("**", "") === category);
     if (rows.length !== 1 || rows[0].split("|").length !== 5
-      || !/^(?:[1-5]\/5|N\/A)$/.test(rows[0].split("|")[2].trim().replaceAll("**", ""))) return false;
+      || !/^(?:[1-5]\/5|N\/A)$/.test(rows[0].split("|")[2].trim().replaceAll("**", ""))) return "Score category rows missing, duplicated or malformed";
   }
   const overall = score.split("\n").filter(line => /Overall/i.test(line));
-  if (overall.length !== 1 || !/^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/.test(overall[0])) return false;
-  return validReviewFindings(text);
+  if (overall.length !== 1 || !/^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/.test(overall[0])) return "Overall score missing, duplicated or malformed";
+  return reviewFindingsValidationError(text);
 }
 
-export function validReviewFindings(text: string): boolean {
+export function validReviewResponse(text: string): boolean {
+  return reviewResponseValidationError(text) === null;
+}
+
+function reviewFindingsValidationError(text: string): string | null {
   const matches = [...text.matchAll(/<!-- OCTOPUS_FINDINGS_START -->\s*([\s\S]*?)\s*<!-- OCTOPUS_FINDINGS_END -->/g)];
   if (matches.length !== 1
     || text.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2
-    || text.split("<!-- OCTOPUS_FINDINGS_END -->").length !== 2) return false;
+    || text.split("<!-- OCTOPUS_FINDINGS_END -->").length !== 2) return "Findings JSON markers missing or duplicated";
+  let findings: unknown;
   try {
     const block = matches[0][1].trim();
     const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/.exec(block);
-    const findings: unknown = JSON.parse(fenced ? fenced[1] : block);
-    if (!Array.isArray(findings)
-      || (findings.length > 0 && parseFindingsFromJson(text)?.length !== findings.length)) return false;
-    const severities = ["🔴", "🟠", "🟡", "🔵", "💡"];
-    if (findings.some(finding => !severities.includes(finding.severity)
-      || !Number.isInteger(finding.startLine) || finding.startLine < 1)) return false;
-    const summaries = [...text.matchAll(/^### Findings Summary[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |<!-- OCTOPUS_FINDINGS_START -->|(?![\s\S]))/gm)];
-    if (summaries.length !== 1) return false;
-    const summary = summaries[0][1].trim();
-    const lines = summary.split("\n").map(line => line.trim()).filter(Boolean);
-    if (!/^\|\s*Severity\s*\|\s*Count\s*\|$/.test(lines[0] ?? "")
-      || !/^\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|$/.test(lines[1] ?? "")) return false;
-    const counts = new Map<string, number>();
-    for (const line of lines.slice(2)) {
-      const row = /^\|\s*(🔴|🟠|🟡|🔵|💡)[^|]*\|\s*(\d+)\s*\|$/.exec(line);
-      if (!row || counts.has(row[1]) || !Number.isSafeInteger(Number(row[2]))) return false;
-      counts.set(row[1], Number(row[2]));
-    }
-    return severities.every(severity =>
-      (counts.get(severity) ?? 0) === findings.filter(finding => finding.severity === severity).length);
-  } catch { return false; }
+    findings = JSON.parse(fenced ? fenced[1] : block);
+  } catch { return "Findings JSON is malformed"; }
+  if (!Array.isArray(findings)
+    || (findings.length > 0 && parseFindingsFromJson(text)?.length !== findings.length)) return "Findings JSON entries are malformed";
+  const severities = ["🔴", "🟠", "🟡", "🔵", "💡"];
+  if (findings.some(finding => !finding || !severities.includes(finding.severity)
+    || !Number.isInteger(finding.startLine) || finding.startLine < 1)) return "Findings JSON severity or location is invalid";
+  // Count headings and table headers outside JSON so another section cannot hide
+  // a second summary table. The table itself ends before a standalone advisory.
+  const presentation = text.replace(matches[0][0], "");
+  const summaries = [...text.matchAll(/^### Findings Summary[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |<!-- OCTOPUS_FINDINGS_START -->|(?![\s\S]))/gm)];
+  if (summaries.length !== 1
+    || (presentation.match(/^[ \t]*#{1,6}[ \t]+Findings Summary[ \t]*\r?$/gm) ?? []).length !== 1) return "Findings Summary heading missing or duplicated";
+  const lines = summaries[0][1].trim().split("\n").map(line => line.trim());
+  const header = /^[ \t]*\|[ \t]*Severity[ \t]*\|[ \t]*Count[ \t]*\|[ \t]*\r?$/gm;
+  if ((presentation.match(header) ?? []).length !== 1
+    || !/^\|\s*Severity\s*\|\s*Count\s*\|$/.test(lines[0] ?? "")
+    || !/^\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|$/.test(lines[1] ?? "")) return "Findings Summary table header missing, duplicated or malformed";
+  const counts = new Map<string, number>();
+  let end = 2;
+  for (; end < lines.length && lines[end].startsWith("|"); end++) {
+    const row = /^\|\s*(🔴|🟠|🟡|🔵|💡)[^|]*\|\s*(\d+)\s*\|$/.exec(lines[end]);
+    if (!row || counts.has(row[1]) || !Number.isSafeInteger(Number(row[2]))) return "Findings Summary severity rows duplicated or malformed";
+    counts.set(row[1], Number(row[2]));
+  }
+  const advisory = lines.slice(end).filter(Boolean);
+  // Compatibility with the documented Conflict Risk blockquote, including its
+  // wrapped continuation. Arbitrary prose, another advisory or table is invalid.
+  if (advisory.length && (!/^>\s*⚠️\s+\*\*Conflict Risk\*\*:\s+\S/.test(advisory[0])
+    || advisory.some((line, index) => line.includes("|") || (index > 0
+      && (!/^>\s+[^>#\s]/.test(line) || line.includes("**Conflict Risk**:")))))) return "Unexpected content after Findings Summary table";
+  return severities.every(severity => (counts.get(severity) ?? 0) === findings.filter(finding => finding.severity === severity).length)
+    ? null : "Findings Summary counts do not match findings JSON";
+}
+
+export function validReviewFindings(text: string): boolean {
+  return reviewFindingsValidationError(text) === null;
+}
+
+/** Invalidating an assessment must never rewrite what input was supplied. */
+export function markReviewAssessmentIncomplete(coverage: ReviewCoverage, reason: string): void {
+  if (!coverage.assessment) return;
+  coverage.assessment.state = "incomplete";
+  coverage.assessment.reason = reason;
 }
 
 export function recordNoModelAssessment(coverage: ReviewCoverage): void {
@@ -160,7 +189,6 @@ export function recordNoModelAssessment(coverage: ReviewCoverage): void {
     model: null, policySha256: sha256(JSON.stringify(coverage)), templateSha256: sha256("no-model-v1"),
     requests: [], responseSha256: null, completion: null,
   };
-  coverage.complete = coverage.complete && excludedOnly;
 }
 
 /** The caller persists this digest-only record together with the final outcome. */
@@ -178,20 +206,18 @@ export async function executeCoveredReview(
   try {
     response = await call({ ...request, onRequest: receipt => assessment.requests.push(receipt) });
   } catch (error) {
-    coverage.complete = false;
     assessment.reason = "Provider request failed or was interrupted";
     throw error;
   }
   assessment.responseSha256 = sha256(response.text);
   assessment.completion = response.completion ?? null;
-  const valid = validReviewResponse(response.text);
+  const validationError = reviewResponseValidationError(response.text);
   const observed = assessment.requests.length === 1 && assessment.requests[0].model === response.model
     && assessment.requests[0].provider === response.provider && assessment.requests[0].inputPreserved;
-  assessment.state = observed && valid && response.completion?.state === "completed" ? "completed" : "incomplete";
+  assessment.state = observed && validationError === null && response.completion?.state === "completed" ? "completed" : "incomplete";
   assessment.reason = !observed ? "Actual provider request provenance unavailable"
-    : !valid ? "Empty or malformed review response"
+    : validationError !== null ? validationError
       : response.completion?.state !== "completed" ? "Provider completion incomplete or unknown"
         : "Provider completed a valid review response";
-  coverage.complete = coverage.complete && assessment.state === "completed";
   return response;
 }

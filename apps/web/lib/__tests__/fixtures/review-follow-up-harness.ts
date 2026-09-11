@@ -7,10 +7,13 @@ let prior: ReviewCoverage | null = null;
 let lookupFailure = false;
 let received: { messages: { role: string; content: string }[] };
 let malformed = false;
+let responseOverride: string | null = null;
+let providerInterrupted = false;
 class FakeOpenAI {
   chat = { completions: { create: async (request: typeof received) => {
     received = request;
-    return { model: "gpt-fixture", choices: [{ finish_reason: "stop", message: { content: malformed ? "Malformed response" : report } }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+    if (providerInterrupted) throw new Error("fixture provider interrupted");
+    return { model: "gpt-fixture", choices: [{ finish_reason: "stop", message: { content: responseOverride ?? (malformed ? "Malformed response" : report) } }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
   } } };
 }
 mock.module("openai", () => ({ default: FakeOpenAI }));
@@ -205,6 +208,31 @@ assert.equal(await canRestrictReviewToFollowUp("pr", { ...current, reviewRequest
 await processReview("pr");
 assert.deepEqual(archived.at(-1)!.findings, [], "completed follow-up keeps the existing severity policy");
 assert.ok(received.messages[0].content.includes("RE-REVIEW MODE"));
+// Complete prior input must not turn invalid zero-finding follow-ups positive.
+responseOverride = report.replace(JSON.stringify([finding]), "[]").replace("| 🟠 High | 1 |", "| 🟠 High | 0 |").replace("### Score", "### Score\n### Score");
+await processReview("pr");
+assert.equal((archived.at(-1)!.coverage as ReviewCoverage).complete, true);
+assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.state, "incomplete");
+assert.ok(!summaries.at(-1)!.includes("No new issues detected"));
+assert.ok(!/\|[^\n]*[1-5]\/5/.test(summaries.at(-1)!));
+assert.ok(summaries.at(-1)!.includes("Input complete; assessment invalid or unavailable"));
+if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/invalid-zero-follow-up.json`, JSON.stringify({ archived: archived.at(-1), publishedComment: summaries.at(-1) }, null, 2));
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/invalid-zero-follow-up.html`, '<!doctype html><meta charset="utf-8"><title>Invalid zero-findings follow-up</title>' + Bun.markdown.html(summaries.at(-1)!));
+}
+responseOverride = report.replace("### Findings\n", "> ⚠️ **Conflict Risk**: Shared files changed; coordinate with related work.\n\n### Findings\n");
+await processReview("pr");
+assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.state, "completed");
+responseOverride = null;
+providerInterrupted = true;
+const errorLog = console.error;
+console.error = () => {};
+try {
+  await processReview("pr");
+  assert.equal((archived.at(-1)!.coverage as ReviewCoverage).complete, true);
+  assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.state, "incomplete");
+  assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.reason, "Provider request failed or was interrupted");
+} finally { providerInterrupted = false; console.error = errorLog; }
 // Lookup outages retain full assessment and keep the provider-output gate.
 lookupFailure = true;
 const warn = console.warn;
@@ -216,7 +244,7 @@ try {
   assert.equal(published.at(-1)!.comments.length, 1);
   malformed = true;
   await processReview("pr");
-  assert.equal((archived.at(-1)!.coverage as ReviewCoverage).complete, false);
+  assert.equal((archived.at(-1)!.coverage as ReviewCoverage).complete, true);
   assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.state, "incomplete");
   if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
     await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/malformed-assessment.json`, JSON.stringify(archived.at(-1), null, 2));

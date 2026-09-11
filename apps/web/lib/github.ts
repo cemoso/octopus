@@ -596,11 +596,11 @@ async function getPullRequestDiffViaFiles(
 // truncation marker we append.
 export const MAX_GITHUB_COMMENT_BODY = 64_000;
 
-function compactAttemptReference(body: string): string {
+function compactCoverageReference(body: string): string {
   // Read only the provider's coverage preamble, including previously stored
   // Markdown-link bodies and the publisher's fixed re-review banner. Finding
   // text and arbitrary links are not metadata.
-  const header = /^(?:Review attempt:[^\r\n]*\r?\n\r?\n)?(?:> ✅ No new issues detected since the last review(?: \(commit `[0-9a-f]{7}`\))?\.\r?\n\r?\n)?### Review coverage\r?\n\r?\n\*\*[^\r\n]+\*\*\r?\n\r?\n/.exec(body);
+  const header = /^(?:Review attempt:[^\r\n]*\r?\n\r?\n)?(?:> ✅ No new issues detected since the last review(?: \(commit `[0-9a-f]{7}`\))?\.\r?\n\r?\n)?### Review coverage\r?\n\r?\n\*\*([^\r\n]+)\*\*\r?\n\r?\n/.exec(body);
   if (!header) return "";
   const preamble = body.slice(header[0].length, header[0].length + 2048);
   const reference = /^(?:Attempt: ([A-Za-z0-9_-]+) (https?:\/\/[^\s<>()`]+)\.\r?\n|Attempt: \[`([A-Za-z0-9_-]+)`\]\((https?:\/\/[^\s<>()`]+)\)\. )Head: `(?:[0-9a-f]{40}|unknown)`\. Base: `(?:[0-9a-f]{40}|unknown)`\.(?=\r?\n|$)/i.exec(preamble);
@@ -609,7 +609,7 @@ function compactAttemptReference(body: string): string {
   try {
     const url = new URL(reference[2] ?? reference[4]);
     if (url.username || url.password || url.search || url.hash || url.pathname !== `/api/review-attempts/${attemptId}`) return "";
-    return reference[0];
+    return `**${header[1].slice(0, 600).replace(/[\uD800-\uDBFF]$/, "")}**\n\n${reference[0]}`;
   } catch {
     return "";
   }
@@ -633,7 +633,7 @@ export function truncateForGithubComment(body: string): string {
   const score = /^### Score[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |^Last reviewed commit:|(?![\s\S]))/m.exec(body);
   if (heading && footer && score) {
     const prefix = /^Review attempt:[^\n]*\n\n/.exec(body)?.[0] ?? "";
-    const attemptReference = compactAttemptReference(body);
+    const attemptReference = compactCoverageReference(body);
     const table = score[1].split("\n").filter(line => {
       const category = line.split("|")[1]?.trim().replaceAll("**", "");
       return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
@@ -641,7 +641,8 @@ export function truncateForGithubComment(body: string): string {
     const incomplete = /Overall: not assessed|Not assessed — incomplete review coverage/.test(body);
     const assessment = /^Assessment: [^\n]+/m.exec(body)?.[0] ?? "";
     const reason = assessment.slice(0, 600).replace(/[\uD800-\uDBFF]$/, "");
-    const compactScore = incomplete ? "Overall: not assessed — incomplete review coverage." : table.length > 0 ? table.map(line => {
+    const unassessed = /^\*{0,2}(Overall: not assessed[^\n]*?\.)(?:\*{2})?(?: |$)/m.exec(body)?.[1] ?? "Overall: not assessed — assessment unavailable.";
+    const compactScore = incomplete ? unassessed : table.length > 0 ? table.map(line => {
       const cells = line.split("|");
       if (cells.length !== 5) return "";
       return `|${cells.slice(1, 4).map(cell => {

@@ -1,6 +1,6 @@
 import type { ReviewCoverage } from "@/lib/review-coverage";
-import { applyReviewCoverage } from "@/lib/review-coverage";
-import { validReviewFindings } from "@/lib/review-assessment";
+import { applyReviewCoverage, reviewAssessmentComplete } from "@/lib/review-coverage";
+import { validReviewFindings, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { normalizeLastReviewedCommit, normalizeScoreDenominators, reconcileScoreTable } from "@/lib/review-helpers";
 import { sanitizeMermaidInMarkdown } from "@/lib/mermaid-utils";
 
@@ -23,9 +23,7 @@ export function enforceReviewFindingsIntegrity(original: string, current: string
   const after = findingsBlocks(current);
   if (before.length === 1 && after.length === 1 && before[0] === after[0]
     && (!checkSummary || validReviewFindings(current))) return;
-  coverage.complete = false;
-  coverage.assessment.state = "incomplete";
-  coverage.assessment.reason = "Validated findings were lost, changed or inconsistent during report preparation";
+  markReviewAssessmentIncomplete(coverage, "Validated findings were lost, changed or inconsistent during report preparation");
 }
 
 export function prepareReviewPresentation(body: string, coverage: ReviewCoverage): string {
@@ -49,7 +47,7 @@ export function finalizeReviewPresentation(
 ): { report: string; comment: string } {
   enforceReviewFindingsIntegrity(original, report, coverage);
   const finalize = (body: string) => mapReviewPresentation(body, presentation => {
-    const assessed = coverage.complete ? reconcileScoreTable(presentation, findings)
+    const assessed = reviewAssessmentComplete(coverage) && coverage.assessment?.state === "completed" ? reconcileScoreTable(presentation, findings)
       : applyReviewCoverage(presentation.replace(/### Review coverage[\s\S]*?\nAssessment: [^\n]*\n\n/, ""), coverage, attemptId);
     return normalizeLastReviewedCommit(assessed, coverage.headSha);
   });

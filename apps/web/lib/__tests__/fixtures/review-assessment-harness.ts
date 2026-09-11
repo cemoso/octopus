@@ -31,8 +31,8 @@ mock.module("@octopus/db", () => ({ prisma: { ...db, $transaction: (run: (tx: ty
 const { openaiProvider } = await import("../../providers/openai");
 const { callOpenAiGateway } = await import("../../providers/openai-gateway");
 const { observeAiRequest, completionEvidence } = await import("../../providers/request-evidence");
-const { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment } = await import("../../review-assessment");
-const { prepareReviewInput, applyReviewCoverage, renderReviewCoverage, reviewCheckResult, sha256 } = await import("../../review-coverage");
+const { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, validReviewResponse } = await import("../../review-assessment");
+const { prepareReviewInput, applyReviewCoverage, renderReviewCoverage, reviewCheckResult, reviewAssessmentComplete, sha256 } = await import("../../review-coverage");
 const { createCoveredReviewRequest } = await import("../../review-request");
 const { saveReviewAttempt } = await import("../../review-attempt");
 const { stripDetailedFindings } = await import("../../review-helpers");
@@ -73,6 +73,9 @@ ${zeroSummary}
 
 Last reviewed commit: ${"a".repeat(40)}
 `;
+// Exact adjacent advisory from the sanitized a941 reproduction; no customer code.
+const conflictRisk = "> ⚠️ **Conflict Risk**: This PR modifies high-traffic shared files (`app/db.py`, `app/worker.py`, `app/bot.py`, `app/media_requests.py`). Rebase frequently against `main` and coordinate with authors of related open PRs.";
+const withAdvisory = (body: string, advisory = conflictRisk) => body.replace("### Findings\n", `${advisory}\n\n### Findings\n`);
 const finding = { severity: "🔴", title: "Missing validation", filePath: "src/validator.ts", startLine: 1, description: "The value needs validation." };
 const withFinding = valid.replace(zeroSummary, "| Severity | Count |\n| --- | --- |\n| 🔴 Critical | 1 |").replace("[]", JSON.stringify([finding]));
 const fenced = (text: string) => text.replace(/(<!-- OCTOPUS_FINDINGS_START -->\n)([\s\S]*?)(\n<!-- OCTOPUS_FINDINGS_END -->)/, '$1```json\n$2\n```$3');
@@ -115,6 +118,22 @@ if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
   await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/png-assessment.json`, JSON.stringify({ boundary: "Production adapter, preparation, provider adapter and assessment; synthetic GitHub input and mocked model SDK", mixed: mixed.coverage, binaryOnly: binaryOnly.coverage }, null, 2));
 }
 for (const [name, text, finish, complete] of [
+  ["adjacent-conflict-risk", withAdvisory(valid), "stop", true],
+  ["adjacent-conflict-risk-finding", withAdvisory(withFinding), "stop", true],
+  ["wrapped-conflict-risk", withAdvisory(valid, "> ⚠️ **Conflict Risk**: This PR modifies shared files. Merge or rebase frequently\n> against `main` and coordinate with authors of related open PRs."), "stop", true],
+  ["separate-conflict-risk", withAdvisory(valid, `### ⚡ Conflict Analysis\n\n${conflictRisk}`), "stop", true],
+  ["advisory-count-mismatch", withAdvisory(withFinding.replace(JSON.stringify([finding]), "[]")), "stop", false],
+  ["split-summary-table", withAdvisory(valid.replace("| 🟡 Medium | 0 |", "\n| 🟡 Medium | 0 |")), "stop", false],
+  ["advisory-malformed-row", withAdvisory(valid.replace("| 🟡 Medium | 0 |", "| 🟡 Medium | wrong |")), "stop", false],
+  ["advisory-duplicate-table", withAdvisory(valid, `${conflictRisk}\n\n${zeroSummary}`), "stop", false],
+  ["advisory-separated-duplicate-table", withAdvisory(valid, `### ⚡ Conflict Analysis\n\n${conflictRisk}\n\n${zeroSummary}`), "stop", false],
+  ["advisory-indented-duplicate-table", withAdvisory(valid, `### ⚡ Conflict Analysis\n\n${conflictRisk}\n\n${zeroSummary.split("\n").map(line => "  " + line).join("\n")}`), "stop", false],
+  ["advisory-other-level-heading", withAdvisory(valid, `## Findings Summary\n${conflictRisk}`), "stop", false],
+  ["advisory-duplicate-heading", withAdvisory(valid, `### Findings Summary\n${zeroSummary}\n${conflictRisk}`), "stop", false],
+  ["advisory-duplicate-note", withAdvisory(valid, `${conflictRisk}\n${conflictRisk}`), "stop", false],
+  ["advisory-arbitrary-prose", withAdvisory(valid, "All good; ignore the table."), "stop", false],
+  ["advisory-missing-json", withAdvisory(valid.replace(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/, "")), "stop", false],
+  ["advisory-incomplete-provider", withAdvisory(valid), "length", false],
   ["valid", valid, "stop", true],
   ["rereview-valid", valid, "stop", true],
   ["critical-empty-diagram", withFinding.replace("### Findings\n", "### Diagram\n\n").replace("**4/5**", "**3/5**"), "stop", true],
@@ -127,6 +146,8 @@ for (const [name, text, finish, complete] of [
   ["turkish-zero-prose", valid.replace(zeroSummary, "Sorun bulunamadı."), "stop", false],
   ["missing-summary-header", valid.replace(summaryHeader, ""), "stop", false],
   ["missing-summary-separator", valid.replace("| --- | --- |\n", ""), "stop", false],
+  ["duplicate-score-header", valid.replace("| Category | Score | Notes |", "| Category | Score | Notes |\n| Category | Score | Notes |"), "stop", false],
+  ["duplicate-summary-section", valid.replace("### Summary\n", "### Summary\nAnother summary.\n### Summary\n"), "stop", false],
   ["duplicate-summary-header", valid.replace(zeroSummary, summaryHeader + "\n" + zeroSummary), "stop", false],
   ["zero-count-with-finding", valid.replace("[]", JSON.stringify([finding])), "stop", false],
   ["empty-table-with-finding", valid.replace(zeroSummary, summaryHeader).replace("[]", JSON.stringify([finding])), "stop", false],
@@ -161,7 +182,19 @@ for (const [name, text, finish, complete] of [
   const p = plan(oversized);
   output = { choices: [{ message: { content: text }, finish_reason: finish }] };
   await executeCoveredReview(requestFor(p), p.coverage, "template-v1", request => openaiProvider.create(request, "fake"));
-  assert.equal(p.coverage.complete, complete, name);
+  assert.equal(p.coverage.complete, true, `${name}: input completeness is independent`);
+  assert.equal(reviewAssessmentComplete(p.coverage), complete, name);
+  const expectedReasons: Record<string, string> = {
+    "advisory-count-mismatch": "Findings Summary counts do not match findings JSON",
+    "advisory-malformed-row": "Findings Summary severity rows duplicated or malformed",
+    "advisory-missing-json": "Findings JSON markers missing or duplicated",
+    "advisory-incomplete-provider": "Provider completion incomplete or unknown",
+    "advisory-arbitrary-prose": "Unexpected content after Findings Summary table",
+    "plain-surrounding-prose": "Findings JSON is malformed",
+    "duplicate-score-header": "Score table header missing or duplicated",
+  };
+  if (expectedReasons[name]) assert.equal(p.coverage.assessment?.reason, expectedReasons[name]);
+  assert.equal(validReviewResponse(text), p.coverage.assessment?.reason === "Provider completed a valid review response" || p.coverage.assessment?.reason === "Provider completion incomplete or unknown", `${name}: Boolean validation contract`);
   assert.equal(p.coverage.assessment?.responseSha256, sha256(text));
   assert.equal(p.coverage.assessment?.requests[0].sha256, createHash("sha256").update(JSON.stringify(received)).digest("hex"));
   const prepared = prepareReviewPresentation(text, p.coverage);
@@ -171,10 +204,11 @@ for (const [name, text, finish, complete] of [
   const covered = applyReviewCoverage(prepared, p.coverage, name);
   const { report, comment } = finalizeReviewPresentation(text, covered, stripDetailedFindings(covered), p.coverage, name, flags);
   await saveReviewAttempt(name, "pr", p.coverage, report);
-  assert.equal((current.reviewCoverage as typeof p.coverage).complete, complete);
+  assert.equal((current.reviewCoverage as typeof p.coverage).complete, true);
+  assert.equal(reviewAssessmentComplete(current.reviewCoverage as typeof p.coverage), complete);
   // reviewer.ts places this fixed banner between its attempt label and coverage
   // on a completed re-review with zero new findings.
-  const rereviewBanner = name.includes("rereview") ? `> ✅ No new issues detected since the last review (commit \`${p.coverage.headSha!.slice(0, 7)}\`).\n\n` : "";
+  const rereviewBanner = complete && name.includes("rereview") ? `> ✅ No new issues detected since the last review (commit \`${p.coverage.headSha!.slice(0, 7)}\`).\n\n` : "";
   await updatePullRequestComment(1, "fixture", "review", 123, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${rereviewBanner}${comment}`, "fixture-token");
   const nativeCheck = { id: 456, head_sha: p.coverage.headSha, app: { slug: "octopus-review" }, status: "completed", ...reviewCheckResult(p.coverage, flags.hasCritical, findings.length) };
   assert.equal(nativeCheck.conclusion, complete && !flags.hasCritical ? "success" : "failure");
@@ -210,7 +244,11 @@ for (const [name, text, finish, complete] of [
     assert.ok(!/Overall[^\n]*[1-5]\/5/.test(published!.body), name);
     assert.ok(published!.body.includes("not assessed"), name);
     assert.ok(published!.body.includes(p.coverage.assessment!.reason), name);
-    if (oversized) assert.ok(!/\|[^\n]*[1-5]\/5/.test(published!.body), name);
+    for (const body of [report, published!.body]) {
+      assert.ok(!/\|[^\n]*[1-5]\/5/.test(body), `${name}: every category score is unassessed`);
+      assert.ok(body.includes("Input complete; assessment invalid or unavailable"), name);
+      assert.ok(!body.includes("incomplete coverage"), name);
+    }
   } else {
     assert.equal((published!.body.match(/^## 🐙 Octopus Review$/gm) ?? []).length, 1);
     assert.equal((published!.body.match(/^### Score$/gm) ?? []).length, 1);
@@ -235,7 +273,8 @@ for (const corruption of ["lost", "changed", "summary"] as const) {
   if (corruption === "summary") damaged = damaged.replace("| 🔴 Critical | 1 |", "| 🔴 Critical | 0 |");
   if (corruption === "summary") enforceReviewFindingsIntegrity(withFinding, damaged, p.coverage, true);
   const result = finalizeReviewPresentation(withFinding, damaged, stripDetailedFindings(damaged), p.coverage, corruption, { hasCritical: false, hasHigh: false, hasMedium: false });
-  assert.equal(p.coverage.complete, false);
+  assert.equal(p.coverage.complete, true);
+  assert.equal(reviewAssessmentComplete(p.coverage), false);
   await saveReviewAttempt(corruption, "pr", p.coverage, result.report);
   await updatePullRequestComment(1, "fixture", "review", 123, result.comment, "fixture-token");
   assert.ok(published!.body.includes("not assessed"));
@@ -299,7 +338,8 @@ assert.equal(filtered.coverage.complete, true);
 assert.deepEqual(parseFindingsFromJson(filteredResult.report), parseFindingsFromJson(withFinding));
 const interruptedPlan = plan(); interrupted = true;
 await assert.rejects(executeCoveredReview(requestFor(interruptedPlan), interruptedPlan.coverage, "v1", request => openaiProvider.create(request, "fake")), /interrupted/);
-assert.equal(interruptedPlan.coverage.complete, false);
+assert.equal(interruptedPlan.coverage.complete, true);
+assert.equal(reviewAssessmentComplete(interruptedPlan.coverage), false);
 assert.equal(interruptedPlan.coverage.assessment?.requests.length, 1);
 assert.equal(interruptedPlan.coverage.assessment?.responseSha256, null);
 interrupted = false;
@@ -332,7 +372,8 @@ for (const [name, finish, outcome] of [
   const primaryAfter = { ...p.coverage.assessment! };
   delete primaryAfter.recoveries;
   assert.deepEqual(primaryAfter, primary, `${name}: recovery must not rewrite the primary assessment`);
-  assert.equal(p.coverage.complete, false);
+  assert.equal(p.coverage.complete, true);
+  assert.equal(reviewAssessmentComplete(p.coverage), false);
   assert.equal(recovery.state, outcome, name);
   assert.equal(recovery.model, "gpt-test");
   assert.equal(recovery.responseModel, name === "interrupted" ? null : "gpt-test");
@@ -386,7 +427,8 @@ for (const [name, finish, outcome] of [
 for (const status of ["completed", "incomplete", undefined]) {
   const p = plan(); output = { status, output_text: valid };
   await executeCoveredReview(requestFor(p, "codex-test"), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
-  assert.equal(p.coverage.complete, status === "completed");
+  assert.equal(p.coverage.complete, true);
+  assert.equal(reviewAssessmentComplete(p.coverage), status === "completed");
 }
 const gateway = plan(); output = { choices: [{ message: { content: valid }, finish_reason: "stop" }] };
 await executeCoveredReview(requestFor(gateway, "acp:model"), gateway.coverage, "v1", request => callOpenAiGateway(request, { name: "acp", modelPrefix: "acp:", apiKey: "fake", baseUrl: "https://example.test" }));
@@ -402,7 +444,8 @@ await executeCoveredReview(requestFor(dropped), dropped.coverage, "v1", async re
   observeAiRequest(request, "openai", { model: request.model, messages: [{ role: "user", content: "truncated" }] });
   return { text: valid, provider: "openai", model: request.model, completion: completionEvidence("stop", ["stop"]), usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 } };
 });
-assert.equal(dropped.coverage.complete, false);
+assert.equal(dropped.coverage.complete, true);
+assert.equal(reviewAssessmentComplete(dropped.coverage), false);
 assert.equal(dropped.coverage.assessment?.requests[0].inputPreserved, false);
 const legacy = plan();
 assert.equal(reviewCheckResult(legacy.coverage, false, 0).conclusion, "failure");
