@@ -31,6 +31,10 @@ AI code review for your pull requests. Get a review summary, severity-ranked fin
 
 ### Octopus Cloud
 
+For GitHub projects, give your coding AI the [homepage setup prompt](https://octopus-review.ai/#agent-setup). It uses the native CLI to set up the repository in your current project; you approve sign-in and GitHub access. See the [CLI guide](https://octopus-review.ai/docs/cli) for installation and agent setup.
+
+To set up through the dashboard instead:
+
 1. [Sign in](https://octopus-review.ai/login) with Google, GitHub, Microsoft or an email magic link.
 2. Create your organization, connect GitHub, GitLab or Bitbucket, and choose the repositories to review.
 3. Open a pull request or merge request. Read the review in your code host and address the findings there.
