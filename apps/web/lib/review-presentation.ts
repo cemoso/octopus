@@ -1,9 +1,10 @@
+import type { InlineFinding } from "@/lib/review-dedup";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 import { applyReviewCoverage, reviewAssessmentComplete } from "@/lib/review-coverage";
 import { validReviewFindings, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { normalizeLastReviewedCommit, normalizeScoreDenominators, reconcileScoreTable } from "@/lib/review-helpers";
 import { sanitizeMermaidInMarkdown } from "@/lib/mermaid-utils";
-import { containExcludedInputClaims } from "@/lib/review-evidence";
+import { containExcludedInputClaims, parseReviewFindingsSet } from "@/lib/review-evidence";
 
 function findingsBlocks(body: string): string[] {
   return body.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/g) ?? [];
@@ -57,4 +58,14 @@ export function finalizeReviewPresentation(
     return normalizeLastReviewedCommit(assessed, coverage.headSha);
   });
   return { report: finalize(report), comment: finalize(comment) };
+}
+
+export function prepareRecoveredReviewPresentation(body: string, findings: InlineFinding[], coverage: ReviewCoverage): string | null {
+  const intact = parseReviewFindingsSet(body) !== null;
+  const presentation = intact ? body.replace(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/g, "") : body;
+  const combined = `${presentation}\n<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify(findings)}\n<!-- OCTOPUS_FINDINGS_END -->`;
+  const contained = containExcludedInputClaims(combined, coverage);
+  if (contained.paths.length === 0) return null;
+  markReviewAssessmentIncomplete(coverage, "Excluded-input claims require verification; no valid overall assessment");
+  return prepareReviewPresentation(contained.body, coverage);
 }

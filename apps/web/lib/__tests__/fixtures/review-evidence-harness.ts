@@ -46,8 +46,8 @@ const { fetchGitHubReviewInput } = await import("../../github-review-input");
 const { buildGeneratedMatcher } = await import("../../generated-files");
 const { prepareReviewInput, applyReviewCoverage, reviewAssessmentComplete, reviewCheckResult, sha256 } = await import("../../review-coverage");
 const { createCoveredReviewRequest } = await import("../../review-request");
-const { executeCoveredReview } = await import("../../review-assessment");
-const { prepareReviewPresentation, finalizeReviewPresentation } = await import("../../review-presentation");
+const { executeCoveredReview, executeFindingsRecovery } = await import("../../review-assessment");
+const { prepareRecoveredReviewPresentation, prepareReviewPresentation, finalizeReviewPresentation } = await import("../../review-presentation");
 const { parseFindings, FINDINGS_START_MARKER, FINDINGS_END_MARKER } = await import("../../review-dedup");
 const { stripDetailedFindings, buildInlineComments, buildLowSeveritySummary, parseDiffLines, countFindingsFromTable } = await import("../../review-helpers");
 const { saveReviewAttempt } = await import("../../review-attempt");
@@ -129,6 +129,7 @@ async function plan(excluded = true) {
 }
 
 const scenarios = [
+  { name: "recovery-excluded-claim", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([])), excluded: true, valid: false, kept: [security], recovery: [unsupported, security] },
   { name: "excluded-subject", body: report([unsupported, security]), excluded: true, valid: true, kept: [security] },
   { name: "excluded-only-claim", body: report([unsupported], "> ✅ No new issues detected since the last review."), excluded: true, valid: true, kept: [] },
   { name: "score-only-claim", body: report([security], "Parameterize the supplied query.").replace("Registration must be fixed", `\`${journalPath}\` is not visible`), excluded: true, valid: true, kept: [security] },
@@ -159,7 +160,19 @@ for (const scenario of scenarios) {
   assert.equal(originalReceipt.requests[0].sha256, sha256(JSON.stringify(received)));
   assert.equal(originalReceipt.requests[0].inputPreserved, true);
 
-  const prepared = prepareReviewPresentation(scenario.body, input.coverage);
+  let prepared = prepareReviewPresentation(scenario.body, input.coverage);
+  if (scenario.recovery) {
+    responseText = JSON.stringify(scenario.recovery);
+    const recovered = await executeFindingsRecovery({ model: "gpt-test", reviewBody: prepared, parsedFindingsCount: 0, tableFindingsTotal: 2 }, input.coverage, params => openaiProvider.create(params, "fixture-key"));
+    const recoveryReceipt = structuredClone(input.coverage.assessment!.recoveries![0]);
+    const contained = prepareRecoveredReviewPresentation(prepared, parseFindings(block(JSON.parse(recovered.text))), input.coverage);
+    assert.notEqual(contained, null);
+    prepared = contained!;
+    assert.deepEqual(input.coverage.assessment!.recoveries![0], recoveryReceipt);
+    assert.equal(recoveryReceipt.responseSha256, sha256(responseText));
+    assert.equal(recoveryReceipt.requests[0].sha256, sha256(JSON.stringify(received)));
+    assert.equal(recoveryReceipt.completion?.state, "completed");
+  }
   const findings = parseFindings(prepared);
   assert.deepEqual(findings, scenario.kept, scenario.name);
   assert.equal(countFindingsFromTable(prepared), findings.length, scenario.name);
@@ -167,7 +180,7 @@ for (const scenario of scenarios) {
   assert.equal(input.coverage.complete, true, "preserve input completeness independently from semantic and format assessment failures");
   assert.equal(input.coverage.assessment?.state, scenario.excluded ? "incomplete" : "completed");
   assert.equal(reviewAssessmentComplete(input.coverage), !scenario.excluded);
-  if (!scenario.valid) assert.equal(input.coverage.assessment?.reason, originalFailure, "format failure remains independent");
+  if (!scenario.valid && !scenario.recovery) assert.equal(input.coverage.assessment?.reason, originalFailure, "format failure remains independent");
   assert.deepEqual(input.coverage.assessment?.requests, originalReceipt.requests);
   assert.equal(input.coverage.assessment?.responseSha256, originalReceipt.responseSha256);
   assert.deepEqual(input.coverage.assessment?.completion, originalReceipt.completion);

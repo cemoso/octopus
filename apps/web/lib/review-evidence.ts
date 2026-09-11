@@ -1,4 +1,5 @@
 import type { ReviewCoverage } from "@/lib/review-coverage";
+import { parseFindingsFromJson } from "@/lib/review-dedup";
 
 const FINDINGS_BLOCK = /<!-- OCTOPUS_FINDINGS_START -->([\s\S]*?)<!-- OCTOPUS_FINDINGS_END -->/g;
 const SEVERITIES = ["🔴 Critical", "🟠 High", "🟡 Medium", "🔵 Low", "💡 Nit"];
@@ -37,6 +38,23 @@ function assertsAbsence(statement: string, visibilityPenalty: boolean): boolean 
 }
 
 type FindingRecord = Record<string, unknown>;
+export function parseReviewFindingsSet(body: string): FindingRecord[] | null {
+  if (body.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2
+    || body.split("<!-- OCTOPUS_FINDINGS_END -->").length !== 2) return null;
+  const match = /<!-- OCTOPUS_FINDINGS_START -->([\s\S]*?)<!-- OCTOPUS_FINDINGS_END -->/.exec(body);
+  if (!match) return null;
+  try {
+    const block = match[1].trim();
+    const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/.exec(block);
+    const parsed: unknown = JSON.parse(fenced ? fenced[1] : block);
+    if (!Array.isArray(parsed) || (parsed.length > 0 && parseFindingsFromJson(body)?.length !== parsed.length)
+      || !parsed.every(item => item && typeof item === "object" && !Array.isArray(item)
+        && SEVERITIES.some(label => label.split(" ")[0] === item.severity)
+        && Number.isInteger(item.startLine) && item.startLine >= 1)) return null;
+    return parsed as FindingRecord[];
+  } catch { return null; }
+}
+
 export type ExcludedInputContainment = { body: string; paths: string[]; rejectedFindings: number };
 
 /**
@@ -48,12 +66,12 @@ export function containExcludedInputClaims(body: string, coverage: ReviewCoverag
   const references = excludedReferences(coverage);
   if (references.length === 0) return { body, paths: [], rejectedFindings: 0 };
   const paths = new Set<string>();
-  const unsupported = (text: string, finding = false): boolean => {
+  const unsupported = (text: string): boolean => {
     let found = false;
     // Keep filenames intact while separating sentences, paragraphs and table rows.
-    for (const statement of text.split(/\r?\n|(?<=[.!?;])\s+|\s+(?:but|however)\s+/i)) {
+    for (const statement of text.split(/\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*\|)|(?<=\|)[ \t]*\r?\n|(?<=[.!?;])\s+|\s+(?:but|however)\s+/i)) {
       const penalizedScoreRow = /^\s*\|/.test(statement) && /\b[1-4]\/5\b/.test(statement);
-      if (!assertsAbsence(statement, finding || penalizedScoreRow)) continue;
+      if (!assertsAbsence(statement, penalizedScoreRow)) continue;
       for (const reference of references) {
         if (reference.pattern.test(statement)) { paths.add(reference.path); found = true; }
       }
@@ -62,24 +80,21 @@ export function containExcludedInputClaims(body: string, coverage: ReviewCoverag
   };
   let rejectedFindings = 0;
   let retained: FindingRecord[] | undefined;
-  let invalidFindings = false;
+  let invalidFindings = body.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2
+    || body.split("<!-- OCTOPUS_FINDINGS_END -->").length !== 2;
   const blocks: string[] = [];
   const presentation = body.replace(FINDINGS_BLOCK, (block: string, raw: string) => {
-    try {
-      const parsed: unknown = JSON.parse(raw.trim().replace(/^```(?:json)?\s*\n?/, "").replace(/\n?\s*```$/, ""));
-      if (Array.isArray(parsed) && parsed.every(item => item && typeof item === "object" && !Array.isArray(item))) {
-        const findings = parsed as FindingRecord[];
-        const kept = findings.filter(finding => {
-          // The claim subject can differ from the inline anchor (e.g. SQL vs journal).
-          const claim = Object.entries(finding).filter(([key, value]) => !["filePath", "severity", "category"].includes(key) && typeof value === "string").map(([, value]) => value).join("\n");
-          if (!unsupported(claim, true)) return true;
-          rejectedFindings++;
-          return false;
-        });
-        retained = kept;
-        blocks.push(kept.length === findings.length ? block : `<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify(kept, null, 2)}\n<!-- OCTOPUS_FINDINGS_END -->`);
-      } else { invalidFindings = true; unsupported(raw, true); }
-    } catch { invalidFindings = true; unsupported(raw, true); }
+    const findings = parseReviewFindingsSet(block);
+    if (findings) {
+      const kept = findings.filter(finding => {
+        const claim = Object.entries(finding).filter(([key, value]) => !["filePath", "severity", "category"].includes(key) && typeof value === "string").map(([, value]) => value).join("\n\n");
+        if (!unsupported(claim)) return true;
+        rejectedFindings++;
+        return false;
+      });
+      retained = kept;
+      blocks.push(kept.length === findings.length ? block : `<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify(kept, null, 2)}\n<!-- OCTOPUS_FINDINGS_END -->`);
+    } else { invalidFindings = true; unsupported(raw); }
     return "";
   });
   // Scan all report prose, including score notes and checklists, before removing

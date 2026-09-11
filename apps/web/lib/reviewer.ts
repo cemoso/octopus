@@ -58,7 +58,7 @@ import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckRe
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
 import { canRestrictReviewToFollowUp } from "@/lib/review-follow-up";
-import { prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
+import { prepareRecoveredReviewPresentation, prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
 import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
 import type { ReviewComment } from "@/lib/github";
@@ -1867,6 +1867,13 @@ export async function processReview(pullRequestId: string): Promise<void> {
             findings = [...findings, ...newFindings];
             // Append findings block to reviewBody so it gets stored in DB
             effectiveReviewBody = `${reviewBody}\n\n${FINDINGS_START_MARKER}\n\`\`\`json\n${JSON.stringify(followUpFindings, null, 2)}\n\`\`\`\n${FINDINGS_END_MARKER}`;
+            const containedRecovery = prepareRecoveredReviewPresentation(reviewBody, findings, coverage);
+            if (containedRecovery !== null) {
+              reviewBody = containedRecovery;
+              effectiveReviewBody = containedRecovery;
+              mainCommentBody = stripDetailedFindings(containedRecovery);
+              findings = parseFindings(containedRecovery);
+            }
             console.log(`[reviewer] Follow-up recovered ${newFindings.length} new findings (${followUpFindings.length} total from follow-up, ${findings.length} combined) (provider: ${repo.provider}, pr: #${pr.number})`);
           } else {
             console.warn(`[reviewer] Follow-up also returned no parseable findings (provider: ${repo.provider}, pr: #${pr.number})`);
