@@ -88,8 +88,11 @@ const db = {
     createMany: async ({ data }: { data: unknown[] }) => { issues = structuredClone(data); },
   },
 };
+let transactionTail = Promise.resolve<unknown>(undefined);
+let serializeTransactions = false;
 mock.module("@octopus/db", () => ({ Prisma: { DbNull: null }, prisma: { ...db,
-  $transaction: async (run: (tx: typeof db) => Promise<unknown>) => {
+  $transaction: (run: (tx: typeof db) => Promise<unknown>) => {
+    const result = (serializeTransactions ? transactionTail : Promise.resolve()).then(async () => {
     const savedRows = new Map(rows), savedCurrent = structuredClone(current), savedIssues = structuredClone(issues);
     try { return await run(db); }
     catch (error) {
@@ -97,6 +100,9 @@ mock.module("@octopus/db", () => ({ Prisma: { DbNull: null }, prisma: { ...db,
       current = savedCurrent; issues = savedIssues;
       throw error;
     }
+    });
+    transactionTail = result.catch(() => {});
+    return result;
   },
 } }));
 mock.module("@/lib/auth", () => ({ auth: { api: { getSession: async ({ headers }: { headers: Headers }) => headers.get("x-user") ? { user: { id: headers.get("x-user") } } : null } } }));
@@ -166,6 +172,7 @@ let allowPublication = false;
 let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
+  findPullRequestSummaryComment: async () => null,
   getInstallationToken: async () => "fixture-token",
   getPullRequestDetails: async () => ({ headSha: providerHead }),
   updateCheckRun: async (...args: unknown[]) => { assert.ok([...rows.values()].some(row => (row.coverage as { nativeCheckId?: string }).nativeCheckId === String(args[3])), "Native completion requires a durable archive"); checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
@@ -309,11 +316,18 @@ const racingJob = { ...failedJob, attemptId: "3456789a-3456-4456-8456-3456789abc
 allowPublication = false;
 await assert.rejects(handleLargeReviewResult(racingJob), /Delayed result published/);
 allowPublication = true;
+let replacement: Promise<void> | undefined;
+serializeTransactions = true;
 duringPublication = async () => {
-  await saveReviewAttempt("456789ab-4567-4567-8567-456789abcdef", "pr", emptyCoverage, "Won during publication", [issue("race winner")]);
-  await updateCurrentReview("pr", currentHead, currentVersion, { reviewCommentId: 456 });
+  // A competing writer waits for the publisher's row lock to be released.
+  replacement = (async () => {
+    await saveReviewAttempt("456789ab-4567-4567-8567-456789abcdef", "pr", emptyCoverage, "Won during publication", [issue("race winner")]);
+    await updateCurrentReview("pr", currentHead, currentVersion, { reviewCommentId: 456 });
+  })();
 };
 await handleLargeReviewResult(racingJob);
+await replacement;
+serializeTransactions = false;
 assert.equal(current.status, "completed");
 assert.equal(current.reviewBody, "Won during publication");
 assert.equal(current.reviewCommentId, 456);
