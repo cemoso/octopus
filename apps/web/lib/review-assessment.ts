@@ -44,16 +44,16 @@ export function validReviewResponse(text: string): boolean {
     const summaries = [...text.matchAll(/^### Findings Summary[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |<!-- OCTOPUS_FINDINGS_START -->|(?![\s\S]))/gm)];
     if (summaries.length !== 1) return false;
     const summary = summaries[0][1].trim();
-    if (summary && !/[|🔴🟠🟡🔵💡]/u.test(summary)) return findings.length === 0;
+    const lines = summary.split("\n").map(line => line.trim()).filter(Boolean);
+    if (!/^\|\s*Severity\s*\|\s*Count\s*\|$/.test(lines[0] ?? "")
+      || !/^\|\s*:?-{3,}:?\s*\|\s*:?-{3,}:?\s*\|$/.test(lines[1] ?? "")) return false;
     const counts = new Map<string, number>();
-    for (const line of summary.split("\n").map(line => line.trim()).filter(Boolean)) {
-      if (/^\|\s*Severity\s*\|\s*Count\s*\|$/.test(line)
-        || /^\|[ :|-]+\|$/.test(line)) continue;
+    for (const line of lines.slice(2)) {
       const row = /^\|\s*(🔴|🟠|🟡|🔵|💡)[^|]*\|\s*(\d+)\s*\|$/.exec(line);
       if (!row || counts.has(row[1]) || !Number.isSafeInteger(Number(row[2]))) return false;
       counts.set(row[1], Number(row[2]));
     }
-    return counts.size > 0 && severities.every(severity =>
+    return severities.every(severity =>
       (counts.get(severity) ?? 0) === findings.filter(finding => finding.severity === severity).length);
   } catch { return false; }
 }

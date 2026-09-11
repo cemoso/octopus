@@ -134,12 +134,12 @@ comments directly on the relevant code lines. Instead, provide only this summary
 | 🔵 Low | N |
 | 💡 Nit | N |
 
-Only include rows for severities that have at least 1 finding. If there are no findings, write "No issues found."
+Always include the `Severity | Count` header and separator, including when there are no findings. Zero-count severity rows may be included or omitted; an empty table means zero findings. Every count must match the JSON findings array for that severity. Do not replace the table with prose. Use the configured review language for commentary in the Summary and other explanatory sections.
 
 CRITICAL — MANDATORY MACHINE-READABLE FINDINGS BLOCK:
 
-If the Findings Summary table above has ANY non-zero count, you MUST include a
-JSON findings block at the END of the review, wrapped in these exact HTML comment delimiters.
+Always include a JSON findings block at the END of the review, wrapped in these
+exact HTML comment delimiters. Use an empty array `[]` when the table has zero findings.
 This block is **parsed by the system** to generate inline comments on the PR.
 It is automatically stripped from the main comment before posting — the user never sees it.
 Without this block, inline comments will NOT be posted and the review is incomplete.

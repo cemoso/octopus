@@ -45,6 +45,8 @@ globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
   published = JSON.parse(String(init?.body));
   return Response.json({ id: 123 });
 }) as typeof fetch;
+const summaryHeader = "| Severity | Count |\n| --- | --- |";
+const zeroSummary = `${summaryHeader}\n| 🔴 Critical | 0 |\n| 🟠 High | 0 |\n| 🟡 Medium | 0 |\n| 🔵 Low | 0 |\n| 💡 Nit | 0 |`;
 const valid = `## 🐙 Octopus Review
 
 ### Summary
@@ -61,7 +63,7 @@ The changed validator is consistent with its documented contract.
 | **Overall** | **4/5** | Lowest category |
 
 ### Findings Summary
-No issues found.
+${zeroSummary}
 
 ### Findings
 <!-- OCTOPUS_FINDINGS_START -->
@@ -71,7 +73,7 @@ No issues found.
 Last reviewed commit: ${"a".repeat(40)}
 `;
 const finding = { severity: "🔴", title: "Missing validation", filePath: "src/validator.ts", startLine: 1, description: "The value needs validation." };
-const withFinding = valid.replace("No issues found.", "| Severity | Count |\n| --- | --- |\n| 🔴 Critical | 1 |").replace("[]", JSON.stringify([finding]));
+const withFinding = valid.replace(zeroSummary, "| Severity | Count |\n| --- | --- |\n| 🔴 Critical | 1 |").replace("[]", JSON.stringify([finding]));
 const fenced = (text: string) => text.replace(/(<!-- OCTOPUS_FINDINGS_START -->\n)([\s\S]*?)(\n<!-- OCTOPUS_FINDINGS_END -->)/, '$1```json\n$2\n```$3');
 function plan(oversized = false) {
   const result = prepareReviewInput({ provider: "github", headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true, expectedFiles: oversized ? 100 : 1, limitations: [], files: Array.from({ length: oversized ? 100 : 1 }, (_, i) => ({ path: oversized ? `src/${i}-${"&".repeat(230)}.ts` : "src/validator.ts", change: "added", patch: "@@ -0,0 +1 @@\n+export const valid = true;\n", additions: 1, deletions: 0 })) }, { maxChars: 300000 });
@@ -81,9 +83,19 @@ function plan(oversized = false) {
 const requestFor = (p: ReturnType<typeof plan>, model = "gpt-test"): AiCreateParams => createCoveredReviewRequest({ model, system: "Trusted review template", number: 1, title: "Validators", author: "fixture", diff: p.diff, coverage: p.coverage, comment: "@octopus context", repoConfig: "" });
 for (const [name, text, finish, complete] of [
   ["valid", valid, "stop", true],
-  ["turkish-zero", valid.replace("No issues found.", "Sorun bulunamadı."), "stop", true],
+  ["turkish-zero", valid.replace("The changed validator is consistent with its documented contract.", "Sorun bulunamadı. Değişiklik belgelenen sözleşmeyle uyumlu."), "stop", true],
+  ["zero-empty-table", valid.replace(zeroSummary, summaryHeader), "stop", true],
+  ["english-contradictory-prose", valid.replace(zeroSummary, "1 critical issue found."), "stop", false],
+  ["turkish-contradictory-prose", valid.replace(zeroSummary, "1 kritik sorun bulundu."), "stop", false],
+  ["english-zero-prose", valid.replace(zeroSummary, "No issues found."), "stop", false],
+  ["turkish-zero-prose", valid.replace(zeroSummary, "Sorun bulunamadı."), "stop", false],
+  ["missing-summary-header", valid.replace(summaryHeader, ""), "stop", false],
+  ["missing-summary-separator", valid.replace("| --- | --- |\n", ""), "stop", false],
+  ["duplicate-summary-header", valid.replace(zeroSummary, summaryHeader + "\n" + zeroSummary), "stop", false],
+  ["zero-count-with-finding", valid.replace("[]", JSON.stringify([finding])), "stop", false],
+  ["empty-table-with-finding", valid.replace(zeroSummary, summaryHeader).replace("[]", JSON.stringify([finding])), "stop", false],
   ["turkish-contradiction", withFinding.replace(JSON.stringify([finding]), "[]").replace("Critical", "Kritik"), "stop", false],
-  ["turkish-prose-and-count", valid.replace("No issues found.", "Sorun bulunamadı.\n| 🔴 Kritik | 1 |"), "stop", false],
+  ["turkish-prose-and-count", valid.replace(zeroSummary, "Sorun bulunamadı.\n| 🔴 Kritik | 1 |"), "stop", false],
   ["turkish-wrong-severity", withFinding.replace("🔴 Critical", "🟠 Yüksek"), "stop", false],
   ["oversized-valid", valid.replace("The changed validator is consistent with its documented contract.", "Uzun açıklama 🔴 ".repeat(10000)), "stop", true],
   ["oversized-incomplete", valid.replace("The changed validator is consistent with its documented contract.", "Uzun açıklama 🔴 ".repeat(10000)), "length", false],
