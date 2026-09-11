@@ -28,6 +28,8 @@ export type ReviewAssessment = {
   requests: AiRequestReceipt[];
   responseSha256: string | null;
   completion: AiResponse["completion"] | null;
+  /** Response syntax is independent of input coverage and provider completion. */
+  responseValidation?: { state: "valid" | "invalid"; reason: string | null };
   /** Supplemental extraction evidence; never repairs the primary assessment. */
   recoveries?: FindingsRecoveryEvidence[];
 };
@@ -115,7 +117,7 @@ export async function executeFindingsRecovery(
 }
 
 /** Fixed diagnostic messages only: never include untrusted response excerpts. */
-export function reviewResponseValidationError(text: string): string | null {
+export function reviewResponseValidationError(text: string, inputComplete = true): string | null {
   if ((text.match(/^## 🐙 Octopus Review[ \t]*\r?$/gm) ?? []).length !== 1
     || (text.match(/^### Score[ \t]*\r?$/gm) ?? []).length !== 1
     || (text.match(/^### Summary[ \t]*\r?$/gm) ?? []).length !== 1
@@ -125,10 +127,15 @@ export function reviewResponseValidationError(text: string): string | null {
   for (const category of ["Security", "Code Quality", "Performance", "Error Handling", "Consistency"]) {
     const rows = score.split("\n").filter(line => line.split("|")[1]?.trim().replaceAll("**", "") === category);
     if (rows.length !== 1 || rows[0].split("|").length !== 5
-      || !/^(?:[1-5]\/5|N\/A)$/.test(rows[0].split("|")[2].trim().replaceAll("**", ""))) return "Score category rows missing, duplicated or malformed";
+      || !(inputComplete ? /^(?:[1-5]\/5|N\/A)$/ : /^N\/A$/).test(rows[0].split("|")[2].trim().replaceAll("**", ""))) return "Score category rows missing, duplicated or malformed";
   }
   const overall = score.split("\n").filter(line => /Overall/i.test(line));
-  if (overall.length !== 1 || !/^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/.test(overall[0])) return "Overall score missing, duplicated or malformed";
+  const overallRow = inputComplete
+    ? /^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/
+    : /^\|\s*\*\*Overall\*\*\s*\|\s*\*\*Not assessed\*\*\s*\|[^|]+\|\s*$/;
+  if (overall.length !== 1 || !overallRow.test(overall[0])) return inputComplete
+    ? "Overall score missing, duplicated or malformed"
+    : "Incomplete-input Overall must be exactly Not assessed, with no duplicate row";
   return reviewFindingsValidationError(text);
 }
 
@@ -209,7 +216,7 @@ export async function executeCoveredReview(
 ): Promise<AiResponse> {
   const assessment: ReviewAssessment = {
     state: "incomplete", reason: "Provider did not return a completed assessment", model: request.model,
-    policySha256: sha256(JSON.stringify({ policy: "bounded-review-assessment-v1", coverage })),
+    policySha256: sha256(JSON.stringify({ policy: "bounded-review-assessment-v2", coverage })),
     templateSha256: sha256(template), requests: [], responseSha256: null, completion: null,
   };
   coverage.assessment = assessment;
@@ -230,13 +237,18 @@ export async function executeCoveredReview(
   }
   assessment.responseSha256 = sha256(response.text);
   assessment.completion = response.completion ?? null;
-  const validationError = reviewResponseValidationError(response.text);
+  const validationError = reviewResponseValidationError(response.text, coverage.complete);
+  assessment.responseValidation = { state: validationError === null ? "valid" : "invalid", reason: validationError };
   const observed = assessment.requests.length === 1 && assessment.requests[0].model === response.model
     && assessment.requests[0].provider === response.provider && assessment.requests[0].inputPreserved;
-  assessment.state = observed && validationError === null && response.completion?.state === "completed" ? "completed" : "incomplete";
-  assessment.reason = !observed ? "Actual provider request provenance unavailable"
-    : validationError !== null ? validationError
-      : response.completion?.state !== "completed" ? "Provider completion incomplete or unknown"
-        : "Provider completed a valid review response";
+  const failures = [
+    ...(!observed ? ["Actual provider request provenance unavailable"] : []),
+    ...(validationError !== null ? [validationError] : []),
+    ...(response.completion?.state !== "completed" ? ["Provider completion incomplete or unknown"] : []),
+  ];
+  assessment.state = failures.length === 0 ? "completed" : "incomplete";
+  assessment.reason = failures.length > 0 ? failures.join("; ")
+    : coverage.complete ? "Provider completed a valid review response"
+      : "Provider completed a valid response; overall score withheld because input coverage is incomplete";
   return response;
 }

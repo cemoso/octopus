@@ -581,7 +581,11 @@ When author review context is present:
 When author review context is absent, review the supplied scope normally.
 The deterministic coverage manifest is the authority for which changed hunks were
 supplied. If coverage is incomplete, preserve useful findings but do not assign
-an overall PR quality score or claim a complete review.
+an overall PR quality score or claim a complete review. Keep the required Score
+table, use `N/A` for each category, and use exactly `**Not assessed**` in the
+`**Overall**` row's Score cell. Explain the incomplete input in its Notes cell.
+Keep the Summary and Findings Summary table, and emit the findings JSON markers
+and array as usual. This format does not waive finding severity or confidence.
 </user_instruction_handling>
 
 </system>
