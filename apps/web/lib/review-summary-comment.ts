@@ -22,6 +22,7 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
   // has a shared deadline shorter than the transaction timeout.
   const token = await getInstallationToken(target.installationId);
   let reservation: number | undefined;
+  let reconciliationDeadline: number | undefined;
   for (;;) {
     let creationAttempted = false;
     let creationRejected = false;
@@ -57,7 +58,7 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
         const marker = id < 0 ? `<!-- octopus-summary:${target.pullRequestId}:${-id} -->` : undefined;
         if (id < 0 && id !== reservation) {
           id = await findPullRequestSummaryComment(target.owner, target.repo, target.prNumber, marker!, token, signal);
-          if (id === null) throw new Error("PR summary creation is unresolved; awaiting reconciliation");
+          if (id === null) return { pendingCreation: true };
         }
         if (id > 0) {
           try {
@@ -89,6 +90,16 @@ export async function publishReviewSummary(target: SummaryTarget): Promise<numbe
         });
       }
       if (result === null || typeof result === "number") return result;
+      if ("pendingCreation" in result) {
+        // Release the row lock before waiting so the reservation's owner can
+        // enter its POST transaction. Every recheck repeats the stale guards.
+        reconciliationDeadline ??= performance.now() + 10_000;
+        if (performance.now() >= reconciliationDeadline) {
+          throw new Error("PR summary creation is unresolved; awaiting reconciliation");
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+        continue;
+      }
       reservation = result.reserved;
     } catch (error) {
       if (reservation !== undefined && (!creationAttempted || creationRejected)) {

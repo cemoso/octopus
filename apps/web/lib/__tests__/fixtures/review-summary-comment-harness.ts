@@ -70,12 +70,9 @@ mock.module("@/lib/github", () => ({
 const { publishReviewSummary } = await import("../../review-summary-comment");
 const target = { pullRequestId: "pr", headSha: head, reviewRequestVersion: 1, installationId: 1, owner: "fixture", repo: "repo", prNumber: 1, body: "Queued" };
 
-const concurrent = await Promise.allSettled([publishReviewSummary(target), publishReviewSummary({ ...target, body: "Preparing" })]);
-assert.equal(concurrent[0].status, "fulfilled");
-if (concurrent[1].status === "rejected") {
-  assert.match(String(concurrent[1].reason), /creation is unresolved/);
-  await publishReviewSummary({ ...target, body: "Preparing" });
-}
+const concurrent = await Promise.all([publishReviewSummary(target), publishReviewSummary({ ...target, body: "Preparing" })]);
+assert.deepEqual(concurrent, [100, 100]);
+assert.ok(calls.at(-1)?.body.startsWith("Preparing"));
 assert.equal(calls.filter(call => call.method === "POST").length, 1);
 assert.equal(current.reviewCommentId, 100n);
 current = { ...current, headSha: nextHead, reviewRequestVersion: 2, status: "reviewing" };
