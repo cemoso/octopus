@@ -36,7 +36,6 @@ import {
   getPullRequestDetails as ghGetPullRequestDetails,
   LargePrError,
   createPullRequestComment as ghCreatePullRequestComment,
-  updatePullRequestComment as ghUpdatePullRequestComment,
   createPullRequestReview as ghCreatePullRequestReview,
   createCheckRun as ghCreateCheckRun,
   updateCheckRun as ghUpdateCheckRun,
@@ -61,6 +60,7 @@ import { canRestrictReviewToFollowUp } from "@/lib/review-follow-up";
 import { prepareRecoveredReviewPresentation, prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
 import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
+import { publishReviewSummary } from "@/lib/review-summary-comment";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
 import {
@@ -749,11 +749,18 @@ export async function processReview(pullRequestId: string): Promise<void> {
         ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel + body)
         : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel + body);
 
+  const publishMainComment = (body: string, expectedReviewBody?: string) => isGitHub
+    ? publishReviewSummary({ pullRequestId: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion,
+      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel + body, expectedReviewBody })
+    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body));
+
   const providerUpdateComment = async (commentId: number, body: string) => {
+    if (isGitHub) {
+      reviewCommentId = await publishMainComment(body);
+      return;
+    }
     try {
-      if (isGitHub) {
-        await ghUpdatePullRequestComment(installationId!, owner, repoName, commentId, attemptLabel + body);
-      } else if (isGitlab) {
+      if (isGitlab) {
         await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel + body);
       } else {
         await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel + body);
@@ -762,7 +769,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       // If the comment was deleted externally, create a new one and update the reference
       if (err instanceof Error && err.message.includes("404")) {
         console.warn(`[reviewer] Comment ${commentId} not found (deleted?), creating new comment`);
-        const newId = await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body));
+        const newId = await publishMainComment(body);
         reviewCommentId = newId;
         return;
       }
@@ -894,7 +901,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
   }
 
   try {
-    reviewCommentId = await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, "> 🐙 **Octopus Review** — Preparing review..."));
+    reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
     // Phase 0: Ensure the repository is indexed before preparing review context
     if (repo.indexStatus !== "indexed") {
       console.log(`[reviewer] Repository ${repo.fullName} not indexed (status: ${repo.indexStatus}). Starting auto-index...`);
@@ -1087,7 +1094,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       if (reviewCommentId) {
         await providerUpdateComment(reviewCommentId, limitMsg);
       } else {
-        await providerCreateComment(pr.number, limitMsg);
+        await publishMainComment(limitMsg);
       }
       await updateCurrentReview(pr.id, pr.headSha, pr.reviewRequestVersion, {
         status: "failed",
@@ -1297,8 +1304,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
       const body = applyReviewCoverage("No changed text hunks were supplied for review.", coverage, attemptId);
       await saveReviewAttempt(attemptId, pr.id, coverage, body, []);
       attemptSaved = true;
-      if (reviewCommentId) await providerUpdateComment(reviewCommentId, body);
-      else await providerCreateComment(pr.number, body);
+      if (isGitHub) reviewCommentId = await publishMainComment(body, body);
+      else if (reviewCommentId) await providerUpdateComment(reviewCommentId, body);
+      else await publishMainComment(body);
       const result = reviewCheckResult(coverage, false, 0);
       if (checkRunId && isGitHub && installationId) {
         await ghUpdateCheckRun(installationId, owner, repoName, checkRunId, result.conclusion, { title: result.title, summary: result.summary });
@@ -2330,11 +2338,13 @@ export async function processReview(pullRequestId: string): Promise<void> {
     attemptSaved = true;
 
     // The final scored comment becomes visible only after its immutable outcome is durable.
-    if (reviewCommentId) {
+    if (isGitHub) {
+      reviewCommentId = await publishMainComment(mainCommentBody, effectiveReviewBody);
+    } else if (reviewCommentId) {
       await providerUpdateComment(reviewCommentId, mainCommentBody);
       console.log(`[reviewer] Placeholder comment updated — commentId: ${reviewCommentId}`);
     } else {
-      const newCommentId = await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, mainCommentBody));
+      const newCommentId = await publishMainComment(mainCommentBody);
       reviewCommentId = newCommentId;
       console.log(`[reviewer] New review comment created — commentId: ${newCommentId}`);
     }

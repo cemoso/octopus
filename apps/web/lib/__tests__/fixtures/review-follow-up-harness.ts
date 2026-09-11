@@ -69,6 +69,10 @@ mock.module("@/lib/review-validation", () => ({
 const archived: { findings: { title: string }[]; coverage: unknown; body: string }[] = [];
 const summaries: string[] = [];
 const published: { body: string; comments: unknown[] }[] = [];
+mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async (target: { body: string }) => {
+  summaries.push(target.body);
+  return 123;
+} }));
 mock.module("@/lib/review-attempt", () => ({
   createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
   updateCurrentReview: async () => ({ count: 1 }),

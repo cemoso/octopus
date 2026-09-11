@@ -215,10 +215,10 @@ for (const [name, text, finish, complete] of [
   assert.equal(rows.get(name)?.reviewBody, report);
   const attemptUrl = new URL(`/api/review-attempts/${name}`, process.env.NEXT_PUBLIC_APP_URL ?? "https://octopus-review.ai").href;
   const reference = `Attempt: ${name} ${attemptUrl}.\nHead: \`${p.coverage.headSha}\`. Base: \`${p.coverage.baseSha}\`.`;
-  for (const body of [report, published!.body]) {
-    assert.ok(body.includes(reference), `${name}: attempt and revision metadata retained`);
-    assert.ok(!/<\/?(?:details|summary)>|Attempt: \[/.test(body), `${name}: plain Markdown coverage`);
-  }
+  assert.ok(report.includes(reference), `${name}: archive retains attempt and revision metadata`);
+  assert.ok(published!.body.includes(attemptUrl), `${name}: comment links to the exact immutable record`);
+  assert.ok(published!.body.startsWith(`Review attempt: ${name}. Head: ${p.coverage.headSha}.`));
+  assert.ok(!published!.body.includes("| File | Input coverage | Reason |"), `${name}: no file inventory in the feed`);
   assert.ok(report.includes(`#### Changed-file coverage (${p.coverage.files.length} known paths)`));
   if (complete) assert.equal(report.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/)?.[0], text.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/)?.[0]);
   if (oversized) {
@@ -232,7 +232,7 @@ for (const [name, text, finish, complete] of [
     assert.ok(renderReviewCoverage(p.coverage, name).length < 14_000);
     assert.ok(renderReviewCoverage(p.coverage, name).includes("The full inventory is stored"));
   } else {
-    assert.equal(published!.body, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${rereviewBanner}${comment}`);
+    assert.equal(published!.body.slice(published!.body.indexOf("\nAssessment:")), comment.slice(comment.indexOf("\nAssessment:")), `${name}: compact coverage preserves assessment, findings, scores and footer`);
   }
   assert.ok(!published!.body.includes("OCTOPUS_FINDINGS_"));
   for (const body of [report, published!.body]) {

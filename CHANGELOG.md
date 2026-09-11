@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.147] - 2026-09-11
+
+### Fixed
+- GitHub reviews show coverage totals and a link to the full record instead of listing every changed file in the PR conversation.
+- GitHub re-reviews reuse the existing summary through queued, running and completed states, with links to the five latest saved reviews. Stale heads or review requests cannot replace the current summary; deleted summaries are recreated.
+- Operators: the full coverage manifest and immutable attempt records remain unchanged. No database migration, input-budget or review-gate change is required.
+
 ## [1.0.146] - 2026-09-11
 
 ### Fixed

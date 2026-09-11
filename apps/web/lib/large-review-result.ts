@@ -2,7 +2,8 @@ import "server-only";
 import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { randomUUID } from "node:crypto";
 import { deliverReviewAttempt } from "@/lib/review-attempt-delivery";
-import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, hasReviewAttempt } from "@/lib/review-attempt";
+import { saveReviewAttempt, updateCurrentReview, hasReviewAttempt } from "@/lib/review-attempt";
+import { publishReviewSummary } from "@/lib/review-summary-comment";
 import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
@@ -185,8 +186,10 @@ export async function handleLargeReviewResult(
         "> Please try again by commenting `@octopus-review` on this PR.",
       ].join("\n");
       const commentBody = data.error ? applyReviewCoverage(errorBody, coverage, attemptId) : stripDetailedFindings(reviewBody);
-      mainCommentId = await createReviewAttemptComment(pr.id, coverage.headSha, coverage.reviewRequestVersion,
-        () => ghCreatePullRequestComment(installationId, owner, repoName, pr.number, commentBody), reviewBody);
+      mainCommentId = await publishReviewSummary({ pullRequestId: pr.id, headSha: coverage.headSha,
+        reviewRequestVersion: coverage.reviewRequestVersion, installationId, owner, repo: repoName,
+        prNumber: pr.number, body: commentBody, expectedReviewBody: reviewBody });
+      if (mainCommentId === null) return;
       await checkpoint({ mainCommentId });
     }
     if (!await stillCurrent()) return;

@@ -17,8 +17,10 @@ let member = true;
 let queries = 0;
 mock.module("server-only", () => ({}));
 const db = {
+  $queryRaw: async () => [{ ...current, headSha: currentHead, reviewRequestVersion: currentVersion, reviewCommentId: current.reviewCommentId ?? null }],
   organization: { findUnique: async () => ({ reviewsPaused: false, blockedAuthors: [] }) },
   reviewAttempt: {
+    findMany: async () => [...rows.values()].reverse().slice(0, 5).map(row => ({ id: row.id, headSha: row.headSha, createdAt: row.createdAt ?? new Date("2026-09-11T00:00:00Z") })),
     createMany: async ({ data, skipDuplicates }: { data: Row[]; skipDuplicates: boolean }) => {
       if (failArchive) throw new Error("Archive unavailable");
       let count = 0;
@@ -164,10 +166,11 @@ let allowPublication = false;
 let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
+  getInstallationToken: async () => "fixture-token",
   getPullRequestDetails: async () => ({ headSha: providerHead }),
   updateCheckRun: async (...args: unknown[]) => { assert.ok([...rows.values()].some(row => (row.coverage as { nativeCheckId?: string }).nativeCheckId === String(args[3])), "Native completion requires a durable archive"); checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
   createPullRequestComment: async (...args: unknown[]) => { if (failSummary && String(args[4]).includes("Large PR —")) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
-  updatePullRequestComment: unexpectedPublication,
+  updatePullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); },
   createPullRequestReview: async (...args: unknown[]) => { if (failSummary) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
 }));
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: unexpectedPublication } }));
@@ -232,8 +235,8 @@ providerHead = currentHead;
 assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", headSha: currentHead, triggerCommentId: 1, triggerCommentBody: "review" }), { started: true, pullRequestId: "pr" });
 assert.equal((statusEvents.at(-1)?.data.pullRequest as { headSha: string }).headSha, currentHead);
 assert.equal(published.length, 1);
-assert.equal(current.reviewCommentId, 900);
-console.log("PASS review triggers create new comments without editing previous attempts");
+assert.equal(current.reviewCommentId, 200);
+console.log("PASS review triggers reuse the summary while preserving immutable attempts");
 
 const emptyId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const { buildGeneratedMatcher } = await import("../../generated-files");
@@ -371,7 +374,7 @@ finally { console.error = originalConsoleError; }
 assert.equal(summaryErrors.length, 1);
 assert.match(String(summaryErrors[0][1]), /Transient summary failure/);
 assert.equal(published.length, beforeArchiveFailure.comments + 1);
-assert.equal(deliveries.get(interruptedSuccess.attemptId)?.mainCommentId, 900n);
+assert.equal(deliveries.get(interruptedSuccess.attemptId)?.mainCommentId, 456n);
 assert.equal(deliveries.get(interruptedSuccess.attemptId)?.summaryPublished, false);
 failSummary = false;
 await handleLargeReviewResult(interruptedSuccess);

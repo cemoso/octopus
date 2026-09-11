@@ -634,6 +634,7 @@ export function truncateForGithubComment(body: string): string {
   if (heading && footer && score) {
     const prefix = /^Review attempt:[^\n]*\n\n/.exec(body)?.[0] ?? "";
     const attemptReference = compactCoverageReference(body);
+    const history = /<details>\n<summary>Review history \(latest [1-5]\)<\/summary>\n\n(?:- \[(?:[0-9a-f]{7}|Unknown head) · [^\]\n]{1,30}\]\(https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+\)\n?){1,5}\n\nReview records require Octopus organization access\.\n\n<\/details>/.exec(body)?.[0] ?? "";
     const table = score[1].split("\n").filter(line => {
       const category = line.split("|")[1]?.trim().replaceAll("**", "");
       return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
@@ -651,7 +652,7 @@ export function truncateForGithubComment(body: string): string {
         return `${shortened}…`;
       }).join("|")}|`;
     }).filter(Boolean).join("\n").replace(/^(.*)\n/, "$1\n| --- | --- | --- |\n") : "Not assessed — incomplete review coverage.";
-    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${reason}\n\n${attemptReference}${marker}\n\n${footer[0]}`;
+    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${reason}\n\n${attemptReference}${marker}\n\n${history.length <= 3000 ? history : ""}\n\n${footer[0]}`;
     if (compact.length <= MAX_GITHUB_COMMENT_BODY) return compact;
   }
   const room = MAX_GITHUB_COMMENT_BODY - marker.length;
@@ -675,6 +676,23 @@ export function truncateForGithubComment(body: string): string {
   return cut + marker;
 }
 
+/** GitHub shows the coverage decision; the immutable record owns the inventory. */
+export function compactReviewCoverageComment(body: string): string {
+  if (!compactCoverageReference(body)) return body;
+  const header = /^(?:Review attempt:[^\r\n]*\r?\n\r?\n)?(?:> ✅ No new issues detected since the last review(?: \(commit `[0-9a-f]{7}`\))?\.\r?\n\r?\n)?### Review coverage\r?\n\r?\n\*\*[^\r\n]+\*\*\r?\n\r?\n/.exec(body);
+  const end = /\nAssessment: [^\n]*\n\n/.exec(body);
+  if (!header || !end || end.index < header[0].length) return body;
+  const coverage = body.slice(header[0].length, end.index);
+  const reference = compactCoverageReference(body);
+  const url = /https?:\/\/[^\s<>()`]+/.exec(reference)?.[0]?.replace(/\.$/, "");
+  if (!url) return body;
+  const warning = /^\*\*Overall: not assessed[^\n]+/m.exec(coverage)?.[0];
+  // Inventory rows and technical receipts stay in the archive, not the PR feed.
+  return header[0] + (warning ? warning + "\n\n" : "")
+    + `[Full coverage and review record](${url}) · Octopus sign-in required.\n`
+    + body.slice(end.index);
+}
+
 export async function createPullRequestComment(
   installationId: number,
   owner: string,
@@ -683,13 +701,15 @@ export async function createPullRequestComment(
   body: string,
   /** Pre-resolved token (bot-account mode). Skips getInstallationToken when provided. */
   providedToken?: string,
+  signal?: AbortSignal,
 ): Promise<number> {
-  const safeBody = truncateForGithubComment(body);
+  const safeBody = compactReviewCoverageComment(truncateForGithubComment(body));
   const token = providedToken ?? await getInstallationToken(installationId);
   const res = await fetchWithRetry(
     `${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/comments`,
     {
       method: "POST",
+      signal,
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",
@@ -714,13 +734,15 @@ export async function updatePullRequestComment(
   body: string,
   /** Pre-resolved token (bot-account mode). Skips getInstallationToken when provided. */
   providedToken?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const safeBody = truncateForGithubComment(body);
+  const safeBody = compactReviewCoverageComment(truncateForGithubComment(body));
   const token = providedToken ?? await getInstallationToken(installationId);
   const res = await fetchWithRetry(
     `${GITHUB_API}/repos/${owner}/${repo}/issues/comments/${commentId}`,
     {
       method: "PATCH",
+      signal,
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/vnd.github+json",

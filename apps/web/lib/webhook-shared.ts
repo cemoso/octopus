@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@octopus/db";
 import { admitReviewRequest, type ReviewRequestRejection } from "@/lib/review-request-admission";
 import { createReviewAttemptComment } from "@/lib/review-attempt";
+import { publishReviewSummary } from "@/lib/review-summary-comment";
 import { pubby } from "@/lib/pubby";
 import { enqueue } from "@/lib/queue";
 import { eventBus } from "@/lib/events";
@@ -118,12 +119,12 @@ export async function startReviewFlow(params: {
   const pr = admission.pullRequest;
   console.log(`[webhook] PullRequest admitted — id: ${pr.id}, number: ${pr.number}`);
 
-  const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${pr.headSha || "unknown"}\`. A separate review attempt will report the result.`;
+  const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${pr.headSha || "unknown"}\`. This summary will update when the review finishes.`;
   try {
-    await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, async () => {
-      if (provider === "github" && installationId) {
-        return github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
-      }
+    if (provider === "github" && installationId) {
+      await publishReviewSummary({ pullRequestId: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion,
+        installationId, owner, repo: repoName, prNumber, body: placeholderBody });
+    } else await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, async () => {
       if (provider === "bitbucket" && organizationId) {
         return bitbucket.createPullRequestComment(organizationId, owner, repoName, prNumber, placeholderBody);
       }
