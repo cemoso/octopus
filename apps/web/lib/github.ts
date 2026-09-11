@@ -706,13 +706,15 @@ function formatSummaryComment(body: string, marker?: string): string {
 export async function findPullRequestSummaryComment(
   owner: string, repo: string, prNumber: number, marker: string, token: string, signal: AbortSignal,
 ): Promise<number | null> {
+  const config = await getGithubAppConfig();
+  if (!config) throw new Error("GitHub App is not configured for summary reconciliation");
   for (let page = 1; ; page++) {
     const res = await fetchWithRetry(`${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`, {
       signal, headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
     });
     if (!res.ok) throw new Error(`Failed to reconcile PR summary: ${res.status}`);
-    const comments = await res.json() as { id: number; body?: string; user?: { type?: string } }[];
-    const match = comments.find(comment => comment.body?.split("\n").includes(marker));
+    const comments = await res.json() as { id: number; body?: string; performed_via_github_app?: { id: number } | null }[];
+    const match = comments.find(comment => String(comment.performed_via_github_app?.id) === String(config.appId) && comment.body?.split("\n").includes(marker));
     if (match) return match.id;
     if (comments.length < 100) return null;
   }

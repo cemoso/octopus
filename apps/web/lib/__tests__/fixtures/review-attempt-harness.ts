@@ -169,6 +169,7 @@ let failCheck = false;
 let failSummary = false;
 const published: unknown[][] = [];
 let allowPublication = false;
+let nativeOnlyFailure = false;
 let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
@@ -177,8 +178,8 @@ mock.module("@/lib/github", () => ({
   getPullRequestDetails: async () => ({ headSha: providerHead }),
   updateCheckRun: async (...args: unknown[]) => { assert.ok([...rows.values()].some(row => (row.coverage as { nativeCheckId?: string }).nativeCheckId === String(args[3])), "Native completion requires a durable archive"); checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
   createPullRequestComment: async (...args: unknown[]) => { if (failSummary && String(args[4]).includes("Large PR —")) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
-  updatePullRequestComment: async (...args: unknown[]) => { if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); },
-  createPullRequestReview: async (...args: unknown[]) => { if (failSummary) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
+  updatePullRequestComment: async (...args: unknown[]) => { if (failSummary && String(args[4]).includes("Large PR —")) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); },
+  createPullRequestReview: async (...args: unknown[]) => { if (failSummary || nativeOnlyFailure) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
 }));
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: unexpectedPublication } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: unexpectedPublication } }));
@@ -519,3 +520,18 @@ if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
     immutableAttempts: [...rows.values()],
   }, null, 2));
 }
+
+const fallbackJob = { ...archiveFailureJob, headSha: currentHead, reviewRequestVersion: currentVersion, attemptId: "19191919-1919-4919-8919-191919191919" };
+allowPublication = true;
+duringPublication = undefined;
+nativeOnlyFailure = true;
+const beforeFallback = published.length;
+console.error = () => {};
+try { await handleLargeReviewResult(fallbackJob); } finally { console.error = originalConsoleError; }
+const fallbackCalls = published.slice(beforeFallback);
+assert.equal(fallbackCalls.length, 2);
+assert.ok(fallbackCalls.every(call => call[3] === Number(current.reviewCommentId)), "Fallback must update the tracked comment");
+assert.ok(String(fallbackCalls[1][4]).includes("Large PR —"));
+assert.ok(String(fallbackCalls[1][4]).includes("Review coverage"));
+assert.ok(String(fallbackCalls[1][4]).endsWith(`Last reviewed commit: ${currentHead}`));
+assert.ok(deliveries.get(fallbackJob.attemptId)?.summaryPublished);

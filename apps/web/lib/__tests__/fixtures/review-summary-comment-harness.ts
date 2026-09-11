@@ -15,7 +15,11 @@ const tx = {
     assert.equal(query.select.reviewBody, undefined);
     return archived.map(({ id, headSha, createdAt }) => ({ id, headSha, createdAt }));
   } },
-  pullRequest: { updateMany: async ({ data }: { data: { reviewCommentId: number } }) => { current.reviewCommentId = BigInt(data.reviewCommentId); return { count: 1 }; } },
+  pullRequest: { updateMany: async ({ data, where }: { data: { reviewCommentId: number | null }; where: { reviewCommentId?: number } }) => {
+    if (where.reviewCommentId !== undefined && current.reviewCommentId !== BigInt(where.reviewCommentId)) return { count: 0 };
+    current.reviewCommentId = data.reviewCommentId === null ? null : BigInt(data.reviewCommentId);
+    return { count: 1 };
+  } },
 };
 // The test double models the exclusive row lock: concurrent publications and
 // admission serialize. The provider side effects below are the assertions.
@@ -23,7 +27,14 @@ let tail = Promise.resolve();
 function transaction<T>(run: (client: typeof tx) => Promise<T>): Promise<T> {
   const result = tail.then(async () => {
     const snapshot = { ...current };
-    try { return await run(tx); } catch (error) { current = snapshot; throw error; }
+    try {
+      const result = await run(tx);
+      if (supersedeReservation && current.reviewCommentId !== null && current.reviewCommentId < 0n) {
+        supersedeReservation = false;
+        current.reviewRequestVersion++;
+      }
+      return result;
+    } catch (error) { current = snapshot; throw error; }
   });
   tail = result.then(() => {}, () => {});
   return result;
@@ -33,6 +44,8 @@ const calls: { method: string; id: number; body: string }[] = [];
 let nextId = 100;
 let failure = "";
 let createFailure = false;
+let rejection = "";
+let supersedeReservation = false;
 const remote = new Map<string, number>();
 let beforeUpdate: (() => Promise<void>) | undefined;
 mock.module("@/lib/github", () => ({
@@ -40,6 +53,7 @@ mock.module("@/lib/github", () => ({
   getInstallationToken: async () => "fixture-token",
   createPullRequestComment: async (_installation: number, _owner: string, _repo: string, _number: number, body: string, _token: string, signal: AbortSignal, marker: string) => {
     assert.equal(signal.aborted, false);
+    if (rejection) throw new Error(rejection);
     const id = nextId++;
     calls.push({ method: "POST", id, body });
     remote.set(marker, id);
@@ -56,7 +70,12 @@ mock.module("@/lib/github", () => ({
 const { publishReviewSummary } = await import("../../review-summary-comment");
 const target = { pullRequestId: "pr", headSha: head, reviewRequestVersion: 1, installationId: 1, owner: "fixture", repo: "repo", prNumber: 1, body: "Queued" };
 
-await Promise.all([publishReviewSummary(target), publishReviewSummary({ ...target, body: "Preparing" })]);
+const concurrent = await Promise.allSettled([publishReviewSummary(target), publishReviewSummary({ ...target, body: "Preparing" })]);
+assert.equal(concurrent[0].status, "fulfilled");
+if (concurrent[1].status === "rejected") {
+  assert.match(String(concurrent[1].reason), /creation is unresolved/);
+  await publishReviewSummary({ ...target, body: "Preparing" });
+}
 assert.equal(calls.filter(call => call.method === "POST").length, 1);
 assert.equal(current.reviewCommentId, 100n);
 current = { ...current, headSha: nextHead, reviewRequestVersion: 2, status: "reviewing" };
@@ -117,13 +136,39 @@ await publishReviewSummary(recoveryTarget);
 assert.equal(current.reviewCommentId, BigInt(nextId - 1));
 assert.equal(calls.filter(call => call.method === "POST").length, posts);
 current.reviewCommentId = -42n;
-assert.equal(await publishReviewSummary(recoveryTarget), null);
+await assert.rejects(publishReviewSummary(recoveryTarget), /creation is unresolved/);
 assert.equal(calls.filter(call => call.method === "POST").length, posts);
 current.reviewCommentId = BigInt(nextId - 1);
 current.status = "completed";
 current.reviewBody = "Archived failure";
 await publishReviewSummary({ ...recoveryTarget, body: "Archived failure", expectedReviewBody: "Archived failure" });
 assert.ok(calls.at(-1)?.body.startsWith("Archived failure"));
+current.status = "reviewing";
+current.reviewCommentId = null;
+for (const status of [401, 403, 422, 429]) {
+  rejection = `Failed to create PR comment: ${status}`;
+  await assert.rejects(publishReviewSummary(recoveryTarget), { message: rejection });
+  assert.equal(current.reviewCommentId, null);
+}
+rejection = "Failed to create PR comment: 503";
+await assert.rejects(publishReviewSummary(recoveryTarget), /503/);
+const uncertainReservation = current.reviewCommentId;
+assert.ok(uncertainReservation! < 0n);
+await assert.rejects(publishReviewSummary(recoveryTarget), /creation is unresolved/);
+assert.equal(current.reviewCommentId, uncertainReservation);
+// A fresh PR can create normally after confirmed rejections.
+current.reviewCommentId = null;
+rejection = "";
+await publishReviewSummary(recoveryTarget);
+assert.ok(current.reviewCommentId! > 0n);
+current.reviewCommentId = null;
+supersedeReservation = true;
+const beforeSupersession = nextId;
+assert.equal(await publishReviewSummary(recoveryTarget), null);
+assert.equal(current.reviewCommentId, null);
+assert.equal(nextId, beforeSupersession);
+await publishReviewSummary({ ...recoveryTarget, reviewRequestVersion: current.reviewRequestVersion });
+assert.ok(current.reviewCommentId! > 0n);
 exists = false;
 assert.equal(await publishReviewSummary({ ...newer, reviewRequestVersion: 3 }), null);
 assert.ok(calls.length >= finalCount);

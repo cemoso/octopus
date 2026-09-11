@@ -2220,7 +2220,8 @@ export async function processReview(pullRequestId: string): Promise<void> {
           console.log(`[reviewer] PR review submitted without inline comments, ${allSummaryFindings.length} in summary (${reviewEvent})`);
         } catch (err) {
           console.error("[reviewer] Failed to submit PR review, falling back to comment:", err);
-          await ghCreatePullRequestComment(installationId, owner, repoName, pr.number, summaryBody);
+          // Publish fallback findings with the archived result and final summary guards below.
+          mainCommentBody += `\n\n${findingsBlock}`;
         }
       }
     } else if (isBitbucket || isGitlab) {

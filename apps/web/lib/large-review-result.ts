@@ -8,7 +8,6 @@ import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewChec
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
 import {
-  createPullRequestComment as ghCreatePullRequestComment,
   createPullRequestReview as ghCreatePullRequestReview,
   updateCheckRun as ghUpdateCheckRun,
 } from "@/lib/github";
@@ -16,6 +15,7 @@ import { parseFindings } from "@/lib/review-dedup";
 import { findingSignature, mergeFindingsBySignature, inheritReviewIssueTriage } from "@/lib/finding-merge";
 import {
   buildLowSeveritySummary,
+  normalizeLastReviewedCommit,
   stripDetailedFindings,
   filterByConfidence,
   resolveConfidenceThreshold,
@@ -231,13 +231,10 @@ export async function handleLargeReviewResult(
           "[large-review-result] Failed to submit review, falling back to comment:",
           err,
         );
-        await ghCreatePullRequestComment(
-          installationId,
-          owner,
-          repoName,
-          pr.number,
-          summaryBody,
-        );
+        if (await publishReviewSummary({ pullRequestId: pr.id, headSha: coverage.headSha,
+          reviewRequestVersion: coverage.reviewRequestVersion, installationId, owner, repo: repoName,
+          prNumber: pr.number, body: normalizeLastReviewedCommit(`${stripDetailedFindings(reviewBody)}\n\n${summaryBody}`, coverage.headSha),
+          expectedReviewBody: reviewBody }) === null) return;
       }
       await checkpoint({ summaryPublished: true });
     }
