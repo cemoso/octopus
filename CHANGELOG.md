@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Compact review summaries use plain record links and a short history list that strict evidence readers can consume. Invalid assessments remain unscored.
 - Operators: publication recovery still recognizes existing summary references; archived attempts and current-head publication checks are unchanged. No database migration is required.
+- Clarified where review explanations belong so re-review commentary does not follow the findings count table without a section heading. Invalid or inconsistent assessments still receive no overall score.
 
 ## [1.0.151] - 2026-09-11
 
