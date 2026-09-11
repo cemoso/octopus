@@ -87,13 +87,14 @@ mock.module("@/lib/review-validation", () => ({
 
 // Hosted review integration: keep generation, parsing, suppression and finding
 // persistence mapping real; replace external services and unrelated prerequisites.
-const archived: { findings: { title: string }[] }[] = [];
+const archived: { findings: { title: string }[]; coverage: unknown; body: string }[] = [];
+const summaries: string[] = [];
 const published: { body: string; comments: unknown[] }[] = [];
 mock.module("@/lib/review-attempt", () => ({
   createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
   updateCurrentReview: async () => ({ count: 1 }),
   saveReviewAttempt: async (_id: string, _pr: string, _coverage: unknown, _body: string, findings: { title: string }[]) => {
-    archived.push({ findings });
+    archived.push({ findings, coverage: _coverage, body: _body });
     return false; // Stop after persistence/publication, before unrelated timeline indexing.
   },
 }));
@@ -106,7 +107,7 @@ mock.module("@/lib/github", () => ({
   } }),
   getPullRequestDetails: async () => ({ body: "Handle missing values" }),
   createPullRequestComment: async () => 123,
-  updatePullRequestComment: async () => {},
+  updatePullRequestComment: async (_installation: number, _owner: string, _repo: string, _id: number, body: string) => { summaries.push(body); },
   createPullRequestReview: async (_installation: number, _owner: string, _repo: string, _number: number, body: string, _event: string, comments: unknown[]) => {
     published.push({ body, comments });
     return 456;
@@ -231,6 +232,8 @@ try {
   }, "finding/vector alignment and embedding cost attribution are preserved");
   embeddingVectors = undefined;
   splitScores = false;
+  const { parseFindingsFromJson } = await import("@/lib/review-dedup");
+  const evidence: unknown[] = [];
   const { processReview } = await import("@/lib/reviewer");
   for (const [score, vote, fails, retained] of [
     [0.1, "down", false, 1], [0.8, "down", false, 1],
@@ -247,6 +250,15 @@ try {
     assert.deepEqual(archived.at(-1)?.findings.map((value) => value.title), local.findings.map((value) => value.title),
       "hosted persistence and local output apply the same semantic suppression decision");
     assert.equal(published.at(-1)?.comments.length, retained, "hosted inline publication uses the suppressed union");
+    assert.equal(parseFindingsFromJson(archived.at(-1)!.body)?.length, 1, "the archived raw model response preserves its findings markers");
+    assert.deepEqual(archived.at(-1)!.coverage, archived[0].coverage, "suppression does not change review coverage");
+    assert.equal(local.model, "fixture-model", "model routing is preserved");
+    assert.equal(local.summary, "Summary", "local summary excludes the findings protocol block");
+    assert.match(published.at(-1)!.body, new RegExp(`${retained} finding`), "summary count agrees with inline findings");
+    evidence.push({ cosineSimilarity: score, feedback: vote, searchFailure: fails, local, hosted: published.at(-1), summaryComment: summaries.at(-1), persistence: archived.at(-1) });
+  }
+  if (process.env.FEEDBACK_EVIDENCE_PATH) {
+    await Bun.write(process.env.FEEDBACK_EVIDENCE_PATH, JSON.stringify(evidence, null, 2));
   }
   console.log("PASS semantic feedback similarity and review consumers");
 } finally {
