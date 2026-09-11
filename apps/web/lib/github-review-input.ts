@@ -1,4 +1,5 @@
 import { reviewFilePriority, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
+import { createBinaryPngEvidence, indexGitHubBinaryPngSections } from "@/lib/review-binary-assets";
 
 type PullMetadata = { head?: { sha?: string }; base?: { sha?: string }; changed_files?: number };
 type ChangedFile = { filename: string; previous_filename?: string; status: string; patch?: string; additions?: number; deletions?: number; sha?: string };
@@ -22,6 +23,8 @@ export async function fetchGitHubReviewInput(options: {
     options.onDiffError?.(error, { headSha: before.head!.sha!, baseSha: before.base!.sha! });
     throw error;
   });
+  const binarySections = indexGitHubBinaryPngSections(rawDiff);
+  const revision = { provider: "github", headSha: before.head.sha, baseSha: before.base.sha };
   const files: ReviewFileInput[] = [];
   let sourceChars = 0, supportingChars = 0;
   let inventoryComplete = false;
@@ -37,7 +40,9 @@ export async function fetchGitHubReviewInput(options: {
       const patch = typeof file.patch === "string" && file.patch.length <= Math.min(options.maxPatchChars, remaining) ? file.patch : undefined;
       if (source) sourceChars += patch?.length ?? 0;
       else supportingChars += patch?.length ?? 0;
-      files.push({ path: file.filename, previousPath: file.previous_filename, change: file.status, patch, additions: file.additions, deletions: file.deletions, blobSha: file.sha, unavailable: typeof file.patch === "string" && patch === undefined ? "File exceeds retained patch budget" : undefined });
+      const reviewFile: ReviewFileInput = { path: file.filename, previousPath: file.previous_filename, change: file.status, patch, additions: file.additions, deletions: file.deletions, blobSha: file.sha, unavailable: typeof file.patch === "string" && patch === undefined ? "File exceeds retained patch budget" : undefined };
+      if (file.patch === undefined) reviewFile.binaryEvidence = createBinaryPngEvidence(reviewFile, revision, binarySections.get(file.filename));
+      files.push(reviewFile);
     }
     if (response.length < 100 || (expectedFiles !== null && files.length >= expectedFiles)) {
       inventoryComplete = expectedFiles !== null && files.length === expectedFiles;
