@@ -53,6 +53,8 @@ import { getGithubAppConfig } from "@/lib/github-app-config";
 import { parseOctopusIgnore, detectBadCommits } from "@/lib/octopus-ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
 import { MAX_DIFF_CHARS } from "@/lib/diff-truncate";
+import { completeReviewCandidate, reviewCandidateSha256, assertReviewProcessingActive, ReviewProcessingExpiredError, type CompleteReviewAdmission, type ReviewExecutionWindow } from "@/lib/review-capacity";
+import { confirmCompleteReviewCurrent } from "@/lib/review-capacity-current";
 import { prepareReviewInput, applyReviewCoverage, coverageSummary, reviewCheckResult, reviewAssessmentComplete, type ReviewInput, type ReviewCoverage } from "@/lib/review-coverage";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { createCoveredReviewRequest } from "@/lib/review-request";
@@ -110,7 +112,7 @@ import { ensureRepositoryAnalysis, deferReviewForRepository } from "@/lib/review
 import { writeSyncLog, deleteSyncLogs } from "@/lib/elasticsearch";
 import { logAiUsage } from "@/lib/ai-usage";
 import { resolveReviewModel } from "@/lib/review-routing";
-import { createAiMessage } from "@/lib/ai-router";
+import { createAiMessage, getProviderForModel } from "@/lib/ai-router";
 import { getOrgSpendLimitStatus, shouldGuardConcurrency } from "@/lib/cost";
 import fs from "node:fs";
 import path from "node:path";
@@ -242,6 +244,7 @@ Reply ONLY with a JSON array of strings, one per entry, in order. Example: ["dis
 
     await logAiUsage({
       provider: response.provider,
+      usedOwnKey: response.usedOwnKey,
       model: FEEDBACK_CLASSIFICATION_MODEL,
       operation: "feedback-classification",
       inputTokens: response.usage.inputTokens,
@@ -623,7 +626,7 @@ async function syncTextDismissalsForPR(
   }
 }
 
-export async function processReview(pullRequestId: string): Promise<void> {
+export async function processReview(pullRequestId: string, executionWindow?: ReviewExecutionWindow): Promise<void> {
   // Load PR with repo and org info
   const pr = await prisma.pullRequest.findUnique({
     where: { id: pullRequestId },
@@ -684,6 +687,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
   const repo = pr.repository;
   const org = repo.organization;
   const attemptId = crypto.randomUUID();
+  let adaptiveProcessingWindow: ReviewExecutionWindow | undefined;
   let attemptCoverage: ReviewCoverage | undefined;
   let attemptSaved = false;
 
@@ -741,35 +745,35 @@ export async function processReview(pullRequestId: string): Promise<void> {
     }
   };
 
-  const attemptLabel = `Review attempt: ${attemptId}. Head: ${pr.headSha ?? "unknown"}.\n\n`;
-  const providerCreateComment = (prNumber: number, body: string) =>
+  const attemptLabel = (id = attemptId) => `Review attempt: ${id}. Head: ${pr.headSha ?? "unknown"}.\n\n`;
+  const providerCreateComment = (prNumber: number, body: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) =>
     isGitHub
-      ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel + body)
+      ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body)
       : isGitlab
-        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel + body)
-        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel + body);
+        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow)
+        : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow);
 
-  const publishMainComment = (body: string, expectedReviewBody?: string) => isGitHub
+  const publishMainComment = (body: string, expectedReviewBody?: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) => isGitHub
     ? publishReviewSummary({ pullRequestId: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion,
-      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel + body, expectedReviewBody })
-    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body));
+      installationId: installationId!, owner, repo: repoName, prNumber: pr.number, body: attemptLabel(publishedAttemptId) + body, expectedReviewBody, executionWindow: publicationWindow })
+    : createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, () => providerCreateComment(pr.number, body, publishedAttemptId, publicationWindow));
 
-  const providerUpdateComment = async (commentId: number, body: string) => {
+  const providerUpdateComment = async (commentId: number, body: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) => {
     if (isGitHub) {
-      reviewCommentId = await publishMainComment(body);
+      reviewCommentId = await publishMainComment(body, undefined, publishedAttemptId, publicationWindow);
       return;
     }
     try {
       if (isGitlab) {
-        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel + body);
+        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
       } else {
-        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel + body);
+        await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
       }
     } catch (err) {
       // If the comment was deleted externally, create a new one and update the reference
       if (err instanceof Error && err.message.includes("404")) {
         console.warn(`[reviewer] Comment ${commentId} not found (deleted?), creating new comment`);
-        const newId = await publishMainComment(body);
+        const newId = await publishMainComment(body, undefined, publishedAttemptId, publicationWindow);
         reviewCommentId = newId;
         return;
       }
@@ -1267,11 +1271,20 @@ export async function processReview(pullRequestId: string): Promise<void> {
       const content = await fetchBaseConfig(".octopusignore").catch(() => null);
       if (content) octopusIg = parseOctopusIgnore(content);
     }
-    const preparedInput = prepareReviewInput(reviewInput, {
+    const preparationOptions = {
       maxChars: MAX_DIFF_CHARS,
       generated: buildGeneratedMatcher(gitattributes),
       ignored: octopusIg,
-    });
+    };
+    const baselineInput = prepareReviewInput(reviewInput, preparationOptions);
+    // Freeze ordinary routing against the baseline. A larger candidate never selects another model.
+    const reviewModel = await resolveReviewModel({ orgId: org.id, repoId: repo.id, diff: baselineInput.diff, coverage: baselineInput.coverage });
+    const resolvedProvider = reviewModel === "claude-fable-5-1" && executionWindow
+      ? await getProviderForModel(reviewModel) : null;
+    const candidate = resolvedProvider ? completeReviewCandidate(reviewInput, preparationOptions, baselineInput,
+      reviewModel, resolvedProvider, executionWindow) : null;
+    const preparedInput = candidate ?? baselineInput;
+    const candidateSha256 = candidate ? reviewCandidateSha256(candidate) : null;
     const { diff, coverage, inventoryDiff } = preparedInput;
     attemptCoverage = coverage;
     coverage.reviewRequestVersion = pr.reviewRequestVersion;
@@ -1281,11 +1294,6 @@ export async function processReview(pullRequestId: string): Promise<void> {
     const diffFiles = extractDiffFiles(diff);
     const filesChanged = reviewInput.expectedFiles ?? reviewInput.files.length;
 
-    // Resolve the review model now that the diff is known: explicit repo/org
-    // pins still win; otherwise mechanical diffs (lockfiles, generated, docs,
-    // tests, tiny edits) downshift to a cheaper model. Never emits an unpriced
-    // model. Substantive diffs keep the default.
-    const reviewModel = await resolveReviewModel({ orgId: org.id, repoId: repo.id, diff, coverage });
     console.log(`[reviewer] Using model: ${reviewModel}`);
 
     // Merge PR diff files into the repo tree so new files added by the PR
@@ -1754,11 +1762,27 @@ export async function processReview(pullRequestId: string): Promise<void> {
       REVIEW_LANGUAGE_NAME: reviewLanguage.promptName,
     });
 
-    const response = await executeCoveredReview(createCoveredReviewRequest({
+    const completeReviewAdmission: CompleteReviewAdmission | undefined = candidateSha256 && executionWindow ? {
+      candidateSha256, headSha: coverage.headSha!, baseSha: coverage.baseSha!, reviewRequestVersion: pr.reviewRequestVersion,
+      preparedSource: { chars: diff.length, files: coverage.files.filter(file => file.state === "supplied").length,
+        hunks: coverage.files.reduce((total, file) => total + file.hunks.length, 0) },
+      window: executionWindow,
+      beforeGeneration: signal => confirmCompleteReviewCurrent({ pullRequestId: pr.id, orgId: org.id, repoId: repo.id,
+        model: reviewModel, headSha: coverage.headSha!, baseSha: coverage.baseSha!, reviewRequestVersion: pr.reviewRequestVersion,
+        fetchRevision: signal => isGitHub ? ghGetPullRequestDetails(installationId!, owner, repoName, pr.number, signal)
+          : isGitlab ? gitlab.getPullRequestDetails(org.id, projectPath, pr.number, signal)
+            : bitbucket.getPullRequestDetails(org.id, owner, repoName, pr.number, signal),
+      }, signal),
+    } : undefined;
+    const primaryRequest = createCoveredReviewRequest({
       model: reviewModel, system: systemPrompt, number: pr.number, title: pr.title,
       author: pr.author, diff, coverage, comment: pr.triggerCommentBody ?? "",
       repoConfig: repoConfigUserBlock,
-    }), coverage, getSystemPrompt(), request => createAiMessage(request, org.id));
+    });
+    adaptiveProcessingWindow = completeReviewAdmission?.window;
+    const response = await executeCoveredReview({ ...primaryRequest, ...(completeReviewAdmission ? { completeReviewAdmission } : {}) },
+      coverage, getSystemPrompt(), request => createAiMessage(request, org.id));
+    const assertProcessingActive = () => { if (completeReviewAdmission) assertReviewProcessingActive(completeReviewAdmission.window); };
 
     let reviewBody = prepareReviewPresentation(response.text, coverage);
 
@@ -1781,6 +1805,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
 
     await logAiUsage({
       provider: response.provider,
+      usedOwnKey: response.usedOwnKey,
       model: reviewModel,
       operation: "review",
       inputTokens: response.usage.inputTokens,
@@ -1789,6 +1814,8 @@ export async function processReview(pullRequestId: string): Promise<void> {
       cacheWriteTokens: response.usage.cacheWriteTokens,
       organizationId: org.id,
     });
+    // A completed response is still metered before expiry stops further review processing.
+    assertProcessingActive();
 
     const findingsCount = countFindings(reviewBody);
     console.log(`[reviewer] Review generated: ${reviewBody.length} chars, ${findingsCount} findings`);
@@ -1832,13 +1859,14 @@ export async function processReview(pullRequestId: string): Promise<void> {
           const followUp = await executeFindingsRecovery(
             { model: reviewModel, reviewBody, parsedFindingsCount: findings.length, tableFindingsTotal },
             coverage,
-            request => createAiMessage(request, org.id),
+            request => createAiMessage({ ...request, ...(completeReviewAdmission ? { executionWindow } : {}) }, org.id),
           );
 
           const findingsBlock = followUp.text;
 
           await logAiUsage({
             provider: followUp.provider,
+            usedOwnKey: followUp.usedOwnKey,
             model: reviewModel,
             operation: "review-findings-followup",
             inputTokens: followUp.usage.inputTokens,
@@ -1912,7 +1940,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
     }
 
     // Apply the shared policy to the full union before validation/presentation.
+    assertProcessingActive();
     allParsedFindings = await suppressFindingsFromFeedback(allParsedFindings, { repoId: repo.id, orgId: org.id });
+    assertProcessingActive();
 
     // Two-pass validation: re-score confidence on the FULL union with cross-file
     // context. Runs once on allParsedFindings so both the summary table and the
@@ -1932,7 +1962,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
         let crossFileContext = "";
         const crossFileQueries = extractCrossFileQueries(allParsedFindings, diff);
         if (crossFileQueries.length > 0) {
+          assertProcessingActive();
           crossFileContext = await gatherCrossFileContext(crossFileQueries, repo.id, org.id, fileContentFetcher);
+          assertProcessingActive();
           if (crossFileContext) {
             console.log(`[reviewer] Gathered cross-file context: ${crossFileQueries.length} queries, ${crossFileContext.length} chars`);
           }
@@ -1942,14 +1974,19 @@ export async function processReview(pullRequestId: string): Promise<void> {
         let verificationContext: Map<number, string> | undefined;
         const verificationQueries = generateVerificationQueries(allParsedFindings);
         if (verificationQueries.length > 0) {
+          assertProcessingActive();
           verificationContext = await gatherVerificationContext(verificationQueries, repo.id, org.id, fileContentFetcher);
+          assertProcessingActive();
           if (verificationContext.size > 0) {
             console.log(`[reviewer] Gathered verification context: ${verificationQueries.length} queries → ${verificationContext.size} findings verified`);
           }
         }
 
+        assertProcessingActive();
         allParsedFindings = await validateFindings(allParsedFindings, diff, org.id, confidenceThreshold, crossFileContext || undefined, "[reviewer]", verificationContext, fileTree);
+        assertProcessingActive();
       } catch (err) {
+        if (err instanceof ReviewProcessingExpiredError) throw err;
         console.warn("[reviewer] Two-pass validation failed, keeping all findings:", err);
       }
     }
@@ -2166,6 +2203,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
         const summaryLine = buildReviewSummary(findingsBlock, visibleFindingsCount);
 
         try {
+          assertProcessingActive();
           const reviewId = await ghCreatePullRequestReview(
             installationId, owner, repoName, pr.number,
             summaryLine, reviewEvent as "COMMENT" | "REQUEST_CHANGES", dedupedComments, undefined, coverage.headSha ?? undefined,
@@ -2200,6 +2238,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
             console.error("[reviewer] Failed to match GitHub comment IDs:", matchErr);
           }
         } catch (err) {
+          if (err instanceof ReviewProcessingExpiredError) throw err;
           console.error("[reviewer] Failed to submit inline review, falling back to summary-only:", err);
         }
       }
@@ -2213,12 +2252,14 @@ export async function processReview(pullRequestId: string): Promise<void> {
         effectiveFindingsCount = allSummaryFindings.length;
         const summaryBody = buildReviewSummary(findingsBlock, allSummaryFindings.length);
         try {
+          assertProcessingActive();
           await ghCreatePullRequestReview(
             installationId, owner, repoName, pr.number,
             summaryBody, reviewEvent as "COMMENT" | "REQUEST_CHANGES", [], undefined, coverage.headSha ?? undefined,
           );
           console.log(`[reviewer] PR review submitted without inline comments, ${allSummaryFindings.length} in summary (${reviewEvent})`);
         } catch (err) {
+          if (err instanceof ReviewProcessingExpiredError) throw err;
           console.error("[reviewer] Failed to submit PR review, falling back to comment:", err);
           // Publish fallback findings with the archived result and final summary guards below.
           mainCommentBody += `\n\n${findingsBlock}`;
@@ -2228,6 +2269,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       // Bitbucket / GitLab: post inline comments individually, then a summary comment
       const failedInlineComments: ReviewComment[] = [];
       for (const comment of inlineComments) {
+        assertProcessingActive();
         try {
           if (isGitlab) {
             await gitlab.createInlineComment(
@@ -2276,6 +2318,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
       effectiveFindingsCount = visibleCount;
       const findingsBlock = buildLowSeveritySummary(nonInlineWithUnmappable);
       const summaryBody = `${coverageSummary(coverage)} ${visibleCount} findings.${findingsBlock ? "\n\n" + findingsBlock : ""}`;
+      assertProcessingActive();
       await providerCreateComment(pr.number, summaryBody);
       const providerLabel = isGitlab ? "GitLab" : "Bitbucket";
       console.log(`[reviewer] ${providerLabel} review posted with ${inlineComments.length} inline comments, ${nonInlineWithUnmappable.length} in summary`);
@@ -2335,17 +2378,19 @@ export async function processReview(pullRequestId: string): Promise<void> {
     ({ report: effectiveReviewBody, comment: mainCommentBody } = finalizeReviewPresentation(
       response.text, effectiveReviewBody, mainCommentBody, coverage, attemptId, { hasCritical, hasHigh, hasMedium },
     ));
+    assertProcessingActive();
     const promoted = await saveReviewAttempt(attemptId, pr.id, coverage, effectiveReviewBody, mergedIssues);
     attemptSaved = true;
 
     // The final scored comment becomes visible only after its immutable outcome is durable.
+    assertProcessingActive();
     if (isGitHub) {
-      reviewCommentId = await publishMainComment(mainCommentBody, effectiveReviewBody);
+      reviewCommentId = await publishMainComment(mainCommentBody, effectiveReviewBody, attemptId, completeReviewAdmission?.window);
     } else if (reviewCommentId) {
-      await providerUpdateComment(reviewCommentId, mainCommentBody);
+      await providerUpdateComment(reviewCommentId, mainCommentBody, attemptId, completeReviewAdmission?.window);
       console.log(`[reviewer] Placeholder comment updated — commentId: ${reviewCommentId}`);
     } else {
-      const newCommentId = await publishMainComment(mainCommentBody);
+      const newCommentId = await publishMainComment(mainCommentBody, undefined, attemptId, completeReviewAdmission?.window);
       reviewCommentId = newCommentId;
       console.log(`[reviewer] New review comment created — commentId: ${newCommentId}`);
     }
@@ -2364,20 +2409,24 @@ export async function processReview(pullRequestId: string): Promise<void> {
     ), effectiveFindingsCount);
     const summaryText = checkResult.summary;
 
+    assertProcessingActive();
     if (checkRunId && isGitHub && installationId) {
       const conclusion = checkResult.conclusion;
       await ghUpdateCheckRun(installationId, owner, repoName, checkRunId, conclusion, {
         title: checkResult.title,
         summary: summaryText,
-      });
+      }, completeReviewAdmission?.window);
       console.log(`[reviewer] Check run updated — conclusion: ${conclusion} (threshold: ${threshold})`);
     }
 
     if (pr.headSha && isGitlab) {
       const state = checkResult.conclusion === "failure" ? "failed" : "success";
       await gitlab
-        .setCommitStatus(org.id, projectPath, pr.headSha, state, GITLAB_STATUS_NAME, summaryText)
-        .catch((err) => console.error("[reviewer] Failed to set GitLab commit status:", err));
+        .setCommitStatus(org.id, projectPath, pr.headSha, state, GITLAB_STATUS_NAME, summaryText, undefined, completeReviewAdmission?.window)
+        .catch((err) => {
+          assertProcessingActive();
+          console.error("[reviewer] Failed to set GitLab commit status:", err);
+        });
       console.log(`[reviewer] GitLab commit status set — state: ${state} (threshold: ${threshold})`);
     }
 
@@ -2480,27 +2529,44 @@ export async function processReview(pullRequestId: string): Promise<void> {
 
     console.log(`[reviewer] Review completed for PR #${pr.number}`);
   } catch (err) {
+    if (adaptiveProcessingWindow
+      && (adaptiveProcessingWindow.signal.aborted || adaptiveProcessingWindow.remainingMs() <= 0)) {
+      err = new ReviewProcessingExpiredError();
+    }
     const errorMessage =
       err instanceof Error ? err.message : "Unknown error";
     console.error(`[reviewer] Review failed for PR #${pr.number}:`, err);
+
+    // A deadline can expire while a completed assessment is being committed. Keep that immutable
+    // record and append the interrupted processing outcome before publishing any scored completion.
+    let failureAttemptId = attemptId;
+    if (err instanceof ReviewProcessingExpiredError && attemptCoverage) {
+      if (attemptSaved) {
+        failureAttemptId = crypto.randomUUID();
+        attemptCoverage.limitations.push(`Processing expired after archived assessment attempt ${attemptId}.`);
+        attemptSaved = false;
+      }
+      markReviewAssessmentIncomplete(attemptCoverage, err.message);
+    }
 
     // Preserve failed adapter attempts without replacing a previously saved outcome.
     if (attemptCoverage && !attemptSaved && attemptCoverage.assessment && attemptCoverage.assessment.state !== "incomplete") {
       markReviewAssessmentIncomplete(attemptCoverage, "Review processing failed or was interrupted before persistence");
     }
     const failureBody = attemptCoverage?.assessment && !attemptSaved
-      ? applyReviewCoverage("## 🐙 Octopus Review\n\nAssessment failed or was interrupted. No complete assessment is available.", attemptCoverage, attemptId) : null;
+      ? applyReviewCoverage("## 🐙 Octopus Review\n\nAssessment failed or was interrupted. No complete assessment is available.", attemptCoverage, failureAttemptId) : null;
     if (failureBody && attemptCoverage) {
-      await saveReviewAttempt(attemptId, pr.id, attemptCoverage, failureBody).catch(e => console.error("[reviewer] Failed to archive interrupted assessment:", e));
+      await saveReviewAttempt(failureAttemptId, pr.id, attemptCoverage, failureBody).catch(e => console.error("[reviewer] Failed to archive interrupted assessment:", e));
     }
 
     // Update placeholder comment with error if possible
     if (isGitHub && failureBody) {
-      await publishMainComment(failureBody, failureBody).catch((e) => console.error("[reviewer] Failed to publish archived failure:", e));
+      await publishMainComment(failureBody, failureBody, failureAttemptId).catch((e) => console.error("[reviewer] Failed to publish archived failure:", e));
     } else if (reviewCommentId) {
       await providerUpdateComment(
         reviewCommentId,
         failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
+        failureAttemptId,
       ).catch((e) => console.error("[reviewer] Failed to update placeholder with error:", e));
     }
 

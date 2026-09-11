@@ -1,4 +1,5 @@
 import "server-only";
+import { CapacityAdmissionError, capacityReceipt, refuseCapacity, withinReviewWindow, COMPLETE_REVIEW_POLICY } from "./review-capacity";
 import { prisma } from "@octopus/db";
 import { decryptStringMaybeLegacy } from "@/lib/crypto";
 import { getProvider } from "./providers";
@@ -156,24 +157,53 @@ export async function createAiMessage(
   params: AiCreateParams,
   orgId: string,
 ): Promise<AiResponse> {
-  const provider = await resolveProvider(params.model);
-  const keys = await getOrgKeys(orgId);
-  const orgKey = getOrgKeyForProvider(keys, provider);
+  const admission = params.completeReviewAdmission;
+  const window = admission?.window ?? params.executionWindow;
+  const setup = async () => {
+    const provider = await resolveProvider(params.model);
+    if (admission && (provider !== "anthropic" || params.model !== COMPLETE_REVIEW_POLICY.model)) {
+      refuseCapacity(admission, capacityReceipt(admission, params.model), "unsupported-route");
+    }
+    if (window && provider !== "anthropic") throw new Error("Measured review provider changed before recovery");
+    const keys = await getOrgKeys(orgId);
+    const orgKey = getOrgKeyForProvider(keys, provider);
 
-  // Only always-thinking models on the text path consume effort; resolve it
-  // lazily so we don't add a DB read to non-thinking calls or to the forced-tool
-  // path (where resolveThinking ignores effort). An explicit params.effort wins.
-  if (
-    params.effort === undefined &&
-    params.responseSchema === undefined &&
-    ALWAYS_THINKING_MODEL_RX.test(params.model)
-  ) {
-    params = { ...params, effort: await getReviewEffort(orgId) };
+    // Only always-thinking text calls consume effort; an explicit effort wins.
+    if (
+      params.effort === undefined &&
+      params.responseSchema === undefined &&
+      ALWAYS_THINKING_MODEL_RX.test(params.model)
+    ) {
+      params = { ...params, effort: await getReviewEffort(orgId) };
+    }
+    return { provider, orgKey };
+  };
+  let route: Awaited<ReturnType<typeof setup>>;
+  try {
+    route = window ? await withinReviewWindow(window,
+      window.remainingMs() - (admission ? COMPLETE_REVIEW_POLICY.minGenerationMs : 0) - COMPLETE_REVIEW_POLICY.publicationReserveMs, setup) : await setup();
+  } catch (error) {
+    if (error instanceof CapacityAdmissionError || !admission) throw error;
+    refuseCapacity(admission, capacityReceipt(admission, params.model), "final-check-failed");
+  }
+  const { provider, orgKey } = route;
+  if (admission) {
+    params = { ...params, completeReviewAdmission: { ...admission, beforeGeneration: async signal => {
+      const reason = await admission.beforeGeneration(signal);
+      if (reason) return reason;
+      // Billing must describe this already prepared client's payer. Never swap clients after counting.
+      // Compare only in memory; credential material never enters the evidence or reviewer.
+      const currentKey = getOrgKeyForProvider(await getOrgKeys(orgId), provider);
+      signal.throwIfAborted();
+      return currentKey === orgKey ? null : "credential-route-changed";
+    } } };
   }
 
   try {
-    return await getProvider(provider).create(params, orgKey, orgId);
+    const response = await getProvider(provider).create(params, orgKey, orgId);
+    return window ? { ...response, usedOwnKey: !!orgKey } : response;
   } catch (error) {
+    if (error instanceof CapacityAdmissionError) throw error;
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[ai-router] ${provider} API error for model ${params.model}:`, message);
     throw new Error(`AI provider ${provider} failed: ${message}`);

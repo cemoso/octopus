@@ -1,4 +1,5 @@
 import "server-only";
+import { reviewPublicationSignal, type ReviewExecutionWindow } from "./review-capacity";
 import { readReviewJson } from "@/lib/review-fetch";
 import { attachReviewPatches, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
 import { prisma } from "@octopus/db";
@@ -135,6 +136,7 @@ export interface PullRequestDetails {
   url: string;
   author: string;
   headSha: string;
+  baseSha: string | null;
   /** PR description body (may be empty). Untrusted user content. */
   body: string;
 }
@@ -144,11 +146,12 @@ export async function getPullRequestDetails(
   workspace: string,
   repoSlug: string,
   prId: number,
+  signal?: AbortSignal,
 ): Promise<PullRequestDetails> {
   const token = await getAccessToken(organizationId);
   const res = await fetch(
     `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { Authorization: `Bearer ${token}` }, signal },
   );
 
   if (!res.ok) {
@@ -162,6 +165,7 @@ export async function getPullRequestDetails(
     url: data.links?.html?.href ?? "",
     author: data.author?.display_name ?? data.author?.nickname ?? "unknown",
     headSha: data.source?.commit?.hash ?? "",
+    baseSha: data.destination?.commit?.hash ?? null,
     body: data.summary?.raw ?? data.description ?? "",
   };
 }
@@ -193,11 +197,14 @@ export async function createPullRequestComment(
   repoSlug: string,
   prId: number,
   body: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<number> {
   const token = await getAccessToken(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}/comments`,
     {
+      signal,
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -223,11 +230,14 @@ export async function updatePullRequestComment(
   prId: number,
   commentId: number,
   body: string,
+  executionWindow?: ReviewExecutionWindow,
 ): Promise<void> {
   const token = await getAccessToken(organizationId);
+  const signal = reviewPublicationSignal(executionWindow);
   const res = await fetch(
     `${BITBUCKET_API}/repositories/${workspace}/${repoSlug}/pullrequests/${prId}/comments/${commentId}`,
     {
+      signal,
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,

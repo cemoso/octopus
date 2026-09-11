@@ -16,3 +16,12 @@ it("reconciles only an exact marker published by the configured GitHub App", asy
   const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
   expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
 });
+
+
+it("fences check completion after delayed authentication and cancels requests", async () => {
+  const child = Bun.spawn(["bun", "lib/__tests__/fixtures/github-publication-window-harness.ts"], {
+    cwd: import.meta.dir + "/../..", stdout: "pipe", stderr: "pipe",
+  });
+  const [exit, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+  expect({ exit, stderr }).toEqual({ exit: 0, stderr: "" });
+});

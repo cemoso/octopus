@@ -90,6 +90,23 @@ if (rawMarkup !== undefined && rawMarkup !== "" && !markupValid) {
 }
 export const PLATFORM_MARKUP = markupValid ? parsedMarkup : 1.2;
 
+/** Conservative primary admission estimate; separate from post-hoc usage settlement. */
+export function estimateCompleteReviewCost(
+  pricing: Map<string, ModelPricing>, model: string, inputTokens: number, outputTokens: number,
+  cacheWriteMultiplier: number, markup = PLATFORM_MARKUP,
+): { estimateUsd: number; pricing: { identity: string; input: number; output: number; cacheWriteMultiplier: number; markup: number } } | null {
+  if (model !== "claude-fable-5-1") return null;
+  const catalogue = pricing.get(model);
+  const floor = FALLBACK_PRICING[model];
+  if (!catalogue || !floor || ![catalogue.input, catalogue.output].every(rate => Number.isFinite(rate) && rate >= 0)
+    || ![inputTokens, outputTokens].every(tokens => Number.isSafeInteger(tokens) && tokens >= 0)
+    || ![1, 1.25, 2].includes(cacheWriteMultiplier) || !Number.isFinite(markup) || markup < 1) return null;
+  const rates = { identity: "fable-5-1-catalogue-with-published-floor-v1", input: Math.max(catalogue.input, floor.input),
+    output: Math.max(catalogue.output, floor.output), cacheWriteMultiplier, markup };
+  const estimateUsd = (inputTokens * rates.input * cacheWriteMultiplier + outputTokens * rates.output) / 1_000_000 * markup;
+  return Number.isFinite(estimateUsd) ? { estimateUsd, pricing: rates } : null;
+}
+
 export function calcCost(
   pricing: Map<string, ModelPricing>,
   model: string,
@@ -183,6 +200,7 @@ function orgOwnsKeyForProvider(
 export async function getOrgSpendLimitStatus(
   orgId: string,
   repoId?: string,
+  resolvedRoute?: { model: string; provider: import("./providers").AiProvider },
 ): Promise<SpendLimitResult> {
   const org = await prisma.organization.findUnique({
     where: { id: orgId },
@@ -215,15 +233,16 @@ export async function getOrgSpendLimitStatus(
   // wrongly credit-blocked.) On resolution failure, fall back to the old strict
   // all-provider check so the gate never throws and never bills a fully-keyed org.
   try {
-    const [{ getReviewModel }, { getProviderForModel }] = await Promise.all([
-      import("@/lib/ai-client"),
-      import("@/lib/ai-router"),
-    ]);
     // Resolve the provider of the model this review will ACTUALLY use — a
     // repo-level pin overrides the org default. Without repoId, a BYOK-Anthropic
     // org whose default is Anthropic would be exempted even when a repo is pinned
     // to a platform provider (e.g. Grok), letting that usage skip the credit gate.
-    const provider = await getProviderForModel(await getReviewModel(orgId, repoId));
+    const provider = resolvedRoute ? resolvedRoute.provider : await (async () => {
+      const [{ getReviewModel }, { getProviderForModel }] = await Promise.all([
+        import("@/lib/ai-client"), import("@/lib/ai-router"),
+      ]);
+      return getProviderForModel(await getReviewModel(orgId, repoId));
+    })();
     if (orgOwnsKeyForProvider(org, provider)) return { blocked: false };
   } catch (err) {
     console.error("[cost] spend-gate provider resolution failed; using strict BYOK check:", err);
