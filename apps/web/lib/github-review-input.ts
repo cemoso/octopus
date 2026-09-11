@@ -1,5 +1,7 @@
 import { reviewFilePriority, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
 import { createBinaryPngEvidence, indexGitHubBinaryPngSections } from "@/lib/review-binary-assets";
+import { indexGitHubDiffSections } from "@/lib/github-diff-sections";
+import { recoverAddedGitHubTextPatch } from "@/lib/github-text-patches";
 
 type PullMetadata = { head?: { sha?: string }; base?: { sha?: string }; changed_files?: number };
 type ChangedFile = { filename: string; previous_filename?: string; status: string; patch?: string; additions?: number; deletions?: number; sha?: string };
@@ -24,6 +26,7 @@ export async function fetchGitHubReviewInput(options: {
     throw error;
   });
   const binarySections = indexGitHubBinaryPngSections(rawDiff);
+  const textSections = indexGitHubDiffSections(rawDiff);
   const revision = { provider: "github", headSha: before.head.sha, baseSha: before.base.sha };
   const files: ReviewFileInput[] = [];
   let sourceChars = 0, supportingChars = 0;
@@ -37,10 +40,15 @@ export async function fetchGitHubReviewInput(options: {
       if (typeof file.filename !== "string" || typeof file.status !== "string") throw new Error("Invalid GitHub changed-file entry");
       const source = reviewFilePriority(file.filename) === 0;
       const remaining = source ? options.maxPatchChars * 2 - sourceChars : options.maxPatchChars / 2 - supportingChars;
-      const patch = typeof file.patch === "string" && file.patch.length <= Math.min(options.maxPatchChars, remaining) ? file.patch : undefined;
+      const reviewFile: ReviewFileInput = { path: file.filename, previousPath: file.previous_filename, change: file.status, additions: file.additions, deletions: file.deletions, blobSha: file.sha };
+      const availablePatch = file.patch === undefined
+        ? recoverAddedGitHubTextPatch(reviewFile, revision, textSections.get(file.filename))
+        : file.patch;
+      const patch = typeof availablePatch === "string" && availablePatch.length <= Math.min(options.maxPatchChars, remaining) ? availablePatch : undefined;
       if (source) sourceChars += patch?.length ?? 0;
       else supportingChars += patch?.length ?? 0;
-      const reviewFile: ReviewFileInput = { path: file.filename, previousPath: file.previous_filename, change: file.status, patch, additions: file.additions, deletions: file.deletions, blobSha: file.sha, unavailable: typeof file.patch === "string" && patch === undefined ? "File exceeds retained patch budget" : undefined };
+      reviewFile.patch = patch;
+      reviewFile.unavailable = typeof availablePatch === "string" && patch === undefined ? "File exceeds retained patch budget" : undefined;
       if (file.patch === undefined) reviewFile.binaryEvidence = createBinaryPngEvidence(reviewFile, revision, binarySections.get(file.filename));
       files.push(reviewFile);
     }
