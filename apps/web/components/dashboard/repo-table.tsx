@@ -29,10 +29,13 @@ import {
 } from "@tabler/icons-react";
 import { indexRepository, cancelIndexing } from "@/app/(app)/actions";
 import { IndexingLogs } from "@/components/indexing-logs";
+import { applyReviewRequested, applyReviewStatus, type ReviewStatusEvent } from "@/lib/review-status-state";
 import { getPubbyClient } from "@/lib/pubby-client";
 
 type PullRequestItem = {
   id: string;
+  headSha?: string | null;
+  reviewRequestVersion?: number;
   number: number;
   title: string;
   url: string;
@@ -404,30 +407,12 @@ export function RepoTable({
         repoId: string;
         pullRequest: PullRequestItem;
       };
-      setPullRequests((prev) => {
-        const existing = prev[data.repoId] ?? [];
-        const filtered = existing.filter((pr) => pr.number !== data.pullRequest.number);
-        return { ...prev, [data.repoId]: [data.pullRequest, ...filtered] };
-      });
+      setPullRequests(prev => applyReviewRequested(prev, data));
     };
 
     const handleReviewStatus = (raw: unknown) => {
-      const data = raw as {
-        repoId: string;
-        pullRequestId: string;
-        number: number;
-        status: string;
-        step: string;
-      };
-      setPullRequests((prev) => {
-        const existing = prev[data.repoId] ?? [];
-        return {
-          ...prev,
-          [data.repoId]: existing.map((pr) =>
-            pr.number === data.number ? { ...pr, status: data.status } : pr,
-          ),
-        };
-      });
+      const data = raw as ReviewStatusEvent;
+      setPullRequests(prev => applyReviewStatus(prev, data));
     };
 
     channel.bind("index-status", handleStatus);

@@ -1,3 +1,6 @@
+import "server-only";
+import { readReviewJson } from "@/lib/review-fetch";
+import { reviewFilePriority, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
 import { prisma } from "@octopus/db";
 import { truncateDiff, MAX_FETCH_DIFF_CHARS } from "@/lib/diff-truncate";
 import { decryptString, encryptString, decryptStringMaybeLegacy } from "@/lib/crypto";
@@ -602,4 +605,45 @@ export async function deleteProjectWebhook(
   if (!res.ok) {
     console.error(`[gitlab] Failed to delete webhook: ${res.status}`);
   }
+}
+
+/** Paginate metadata even when individual patches or the provider diff are limited. */
+export async function getPullRequestReviewInput(organizationId: string, projectPath: string, mrIid: number, expectedHead: string | null): Promise<{ input: ReviewInput; rawDiff: string }> {
+  const token = await getAccessToken(organizationId);
+  const host = await getHost(organizationId);
+  const base = `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/merge_requests/${mrIid}`;
+  const read = async (suffix: string) => {
+    const response = await fetch(base + suffix, { headers: { Authorization: `Bearer ${token}` } });
+    if (!response.ok) throw new Error(`Failed to get GitLab review input: ${response.status}`);
+    return response;
+  };
+  type Metadata = { sha?: string; diff_refs?: { head_sha?: string; base_sha?: string }; changes_count?: string };
+  const before = await readReviewJson<Metadata>(await read(""));
+  const headSha = before.diff_refs?.head_sha ?? before.sha;
+  const baseSha = before.diff_refs?.base_sha ?? null;
+  if (!headSha || (expectedHead && headSha !== expectedHead)) throw new Error("MR revision changed before review input was fetched");
+  const files: ReviewFileInput[] = [];
+  let inventoryComplete = false;
+  let sourceChars = 0, supportingChars = 0;
+  for (let page = 1; page <= 30; page++) {
+    const response = await read(`/diffs?per_page=100&page=${page}`);
+    const entries = await readReviewJson(response);
+    if (!Array.isArray(entries)) throw new Error("Invalid GitLab changed-file response");
+    for (const e of entries) {
+      if (typeof e.new_path !== "string" || typeof e.old_path !== "string") throw new Error("Invalid GitLab changed-file entry");
+      const source = reviewFilePriority(e.new_path) === 0;
+      const remaining = source ? MAX_FETCH_DIFF_CHARS * 2 - sourceChars : MAX_FETCH_DIFF_CHARS / 2 - supportingChars;
+      const patch = typeof e.diff === "string" && e.diff.length <= Math.min(MAX_FETCH_DIFF_CHARS, remaining) ? e.diff : undefined;
+      if (source) sourceChars += patch?.length ?? 0;
+      else supportingChars += patch?.length ?? 0;
+      files.push({ path: e.new_path, previousPath: e.old_path, change: e.new_file ? "added" : e.deleted_file ? "removed" : e.renamed_file ? "renamed" : "modified", patch, unavailable: e.collapsed || e.too_large ? "GitLab omitted or collapsed this patch" : typeof e.diff === "string" && patch === undefined ? "File exceeds retained patch budget" : undefined });
+    }
+    if (!response.headers.get("x-next-page")) { inventoryComplete = true; break; }
+  }
+  const after = await readReviewJson<Metadata>(await read(""));
+  if ((after.diff_refs?.head_sha ?? after.sha) !== headSha || (after.diff_refs?.base_sha ?? null) !== baseSha) throw new Error("MR revision changed while review input was being fetched");
+  const expectedFiles = /^\d+$/.test(String(before.changes_count)) ? Number(before.changes_count) : null;
+  inventoryComplete = inventoryComplete && expectedFiles !== null && files.length === expectedFiles && Boolean(baseSha);
+  const rawDiff = files.map(f => `diff --git a/${f.previousPath ?? f.path} b/${f.path}\n${f.patch ?? ""}\n`).join("");
+  return { rawDiff, input: { provider: "gitlab", headSha, baseSha, files, expectedFiles, inventoryComplete, limitations: inventoryComplete ? [] : ["GitLab changed-file inventory could not be verified completely."] } };
 }

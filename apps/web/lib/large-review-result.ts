@@ -1,8 +1,13 @@
+import "server-only";
+import { isReviewRequestVersion } from "@/lib/review-status-state";
+import { randomUUID } from "node:crypto";
+import { deliverReviewAttempt } from "@/lib/review-attempt-delivery";
+import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, hasReviewAttempt } from "@/lib/review-attempt";
+import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
 import {
   createPullRequestComment as ghCreatePullRequestComment,
-  updatePullRequestComment as ghUpdatePullRequestComment,
   createPullRequestReview as ghCreatePullRequestReview,
   updateCheckRun as ghUpdateCheckRun,
 } from "@/lib/github";
@@ -24,6 +29,11 @@ import { eventBus } from "@/lib/events";
 
 export type LargeReviewResultJob = {
   pullRequestId: string;
+  attemptId?: string;
+  reviewRequestVersion?: number;
+  headSha?: string | null;
+  baseSha?: string | null;
+  checkRunId?: number | null;
   reviewBody: string;
   durationMs?: number;
   error?: string;
@@ -67,56 +77,19 @@ export async function handleLargeReviewResult(
     return;
   }
 
-  const reviewCommentId = pr.reviewCommentId ? Number(pr.reviewCommentId) : null;
-
-  if (data.error) {
-    const errorBody = [
-      "> 🐙 **Octopus Review** encountered an error while analyzing this large pull request.",
-      ">",
-      `> \`${data.error}\``,
-      ">",
-      "> Please try again by commenting `@octopus-review` on this PR.",
-    ].join("\n");
-
-    if (reviewCommentId) {
-      await ghUpdatePullRequestComment(
-        installationId,
-        owner,
-        repoName,
-        reviewCommentId,
-        errorBody,
-      ).catch((e) =>
-        console.error("[large-review-result] Failed to update placeholder:", e),
-      );
-    } else {
-      await ghCreatePullRequestComment(
-        installationId,
-        owner,
-        repoName,
-        pr.number,
-        errorBody,
-      ).catch((e) =>
-        console.error("[large-review-result] Failed to create error comment:", e),
-      );
-    }
-
-    await prisma.pullRequest.update({
-      where: { id: pr.id },
-      data: { status: "failed", errorMessage: data.error },
-    });
-
-    eventBus.emit({
-      type: "review-failed",
-      orgId: org.id,
-      prNumber: pr.number,
-      prTitle: pr.title,
-      error: data.error,
-    });
-    return;
+  const correlated = typeof data.attemptId === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.attemptId)
+    && typeof data.headSha === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(data.headSha)
+    && typeof data.baseSha === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(data.baseSha);
+  const attemptId = correlated ? data.attemptId! : randomUUID();
+  const coverage = unknownReviewCoverage(repo.provider, "Large-review worker did not supply verified changed-file coverage.");
+  if (correlated) {
+    if (isReviewRequestVersion(data.reviewRequestVersion)) coverage.reviewRequestVersion = data.reviewRequestVersion;
+    coverage.headSha = data.headSha!;
+    coverage.baseSha = data.baseSha!;
+    if (Number.isSafeInteger(data.checkRunId) && data.checkRunId! > 0) coverage.nativeCheckId = String(data.checkRunId);
   }
-
-  const reviewBody = data.reviewBody;
-
+  const reviewBody = applyReviewCoverage(data.error ? `Large review failed: ${data.error}` : data.reviewBody, coverage, attemptId);
+  await hasReviewAttempt(attemptId, pr.id, coverage, reviewBody);
   // 1. Parse findings out of the markdown, then apply the SAME per-category
   // confidence filter + severity cap as the standard path (#652) so the largest,
   // most bug-prone PRs no longer get raw model output straight to comments.
@@ -146,52 +119,6 @@ export async function handleLargeReviewResult(
     `[large-review-result] PR #${pr.number}: ${reviewBody.length} chars, ${parsedFindings.length} parsed → ${findings.length} after confidence filter${truncatedCount ? ` (capped ${truncatedCount})` : ""}`,
   );
 
-  // 2. Update placeholder comment with main body (findings JSON stripped — they go inline/summary)
-  const mainCommentBody = stripDetailedFindings(reviewBody);
-  let mainCommentId = reviewCommentId;
-  if (mainCommentId) {
-    try {
-      await ghUpdatePullRequestComment(
-        installationId,
-        owner,
-        repoName,
-        mainCommentId,
-        mainCommentBody,
-      );
-    } catch (err) {
-      // Comment may have been deleted — recreate
-      if (err instanceof Error && err.message.includes("404")) {
-        const newId = await ghCreatePullRequestComment(
-          installationId,
-          owner,
-          repoName,
-          pr.number,
-          mainCommentBody,
-        );
-        mainCommentId = newId;
-        await prisma.pullRequest.update({
-          where: { id: pr.id },
-          data: { reviewCommentId: newId },
-        });
-      } else {
-        throw err;
-      }
-    }
-  } else {
-    const newId = await ghCreatePullRequestComment(
-      installationId,
-      owner,
-      repoName,
-      pr.number,
-      mainCommentBody,
-    );
-    mainCommentId = newId;
-    await prisma.pullRequest.update({
-      where: { id: pr.id },
-      data: { reviewCommentId: newId },
-    });
-  }
-
   // 3. Post a summary review (no inline comments — internal-cli path doesn't compute
   // diff line maps. All findings end up in the summary table.)
   const hasCritical = findings.some((f) => f.severity === "🔴");
@@ -205,45 +132,6 @@ export async function handleLargeReviewResult(
   const reviewEvent: "COMMENT" | "REQUEST_CHANGES" = shouldRequestChanges
     ? "REQUEST_CHANGES"
     : "COMMENT";
-
-  const findingsBlock = buildLowSeveritySummary(findings);
-  const summaryHeader = `Large PR — ${findings.length} finding${findings.length !== 1 ? "s" : ""}${
-    mainCommentId && pr.url ? ` | [View details](${pr.url}#issuecomment-${mainCommentId})` : ""
-  }`;
-  const summaryBody = [
-    summaryHeader,
-    findingsBlock,
-    `<sub>Reviewed by [Octopus Review](https://octopus-review.ai) (large-PR pipeline, no inline comments).</sub>`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  try {
-    await ghCreatePullRequestReview(
-      installationId,
-      owner,
-      repoName,
-      pr.number,
-      summaryBody,
-      reviewEvent,
-      [],
-    );
-    console.log(
-      `[large-review-result] PR review submitted (${reviewEvent}, ${findings.length} findings in summary)`,
-    );
-  } catch (err) {
-    console.error(
-      "[large-review-result] Failed to submit review, falling back to comment:",
-      err,
-    );
-    await ghCreatePullRequestComment(
-      installationId,
-      owner,
-      repoName,
-      pr.number,
-      summaryBody,
-    );
-  }
 
   // 4. Persist findings to review_issues
   // Signature-matched findings inherit prior triage state; delete+create run
@@ -262,91 +150,122 @@ export async function handleLargeReviewResult(
       signature: findingSignature({ filePath: f.filePath || "", category: f.category, title }),
     };
   });
-  const { merged, inherited } = mergeFindingsBySignature<Prisma.ReviewIssueCreateManyInput>({
+  const { merged } = mergeFindingsBySignature<Prisma.ReviewIssueCreateManyInput>({
     prior: priorIssues,
     current,
     inherit: inheritReviewIssueTriage,
   });
-  await prisma.$transaction([
-    prisma.reviewIssue.deleteMany({ where: { pullRequestId: pr.id } }),
-    ...(merged.length > 0 ? [prisma.reviewIssue.createMany({ data: merged })] : []),
-  ]);
-  if (merged.length > 0) {
-    console.log(
-      `[large-review-result] Saved ${merged.length} review issues to DB` +
-        (inherited > 0 ? ` (${inherited} inherited prior triage state)` : ""),
-    );
+
+  // The immutable result (and eligible current findings) must commit before
+  // any final comment or native completion. Identical retries cannot promote
+  // the same archive again or overwrite a replacement report.
+  await saveReviewAttempt(attemptId, pr.id, coverage, reviewBody, data.error ? undefined : merged);
+  if (coverage.nativeCheckId) {
+    const result = reviewCheckResult(coverage, false, 0);
+    await ghUpdateCheckRun(installationId, owner, repoName, Number(coverage.nativeCheckId), result.conclusion, {
+      title: result.title, summary: result.summary,
+    });
   }
+  const stillCurrent = async () => {
+    if (!correlated || !isReviewRequestVersion(coverage.reviewRequestVersion)) return false;
+    const latest = await prisma.pullRequest.findUnique({ where: { id: pr.id }, select: { headSha: true, reviewRequestVersion: true, reviewBody: true } });
+    return latest?.headSha === coverage.headSha && latest.reviewRequestVersion === coverage.reviewRequestVersion && latest.reviewBody === reviewBody;
+  };
+  if (!await stillCurrent()) return;
 
-  // 5. Mark PR completed
-  await prisma.pullRequest.update({
-    where: { id: pr.id },
-    data: { status: "completed", reviewBody, errorMessage: null },
-  });
-
-  // 6. Update check run if PR has headSha (best effort — we don't track checkRunId
-  // across the queue boundary, so we recreate-or-skip via a fresh check run.)
-  if (pr.headSha) {
-    try {
-      const conclusion = shouldRequestChanges ? "failure" : "success";
-      const summaryText = shouldRequestChanges
-        ? hasCritical
-          ? "Critical issues found that must be fixed before merge."
-          : hasHigh
-            ? "High severity issues found that should be fixed before merge."
-            : "Medium severity issues found that should be fixed before merge."
-        : findings.length > 0
-          ? "Review complete. No issues above the configured threshold."
-          : "Review complete. No issues found.";
-
-      const { createCheckRun: ghCreateCheckRun } = await import("@/lib/github");
-      const checkRunId = await ghCreateCheckRun(
-        installationId,
-        owner,
-        repoName,
-        pr.headSha,
-        "Octopus Review (Large PR)",
-      );
-      await ghUpdateCheckRun(
-        installationId,
-        owner,
-        repoName,
-        checkRunId,
-        conclusion,
-        {
-          title: `${findings.length} finding${findings.length !== 1 ? "s" : ""}`,
-          summary: summaryText,
-        },
-      );
-    } catch (err) {
-      console.error("[large-review-result] Check run update failed:", err);
+  // Archive existence does not mean that remote delivery completed. Persist
+  // checkpoints separately, so retries resume the unfinished publication.
+  await deliverReviewAttempt(attemptId, async (progress, checkpoint) => {
+    if (!await stillCurrent()) return;
+    let mainCommentId: bigint | number | null = progress.mainCommentId;
+    if (!mainCommentId) {
+      const errorBody = [
+        "> 🐙 **Octopus Review** encountered an error while analyzing this large pull request.",
+        ">", `> \`${data.error}\``, ">",
+        "> Please try again by commenting `@octopus-review` on this PR.",
+      ].join("\n");
+      const commentBody = data.error ? applyReviewCoverage(errorBody, coverage, attemptId) : stripDetailedFindings(reviewBody);
+      mainCommentId = await createReviewAttemptComment(pr.id, coverage.headSha, coverage.reviewRequestVersion,
+        () => ghCreatePullRequestComment(installationId, owner, repoName, pr.number, commentBody), reviewBody);
+      await checkpoint({ mainCommentId });
     }
-  }
+    if (!await stillCurrent()) return;
+    if (data.error) {
+      const failedUpdate = await updateCurrentReview(pr.id, coverage.headSha, coverage.reviewRequestVersion, { status: "failed", errorMessage: data.error }, reviewBody);
+      if (failedUpdate.count) eventBus.emit({ type: "review-failed", orgId: org.id, prNumber: pr.number, prTitle: pr.title, error: data.error });
+      return;
+    }
+    if (!progress.summaryPublished) {
+      const findingsBlock = buildLowSeveritySummary(findings);
+      const summaryHeader = `${coverageSummary(coverage)} Large PR — ${findings.length} finding${findings.length !== 1 ? "s" : ""}${
+        mainCommentId && pr.url ? ` | [View details](${pr.url}#issuecomment-${mainCommentId})` : ""
+      }`;
+      const summaryBody = [
+        summaryHeader,
+        findingsBlock,
+        `<sub>Reviewed by [Octopus Review](https://octopus-review.ai) (large-PR pipeline, no inline comments).</sub>`,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
 
-  // 7. Pubby + event bus
-  await pubby
-    .trigger(`presence-org-${org.id}`, "review-status", {
-      repoId: repo.id,
-      pullRequestId: pr.id,
-      number: pr.number,
-      status: "completed",
-      step: "completed",
-    })
-    .catch((e) =>
-      console.error("[large-review-result] Pubby trigger failed:", e),
+      try {
+        await ghCreatePullRequestReview(
+          installationId,
+          owner,
+          repoName,
+          pr.number,
+          summaryBody,
+          reviewEvent,
+          [],
+          undefined,
+          coverage.headSha ?? undefined,
+        );
+        console.log(
+          `[large-review-result] PR review submitted (${reviewEvent}, ${findings.length} findings in summary)`,
+        );
+      } catch (err) {
+        console.error(
+          "[large-review-result] Failed to submit review, falling back to comment:",
+          err,
+        );
+        await ghCreatePullRequestComment(
+          installationId,
+          owner,
+          repoName,
+          pr.number,
+          summaryBody,
+        );
+      }
+      await checkpoint({ summaryPublished: true });
+    }
+    if (!await stillCurrent()) return;
+    // 7. Pubby + event bus
+    await pubby
+      .trigger(`presence-org-${org.id}`, "review-status", {
+        repoId: repo.id,
+        pullRequestId: pr.id,
+        headSha: coverage.headSha,
+        reviewRequestVersion: coverage.reviewRequestVersion,
+        number: pr.number,
+        status: "completed",
+        step: "completed",
+      })
+      .catch((e) =>
+        console.error("[large-review-result] Pubby trigger failed:", e),
+      );
+
+    eventBus.emit({
+      type: "review-completed",
+      orgId: org.id,
+      prNumber: pr.number,
+      prTitle: pr.title,
+      prUrl: pr.url,
+      findingsCount,
+      filesChanged: 0, // not known on this path; could be passed from internal-cli later
+    });
+
+    console.log(
+      `[large-review-result] Completed PR #${pr.number} (duration ${data.durationMs ?? "?"}ms)`,
     );
-
-  eventBus.emit({
-    type: "review-completed",
-    orgId: org.id,
-    prNumber: pr.number,
-    prTitle: pr.title,
-    prUrl: pr.url,
-    findingsCount,
-    filesChanged: 0, // not known on this path; could be passed from internal-cli later
   });
-
-  console.log(
-    `[large-review-result] Completed PR #${pr.number} (duration ${data.durationMs ?? "?"}ms)`,
-  );
 }

@@ -48,6 +48,8 @@ export type ResponseJsonSchema = {
 
 export type AiCreateParams = {
   model: string;
+  /** Digest-only observation of the final adapter request; never sent to the model. */
+  onRequest?: (receipt: import("./request-evidence").AiRequestReceipt) => void;
   maxTokens: number;
   system?: string;
   messages: AiMessage[];
@@ -69,6 +71,7 @@ export type AiCreateParams = {
 };
 
 export type AiResponse = {
+  completion?: { state: "completed" | "incomplete" | "unknown"; reason: string | null };
   text: string;
   provider: AiProvider;
   model: string;

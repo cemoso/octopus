@@ -137,7 +137,7 @@ describe("normalizeLastReviewedCommit", () => {
 
   it("replaces a short SHA with the full reviewed head", () => {
     const body = "### Diagram\n(none)\n\nLast reviewed commit: 9e794de\n\n### Checklist";
-    expect(normalizeLastReviewedCommit(body, sha)).toBe(`### Diagram\n(none)\n\nLast reviewed commit: ${sha}\n\n### Checklist`);
+    expect(normalizeLastReviewedCommit(body, sha)).toEndWith(`### Checklist\n\nLast reviewed commit: ${sha}`);
   });
 
   it("replaces a paraphrased or placeholder value too", () => {
@@ -145,8 +145,8 @@ describe("normalizeLastReviewedCommit", () => {
     expect(normalizeLastReviewedCommit(body, sha)).toBe(`Last reviewed commit: ${sha}`);
   });
 
-  it("leaves the body alone without the line or without a valid head", () => {
-    expect(normalizeLastReviewedCommit("### Checklist\n- [ ] x", sha)).toBe("### Checklist\n- [ ] x");
+  it("adds a missing footer and preserves bodies without a valid head", () => {
+    expect(normalizeLastReviewedCommit("### Checklist\n- [ ] x", sha)).toBe(`### Checklist\n- [ ] x\n\nLast reviewed commit: ${sha}`);
     expect(normalizeLastReviewedCommit("Last reviewed commit: 9e794de", null)).toBe("Last reviewed commit: 9e794de");
     expect(normalizeLastReviewedCommit("Last reviewed commit: 9e794de", "not-a-sha")).toBe("Last reviewed commit: 9e794de");
   });

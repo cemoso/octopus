@@ -1,4 +1,7 @@
+import "server-only";
 import { prisma } from "@octopus/db";
+import { admitReviewRequest, type ReviewRequestRejection } from "@/lib/review-request-admission";
+import { createReviewAttemptComment } from "@/lib/review-attempt";
 import { pubby } from "@/lib/pubby";
 import { enqueue } from "@/lib/queue";
 import { eventBus } from "@/lib/events";
@@ -32,7 +35,7 @@ async function postSkippedCheckRun(
 }
 
 /**
- * Shared flow: upsert PR -> post placeholder comment -> notify dashboard -> start review.
+ * Shared flow: admit the current head -> post placeholder comment -> notify dashboard -> start review.
  * Works for GitHub, Bitbucket, and GitLab.
  */
 /**
@@ -40,8 +43,9 @@ async function postSkippedCheckRun(
  * (CLI / MCP) use it to say why nothing ran instead of "Review started".
  */
 export type StartReviewResult =
-  | { started: true }
-  | { started: false; reason: "org_paused" | "already_in_progress" | "author_blocked"; message: string };
+  | { started: true; pullRequestId: string }
+  | ReviewRequestRejection
+  | { started: false; reason: "org_paused" | "author_blocked"; message: string };
 
 export async function startReviewFlow(params: {
   provider: "github" | "bitbucket" | "gitlab";
@@ -57,7 +61,7 @@ export async function startReviewFlow(params: {
   prTitle: string;
   prUrl: string;
   prAuthor: string;
-  headSha: string;
+  headSha: string | null;
   triggerCommentId: number;
   triggerCommentBody: string;
 }): Promise<StartReviewResult> {
@@ -73,8 +77,6 @@ export async function startReviewFlow(params: {
     prUrl,
     prAuthor,
     headSha,
-    triggerCommentId,
-    triggerCommentBody,
   } = params;
 
   const [owner, repoName] = repoFullName.split("/");
@@ -96,32 +98,6 @@ export async function startReviewFlow(params: {
     return { started: false, reason: "org_paused", message: "Reviews are paused for this organization" };
   }
 
-  // Check existing PR status to prevent duplicate reviews (cheap indexed lookup first)
-  const existingPr = await prisma.pullRequest.findUnique({
-    where: {
-      repositoryId_number: { repositoryId: repoId, number: prNumber },
-    },
-    select: { id: true, status: true, headSha: true, updatedAt: true },
-  });
-
-  if (existingPr && (existingPr.status === "reviewing" || existingPr.status === "pending")) {
-    const stuckThresholdMs = 3 * 60 * 1000; // 3 minutes
-    const isStuck = Date.now() - existingPr.updatedAt.getTime() > stuckThresholdMs;
-
-    if (isStuck) {
-      console.log(`[webhook] Review for PR #${prNumber} stuck for >3min, marking as failed and restarting`);
-      await prisma.pullRequest.update({
-        where: { id: existingPr.id },
-        data: { status: "failed", errorMessage: "Review timed out after 3 minutes" },
-      });
-    } else if (existingPr.headSha === headSha) {
-      console.log(`[webhook] Review already in progress/queued for PR #${prNumber} (same SHA), skipping`);
-      return { started: false, reason: "already_in_progress", message: `Review already in progress for PR #${prNumber}` };
-    } else {
-      console.log(`[webhook] New SHA detected for PR #${prNumber}, restarting review`);
-    }
-  }
-
   // Check if PR author is blocked from triggering reviews
   if (prAuthor) {
     const globalBlocked = (systemConfig?.blockedAuthors as string[]) ?? [];
@@ -132,77 +108,32 @@ export async function startReviewFlow(params: {
     );
     if (isBlocked) {
       console.log(`[webhook] PR author "${prAuthor}" is blocked for org ${orgId}, skipping PR #${prNumber}`);
-      await postSkippedCheckRun(provider, installationId, repoFullName, headSha, `PR author "${prAuthor}" is in the blocked list`);
+      await postSkippedCheckRun(provider, installationId, repoFullName, headSha || "", `PR author "${prAuthor}" is in the blocked list`);
       return { started: false, reason: "author_blocked", message: `PR author "${prAuthor}" is in the blocked list` };
     }
   }
 
-  // Upsert PullRequest record
-  console.log(`[webhook] Upserting PullRequest — repo: ${repoId}, PR #${prNumber}, status: pending`);
-  const pr = await prisma.pullRequest.upsert({
-    where: {
-      repositoryId_number: { repositoryId: repoId, number: prNumber },
-    },
-    create: {
-      number: prNumber,
-      title: prTitle,
-      url: prUrl,
-      author: prAuthor,
-      headSha: headSha || null,
-      status: "pending",
-      triggerCommentId,
-      triggerCommentBody,
-      repositoryId: repoId,
-    },
-    update: {
-      title: prTitle,
-      url: prUrl,
-      author: prAuthor,
-      headSha: headSha || null,
-      status: "pending",
-      triggerCommentId,
-      triggerCommentBody,
-      reviewBody: null,
-      errorMessage: null,
-    },
-  });
-  console.log(`[webhook] PullRequest upserted — id: ${pr.id}, number: ${pr.number}`);
+  const admission = await admitReviewRequest(params);
+  if (!admission.started) return admission;
+  const pr = admission.pullRequest;
+  console.log(`[webhook] PullRequest admitted — id: ${pr.id}, number: ${pr.number}`);
 
-  const existingCommentId = pr.reviewCommentId ? Number(pr.reviewCommentId) : null;
-  const placeholderBody =
-    "> 🐙 **Octopus Review** is analyzing this pull request...\n>\n> This comment will be updated with the full review once complete.";
-
-  // Post or update placeholder comment
+  const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${pr.headSha || "unknown"}\`. A separate review attempt will report the result.`;
   try {
-    if (existingCommentId) {
-      console.log(`[webhook] Updating existing placeholder comment — commentId: ${existingCommentId}`);
+    await createReviewAttemptComment(pr.id, pr.headSha, pr.reviewRequestVersion, async () => {
       if (provider === "github" && installationId) {
-        await github.updatePullRequestComment(installationId, owner, repoName, existingCommentId, placeholderBody);
-      } else if (provider === "bitbucket" && organizationId) {
-        await bitbucket.updatePullRequestComment(organizationId, owner, repoName, prNumber, existingCommentId, placeholderBody);
-      } else if (provider === "gitlab" && organizationId) {
-        await gitlab.updatePullRequestComment(organizationId, repoFullName, prNumber, existingCommentId, placeholderBody);
+        return github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
       }
-    } else {
-      console.log(`[webhook] Posting new placeholder comment to PR #${prNumber}`);
-      let newCommentId: number;
-      if (provider === "github" && installationId) {
-        newCommentId = await github.createPullRequestComment(installationId, owner, repoName, prNumber, placeholderBody);
-      } else if (provider === "bitbucket" && organizationId) {
-        newCommentId = await bitbucket.createPullRequestComment(organizationId, owner, repoName, prNumber, placeholderBody);
-      } else if (provider === "gitlab" && organizationId) {
-        newCommentId = await gitlab.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
-      } else {
-        throw new Error("Invalid provider configuration");
+      if (provider === "bitbucket" && organizationId) {
+        return bitbucket.createPullRequestComment(organizationId, owner, repoName, prNumber, placeholderBody);
       }
-      console.log(`[webhook] Placeholder comment posted — commentId: ${newCommentId}`);
-      await prisma.pullRequest.update({
-        where: { id: pr.id },
-        data: { reviewCommentId: newCommentId },
-      });
-    }
+      if (provider === "gitlab" && organizationId) {
+        return gitlab.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
+      }
+      throw new Error("Invalid provider configuration");
+    });
   } catch (err) {
-    console.error("[webhook] Failed to post/update placeholder comment:", err);
+    console.error("[webhook] Failed to post placeholder comment:", err);
   }
 
   // Notify real-time dashboard
@@ -217,6 +148,9 @@ export async function startReviewFlow(params: {
         url: pr.url,
         author: pr.author,
         status: pr.status,
+        headSha: pr.headSha,
+        reviewRequestVersion: pr.reviewRequestVersion,
+        createdAt: pr.createdAt.toISOString(),
       },
     })
     .catch((err) => console.error("[webhook] Pubby trigger failed:", err));
@@ -232,5 +166,5 @@ export async function startReviewFlow(params: {
 
   // Enqueue review job — pg-boss persists it in DB, survives container restarts
   await enqueue("process-review", { pullRequestId: pr.id });
-  return { started: true };
+  return { started: true, pullRequestId: pr.id };
 }

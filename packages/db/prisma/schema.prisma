@@ -403,8 +403,10 @@ model PullRequest {
   triggerCommentId   BigInt?
   triggerCommentBody String?
   headSha            String?
+  reviewRequestVersion Int     @default(0)
   reviewCommentId    BigInt?
   reviewBody         String?
+  reviewCoverage     Json?
   errorMessage       String?
   mergedAt           DateTime?
   createdAt          DateTime  @default(now())
@@ -414,10 +416,41 @@ model PullRequest {
   repository   Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
 
   reviewIssues ReviewIssue[]
+  reviewAttempts ReviewAttempt[]
 
   @@unique([repositoryId, number])
   @@index([repositoryId, status])
   @@map("pull_requests")
+}
+
+// Append-only final results. A new attempt never overwrites prior evidence.
+model ReviewAttempt {
+  id            String   @id
+  pullRequestId String
+  pullRequest   PullRequest @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  headSha       String?
+  baseSha       String?
+  coverage      Json
+  reviewBody    String
+  createdAt     DateTime @default(now())
+
+  delivery ReviewAttemptDelivery?
+
+  @@index([pullRequestId, createdAt])
+  @@map("review_attempts")
+}
+
+// Mutable delivery progress is separate from the immutable assessment result.
+model ReviewAttemptDelivery {
+  attemptId        String @id
+  attempt          ReviewAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  mainCommentId    BigInt?
+  summaryPublished Boolean @default(false)
+  completedAt      DateTime?
+  leaseToken       String?
+  leaseUntil       DateTime?
+
+  @@map("review_attempt_deliveries")
 }
 
 model ReviewIssue {
