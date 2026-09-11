@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Ignore } from "ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
-import { validateBinaryPngEvidence, type BinaryPngEvidence } from "@/lib/review-binary-assets";
+import { validateBinaryAssetEvidence, type BinaryAssetEvidence } from "@/lib/review-binary-assets";
 
 const defaultGenerated = buildGeneratedMatcher();
 
@@ -14,7 +14,7 @@ export type ReviewFileInput = {
   deletions?: number;
   blobSha?: string;
   unavailable?: string;
-  binaryEvidence?: BinaryPngEvidence;
+  binaryEvidence?: BinaryAssetEvidence;
 };
 
 export type ReviewInput = {
@@ -32,7 +32,7 @@ export type FileCoverage = {
   previousPath?: string;
   change: string;
   blobSha?: string;
-  binaryEvidence?: BinaryPngEvidence;
+  binaryEvidence?: BinaryAssetEvidence;
   state: "supplied" | "partial" | "omitted" | "excluded" | "unavailable";
   reason?: string;
   patchSha256: string | null;
@@ -138,7 +138,7 @@ export function prepareReviewInput(input: ReviewInput, options: { maxChars: numb
     seen.add(file.path);
     const record: FileCoverage = { path: file.path, previousPath: file.previousPath, change: file.change, blobSha: file.blobSha, state: "omitted", reason: "Review input budget exhausted", patchSha256: file.patch === undefined ? null : sha256(file.patch), suppliedSha256: null, suppliedChars: 0, hunks: [] };
     coverage.files.push(record);
-    const binaryEvidence = validateBinaryPngEvidence(file, input, file.binaryEvidence);
+    const binaryEvidence = validateBinaryAssetEvidence(file, input, file.binaryEvidence);
     if (binaryEvidence) record.binaryEvidence = binaryEvidence;
     if (options.ignored?.ignores(file.path) || (options.generated?.ignores(file.path) && (!isProtectedReviewSource(file.path) || defaultGenerated.ignores(file.path)))) {
       record.state = "excluded";
@@ -148,7 +148,9 @@ export function prepareReviewInput(input: ReviewInput, options: { maxChars: numb
     const fileHeader = header(file);
     if (fileHeader && binaryEvidence) {
       record.state = "excluded";
-      record.reason = `Declared binary PNG policy (${binaryEvidence.policy}); image content not reviewed`;
+      record.reason = binaryEvidence.policy === "github-binary-png-v1"
+        ? `Declared binary PNG policy (${binaryEvidence.policy}); image content not reviewed`
+        : `Declared binary ${binaryEvidence.assetKind} policy (${binaryEvidence.policy}); content not reviewed`;
       continue;
     }
     if (!fileHeader || file.patch === undefined || file.unavailable) {

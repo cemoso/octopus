@@ -37,7 +37,7 @@ describe("GitHub binary PNG coverage", () => {
       expect(file.suppliedSha256).toBeNull();
       expect(file.hunks).toEqual([]);
       expect(file.reason).toContain("not reviewed");
-      expect(file.binaryEvidence).toMatchObject({ policy: "github-binary-png-v1", provider: "github", headSha: head, baseSha: base, path: file.path, change: "added", blobSha: blob });
+      expect(file.binaryEvidence).toMatchObject({ policy: "github-binary-assets-v2", assetKind: "image", provider: "github", headSha: head, baseSha: base, path: file.path, change: "added", blobSha: blob });
       expect(file.binaryEvidence?.rawSectionSha256).toBe(sha256(binaryDiff(file.path)));
     }
   });
@@ -131,7 +131,7 @@ describe("GitHub binary PNG coverage", () => {
     });
   }
 
-  for (const path of ["src/validation.ts", "icon.svg", "photo.jpg", "source.png.ts", "../outside.png", "/absolute.png", "docs//empty.png", "docs/./dot.png", "docs/a b.png", 'docs/a"b.png', "docs/a\\b.png", "docs/a\nb.png"]) {
+  for (const path of ["src/validation.ts", "icon.svg", "photo.gif", "source.png.ts", "../outside.png", "/absolute.png", "docs//empty.png", "docs/./dot.png", "docs/a b.png", 'docs/a"b.png', "docs/a\\b.png", "docs/a\nb.png"]) {
     it(`does not authorize binary exclusion for ${JSON.stringify(path)}`, async () => {
       const fetched = await fetchInput([png(path)], binaryDiff(path));
       const prepared = prepareReviewInput(fetched.input, { maxChars: 1000 });
