@@ -29,12 +29,49 @@ function excludedReferences(coverage: ReviewCoverage): { path: string; pattern: 
   });
 }
 
-// A bounded guard for explicit English absence assertions. This does not claim
-// to prove arbitrary natural-language findings or infer a missing subject.
+type ClaimBlock = { raw: string; penalizedScoreRow: boolean };
+
+/** Soft wraps belong to a paragraph/list item; rows and new items never do. */
+function claimBlocks(text: string): ClaimBlock[] {
+  const blocks: ClaimBlock[] = [];
+  let lines: string[] = [];
+  const flush = () => {
+    if (lines.length) blocks.push({ raw: lines.join("\n"), penalizedScoreRow: false });
+    lines = [];
+  };
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) { flush(); continue; }
+    if (/^\s*\|/.test(line)) {
+      flush();
+      blocks.push({ raw: line, penalizedScoreRow: /\b[1-4]\s*\/\s*5\b/.test(line) });
+      continue;
+    }
+    if (/^\s*#{1,6}\s/.test(line)) {
+      flush();
+      blocks.push({ raw: line, penalizedScoreRow: false });
+      continue;
+    }
+    if (/^\s*(?:[-+*]|\d+[.)])\s+/.test(line)) flush();
+    lines.push(line);
+  }
+  flush();
+  return blocks;
+}
+
+function englishPhrase(text: string): string {
+  return text.replace(/\s+/g, " ").trim().replace(/^(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s*)?/, "");
+}
+
+// A bounded guard for explicit English absence assertions. A neutral visibility
+// disclosure becomes actionable only with a penalty or an entry-based failure
+// conclusion in the same paragraph, never in an unrelated bullet or field.
 function assertsAbsence(statement: string, visibilityPenalty: boolean): boolean {
-  if (/\b(?:not missing|already (?:registered|present|included)|cannot verify|can['’]t verify|unable to verify|could not verify|verification gap)\b/i.test(statement)) return false;
-  return /\b(?:missing|absent|unregistered|not (?:registered|updated|present)|no (?:entry|registration|record)|(?:must|needs? to|should) (?:be )?(?:register|registered|add|added|update|updated)|(?:doesn['’]t|does not) (?:include|contain|register))\b/i.test(statement)
-    || (visibilityPenalty && /\bnot (?:visible|shown|included)\b/i.test(statement));
+  if (/\b(?:not missing|already (?:registered|present|included)|cannot verify|can['’]t verify|unable to verify|could not verify|verification gap|(?:verify|check|confirm) (?:whether|if))\b/i.test(statement)) return false;
+  const entryMandate = /(?:^|[|—–:]\s*)(?:please\s+)?(?:add\s+(?:(?:(?:an?|one|the|new)\s+)?(?:(?:journal|registration)\s+)?entr(?:y|ies)\s+(?:to|in)\s+[`*]*EXCLUDED_FILE\b|to\s+[`*]*EXCLUDED_FILE[`*]*\s+entries\b)|register\s+(?:(?:the|this|a|new)\s+)?migration\s+(?:in|with)\s+[`*]*EXCLUDED_FILE\b)/i.test(statement);
+  const unseen = /\b(?:not (?:visible|shown|included|in (?:the )?(?:diff|review|input))|no changes? to)\b/i.test(statement);
+  return entryMandate
+    || /\b(?:missing|absent|unregistered|not (?:registered|updated|present)|no (?:entry|registration|record)|(?:must|needs? to|should) (?:be )?(?:register|registered|add|added|update|updated)|(?:doesn['’]t|does not) (?:include|contain|register))\b/i.test(statement)
+    || (visibilityPenalty && unseen);
 }
 
 type FindingRecord = Record<string, unknown>;
@@ -68,12 +105,18 @@ export function containExcludedInputClaims(body: string, coverage: ReviewCoverag
   const paths = new Set<string>();
   const unsupported = (text: string): boolean => {
     let found = false;
-    // Keep filenames intact while separating sentences, paragraphs and table rows.
-    for (const statement of text.split(/\r?\n[ \t]*\r?\n|\r?\n(?=[ \t]*\|)|(?<=\|)[ \t]*\r?\n|(?<=[.!?;])\s+|\s+(?:but|however)\s+/i)) {
-      const penalizedScoreRow = /^\s*\|/.test(statement) && /\b[1-4]\/5\b/.test(statement);
-      if (!assertsAbsence(statement, penalizedScoreRow)) continue;
-      for (const reference of references) {
-        if (reference.pattern.test(statement)) { paths.add(reference.path); found = true; }
+    for (const block of claimBlocks(text)) {
+      const paragraph = englishPhrase(block.raw);
+      const entryFailure = paragraph.split(/(?<=[.!?;])\s+/).some(sentence => /\b(?:journal|migration|migrator)\b/i.test(sentence)
+        && /\bwithout (?:an?|the|this|that) (?:(?:journal|migration|registration) )?entry\b[^.!?;]*\b(?:would|will|could) (?:never|not|fail|break)\b/i.test(sentence));
+      for (const statement of block.raw.split(/(?<=[.!?;])\s+|\s+(?:but|however)\s+/i)) {
+        for (const reference of references) {
+          // Resolve the raw path first. The placeholder binds entry mandates to
+          // that path; English whitespace normalization cannot invent a match.
+          if (!reference.pattern.test(statement)) continue;
+          const phrase = englishPhrase(statement.replace(reference.pattern, "EXCLUDED_FILE"));
+          if (assertsAbsence(phrase, block.penalizedScoreRow || entryFailure)) { paths.add(reference.path); found = true; }
+        }
       }
     }
     return found;

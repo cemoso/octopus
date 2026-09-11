@@ -28,11 +28,17 @@ export function enforceReviewFindingsIntegrity(original: string, current: string
   markReviewAssessmentIncomplete(coverage, "Validated findings were lost, changed or inconsistent during report preparation");
 }
 
+function markExcludedInputAssessment(coverage: ReviewCoverage): void {
+  const reason = "Excluded-input claims require verification; no valid overall assessment";
+  const previous = coverage.assessment;
+  if (previous?.state === "incomplete" && previous.reason.includes(reason)) return;
+  markReviewAssessmentIncomplete(coverage, previous?.state === "incomplete"
+    ? `${previous.reason}; ${reason}` : reason);
+}
+
 export function prepareReviewPresentation(body: string, coverage: ReviewCoverage): string {
   const contained = containExcludedInputClaims(body, coverage);
-  if (contained.paths.length > 0 && coverage.assessment?.state === "completed") {
-    markReviewAssessmentIncomplete(coverage, "Excluded-input claims require verification; no valid overall assessment");
-  }
+  if (contained.paths.length > 0) markExcludedInputAssessment(coverage);
   const cleaned = mapReviewPresentation(contained.body, presentation => {
     let result = presentation.replace(/([^\n])```(\n|$)/g, "$1\n```$2")
       .replace(/```([^`\n\sa-z])/g, "```\n\n$1");
@@ -66,6 +72,6 @@ export function prepareRecoveredReviewPresentation(body: string, findings: Inlin
   const combined = `${presentation}\n<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify(findings)}\n<!-- OCTOPUS_FINDINGS_END -->`;
   const contained = containExcludedInputClaims(combined, coverage);
   if (contained.paths.length === 0) return null;
-  markReviewAssessmentIncomplete(coverage, "Excluded-input claims require verification; no valid overall assessment");
+  markExcludedInputAssessment(coverage);
   return prepareReviewPresentation(contained.body, coverage);
 }

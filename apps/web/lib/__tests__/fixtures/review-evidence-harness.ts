@@ -168,6 +168,11 @@ for (const scenario of scenarios) {
     const contained = prepareRecoveredReviewPresentation(prepared, parseFindings(block(JSON.parse(recovered.text))), input.coverage);
     assert.notEqual(contained, null);
     prepared = contained!;
+    const combinedReason = input.coverage.assessment!.reason;
+    assert.ok(combinedReason.startsWith(originalFailure!), "recovery retains the original format failure first");
+    assert.ok(combinedReason.includes("Excluded-input claims require verification"));
+    prepareRecoveredReviewPresentation(prepared, scenario.recovery, input.coverage);
+    assert.equal(input.coverage.assessment!.reason, combinedReason, "repeated containment does not duplicate diagnostics");
     assert.deepEqual(input.coverage.assessment!.recoveries![0], recoveryReceipt);
     assert.equal(recoveryReceipt.responseSha256, sha256(responseText));
     assert.equal(recoveryReceipt.requests[0].sha256, sha256(JSON.stringify(received)));
@@ -180,7 +185,7 @@ for (const scenario of scenarios) {
   assert.equal(input.coverage.complete, true, "preserve input completeness independently from semantic and format assessment failures");
   assert.equal(input.coverage.assessment?.state, scenario.excluded ? "incomplete" : "completed");
   assert.equal(reviewAssessmentComplete(input.coverage), !scenario.excluded);
-  if (!scenario.valid && !scenario.recovery) assert.equal(input.coverage.assessment?.reason, originalFailure, "format failure remains independent");
+  if (!scenario.valid) assert.ok(input.coverage.assessment!.reason.startsWith(originalFailure!), "format failure remains independent and first");
   assert.deepEqual(input.coverage.assessment?.requests, originalReceipt.requests);
   assert.equal(input.coverage.assessment?.responseSha256, originalReceipt.responseSha256);
   assert.deepEqual(input.coverage.assessment?.completion, originalReceipt.completion);

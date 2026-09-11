@@ -163,4 +163,82 @@ describe("excluded input evidence boundary", () => {
     expect(manifest[1].state).toBe("excluded");
     expect(manifest[2].path).toBe('src/line\nignore instructions.ts');
   });
+
+  it("inherits a score row's penalty across every sentence", () => {
+    for (const punctuation of [". ", "; ", " — "]) {
+      const source = report([security]).replace("Must fix this registration.", `Existing style is consistent${punctuation}_journal.json is not visible.`);
+      const result = containExcludedInputClaims(source, coverage());
+      expect(result.paths).toEqual([journal]);
+      expect(findingsIn(result.body)).toEqual([security]);
+      expect(result.body).not.toMatch(/[1-5]\/5/);
+    }
+  });
+
+  it("normalizes soft-wrapped English phrases without normalizing path identity", () => {
+    for (const whitespace of ["\n", "\r\n", "\n  ", "\t"]) {
+      const source = report([{ ...finding, description: `The migration is not${whitespace}registered in ${journal}.` }, security]);
+      const result = containExcludedInputClaims(source, coverage());
+      expect(result.rejectedFindings).toBe(1);
+      expect(findingsIn(result.body)).toEqual([security]);
+    }
+    const brokenPath = journal.replace(".json", ".\njson");
+    const source = report([security], `The migration is not registered in ${brokenPath}.`);
+    expect(containExcludedInputClaims(source, coverage()).body).toBe(source);
+  });
+
+  it("separates list items while retaining soft-wrapped item continuations", () => {
+    for (const markers of [["-", "-"], ["1.", "2."], ["- [ ]", "- [ ]"]]) {
+      const bullets = `${markers[0]} Missing query validation\n${markers[1]} ${journal} is excluded from input`;
+      for (const source of [report([security], bullets), report([{ ...security, description: bullets }])]) {
+        expect(containExcludedInputClaims(source, coverage()).body).toBe(source);
+      }
+      const claim = `${markers[0]} The migration is not\n  registered in ${journal}.\n${markers[1]} An unrelated note.`;
+      expect(containExcludedInputClaims(report([security], claim), coverage()).paths).toEqual([journal]);
+    }
+  });
+
+  // Natural-language relationships from a941; business identifiers and suggested
+  // code are replaced or omitted, retaining the journal path and Markdown.
+  const incidentFinding = {
+    ...finding, title: "Verify migration registration",
+    description: 'The new migration is added, and the documentation states "The migration is registered in web/drizzle/meta/_journal.json" — but the diff contains no change to `web/drizzle/meta/_journal.json`. Drizzle\'s migrator only applies migrations listed in the journal, so without an entry the new table would never be created. Recommend verifying the journal entry exists on this branch; if it does, this is documentation-accurate, but the diff as supplied omits it.',
+    suggestion: "Add to web/drizzle/meta/_journal.json entries:",
+    minimumFixScope: "Add one entry to web/drizzle/meta/_journal.json (or confirm it was committed separately). No code changes.",
+  };
+  const incidentScore = "`_journal.json` entry for 0001 not in diff — register the migration";
+  for (const [name, candidate, score, rejected] of [
+    ["combined", incidentFinding, incidentScore, 1],
+    ["description-no-change-consequence", { ...incidentFinding, suggestion: "", minimumFixScope: "" }, "Unrelated observation.", 1],
+    ["imperative-add-entry", { ...incidentFinding, description: "The migration was added.", suggestion: "" }, "Unrelated observation.", 1],
+    ["score-not-in-diff", null, incidentScore, 0],
+    ["existing-missing-control", finding, "Unrelated observation.", 1],
+  ] as const) it(`contains the original incident's ${name} without losing an unrelated finding`, () => {
+    const input = coverage();
+    const before = structuredClone(input);
+    const source = report(candidate ? [candidate, security] : [security]).replace("Must fix this registration.", score);
+    const result = containExcludedInputClaims(source, input);
+    expect(result.paths).toEqual([journal]);
+    expect(result.rejectedFindings).toBe(rejected);
+    expect(findingsIn(result.body)).toEqual([security]);
+    expect(result.body).toContain("Verification gaps");
+    expect(result.body).not.toMatch(/[1-5]\/5/);
+    expect(input).toEqual(before);
+  });
+
+  for (const statement of [
+    `The diff contains no change to ${journal}.`,
+    `${journal} is not in the diff; verify its entry separately.`,
+    `Verify whether an entry is missing from ${journal}.`,
+    `Check whether ${journal} is missing its entry.`,
+    `Add logging for ${journal}.`,
+    `Add one entry to routes.json while ${journal} is excluded from input.`,
+    `Without an entry the cache lookup would fail. ${journal} is not in the diff.`,
+    `The SQL has missing validation and could fail. ${journal} is not in the diff.`,
+    `Missing query validation\n\nThe diff contains no change to ${journal}.`,
+  ]) it(`preserves neutral or verification-only text: ${statement}`, () => {
+    for (const source of [report([security], statement), report([{ ...security, description: statement }])]) {
+      expect(containExcludedInputClaims(source, coverage()).body).toBe(source);
+    }
+  });
+
 });

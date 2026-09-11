@@ -52,6 +52,8 @@ A bounded presentation guard checks the initial response and recovered findings 
 
 If a claim is withheld, the original holistic summary, score and checklist cannot be trusted to be consistent with the retained findings. The report replaces them with an unscored verification gap and retains unrelated parsed findings for the existing confidence, validation and severity stages. Malformed or multiple findings blocks do not become a valid findings set through this rewrite. The original provider response digest and completion receipt remain in the immutable attempt; input completeness is preserved and the assessment/native check stays incomplete. Score reconciliation cannot manufacture a passing assessment.
 
+If assessment already failed validation, that original failure remains first in its diagnostic; containment appends its reason once. Recovered findings use the same boundary and retain their separate provider receipts.
+
 This is containment for explicit known-path assertions, not general semantic verification. Implicit subjects, arbitrary paraphrases, other languages, unchanged paths absent from the inventory and independently verified source supplements require further evidence contracts and versioned model evaluation. The legacy local-review protocol has no coverage manifest and is outside this hosted guard. Synthetic regressions validate the emitted request, containment and publication interfaces; they do not prove model interpretation.
 
 ## Author comments and source supplements
