@@ -84,6 +84,7 @@ function plan(oversized = false) {
 const requestFor = (p: ReturnType<typeof plan>, model = "gpt-test"): AiCreateParams => createCoveredReviewRequest({ model, system: "Trusted review template", number: 1, title: "Validators", author: "fixture", diff: p.diff, coverage: p.coverage, comment: "@octopus context", repoConfig: "" });
 for (const [name, text, finish, complete] of [
   ["valid", valid, "stop", true],
+  ["rereview-valid", valid, "stop", true],
   ["critical-empty-diagram", withFinding.replace("### Findings\n", "### Diagram\n\n").replace("**4/5**", "**3/5**"), "stop", true],
   ["critical-fence-description", withFinding.replace(JSON.stringify([finding]), JSON.stringify([{ ...finding, description: "Broken ```### Checklist and ```mermaid\nsequenceDiagram\nactivate missing\n``` inside the finding" }])), "stop", true],
   ["turkish-zero", valid.replace("The changed validator is consistent with its documented contract.", "Sorun bulunamadı. Değişiklik belgelenen sözleşmeyle uyumlu."), "stop", true],
@@ -101,6 +102,7 @@ for (const [name, text, finish, complete] of [
   ["turkish-prose-and-count", valid.replace(zeroSummary, "Sorun bulunamadı.\n| 🔴 Kritik | 1 |"), "stop", false],
   ["turkish-wrong-severity", withFinding.replace("🔴 Critical", "🟠 Yüksek"), "stop", false],
   ["oversized-valid", valid.replace("The changed validator is consistent with its documented contract.", "Uzun açıklama 🔴 ".repeat(10000)), "stop", true],
+  ["oversized-rereview", valid.replace("The changed validator is consistent with its documented contract.", "Uzun açıklama 🔴 ".repeat(10000)), "stop", true],
   ["oversized-incomplete", valid.replace("The changed validator is consistent with its documented contract.", "Uzun açıklama 🔴 ".repeat(10000)), "length", false],
   ["oversized-score-notes", valid.replace("Lowest category", "Uzun not 🔴 ".repeat(10000)), "stop", true],
   ["fenced-empty", fenced(valid), "stop", true],
@@ -138,10 +140,20 @@ for (const [name, text, finish, complete] of [
   const { report, comment } = finalizeReviewPresentation(text, covered, stripDetailedFindings(covered), p.coverage, name, flags);
   await saveReviewAttempt(name, "pr", p.coverage, report);
   assert.equal((current.reviewCoverage as typeof p.coverage).complete, complete);
-  await updatePullRequestComment(1, "fixture", "review", 123, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${comment}`, "fixture-token");
+  // reviewer.ts places this fixed banner between its attempt label and coverage
+  // on a completed re-review with zero new findings.
+  const rereviewBanner = name.includes("rereview") ? `> ✅ No new issues detected since the last review (commit \`${p.coverage.headSha!.slice(0, 7)}\`).\n\n` : "";
+  await updatePullRequestComment(1, "fixture", "review", 123, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${rereviewBanner}${comment}`, "fixture-token");
   const nativeCheck = { id: 456, head_sha: p.coverage.headSha, app: { slug: "octopus-review" }, status: "completed", ...reviewCheckResult(p.coverage, flags.hasCritical, findings.length) };
   assert.equal(nativeCheck.conclusion, complete && !flags.hasCritical ? "success" : "failure");
   assert.equal(rows.get(name)?.reviewBody, report);
+  const attemptUrl = new URL(`/api/review-attempts/${name}`, process.env.NEXT_PUBLIC_APP_URL ?? "https://octopus-review.ai").href;
+  const reference = `Attempt: ${name} ${attemptUrl}.\nHead: \`${p.coverage.headSha}\`. Base: \`${p.coverage.baseSha}\`.`;
+  for (const body of [report, published!.body]) {
+    assert.ok(body.includes(reference), `${name}: attempt and revision metadata retained`);
+    assert.ok(!/<\/?(?:details|summary)>|Attempt: \[/.test(body), `${name}: plain Markdown coverage`);
+  }
+  assert.ok(report.includes(`#### Changed-file coverage (${p.coverage.files.length} known paths)`));
   if (complete) assert.equal(report.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/)?.[0], text.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/)?.[0]);
   if (oversized) {
     assert.ok(comment.length > MAX_GITHUB_COMMENT_BODY);
@@ -154,7 +166,7 @@ for (const [name, text, finish, complete] of [
     assert.ok(renderReviewCoverage(p.coverage, name).length < 14_000);
     assert.ok(renderReviewCoverage(p.coverage, name).includes("The full inventory is stored"));
   } else {
-    assert.equal(published!.body, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${comment}`);
+    assert.equal(published!.body, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${rereviewBanner}${comment}`);
   }
   assert.ok(!published!.body.includes("OCTOPUS_FINDINGS_"));
   for (const body of [report, published!.body]) {

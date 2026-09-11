@@ -596,6 +596,25 @@ async function getPullRequestDiffViaFiles(
 // truncation marker we append.
 export const MAX_GITHUB_COMMENT_BODY = 64_000;
 
+function compactAttemptReference(body: string): string {
+  // Read only the provider's coverage preamble, including previously stored
+  // Markdown-link bodies and the publisher's fixed re-review banner. Finding
+  // text and arbitrary links are not metadata.
+  const header = /^(?:Review attempt:[^\r\n]*\r?\n\r?\n)?(?:> ✅ No new issues detected since the last review(?: \(commit `[0-9a-f]{7}`\))?\.\r?\n\r?\n)?### Review coverage\r?\n\r?\n\*\*[^\r\n]+\*\*\r?\n\r?\n/.exec(body);
+  if (!header) return "";
+  const preamble = body.slice(header[0].length, header[0].length + 2048);
+  const reference = /^(?:Attempt: ([A-Za-z0-9_-]+) (https?:\/\/[^\s<>()`]+)\.\r?\n|Attempt: \[`([A-Za-z0-9_-]+)`\]\((https?:\/\/[^\s<>()`]+)\)\. )Head: `(?:[0-9a-f]{40}|unknown)`\. Base: `(?:[0-9a-f]{40}|unknown)`\.(?=\r?\n|$)/i.exec(preamble);
+  if (!reference) return "";
+  const attemptId = reference[1] ?? reference[3];
+  try {
+    const url = new URL(reference[2] ?? reference[4]);
+    if (url.username || url.password || url.search || url.hash || url.pathname !== `/api/review-attempts/${attemptId}`) return "";
+    return reference[0];
+  } catch {
+    return "";
+  }
+}
+
 /**
  * Truncate a comment body to GitHub's accepted size, appending a clear
  * marker so reviewers know there's more. The full review is still
@@ -614,7 +633,7 @@ export function truncateForGithubComment(body: string): string {
   const score = /^### Score[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |^Last reviewed commit:|(?![\s\S]))/m.exec(body);
   if (heading && footer && score) {
     const prefix = /^Review attempt:[^\n]*\n\n/.exec(body)?.[0] ?? "";
-    const attemptLink = /Attempt: \[.*?\]\([^\n]+\)\./.exec(body)?.[0] ?? "";
+    const attemptReference = compactAttemptReference(body);
     const table = score[1].split("\n").filter(line => {
       const category = line.split("|")[1]?.trim().replaceAll("**", "");
       return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
@@ -631,7 +650,7 @@ export function truncateForGithubComment(body: string): string {
         return `${shortened}…`;
       }).join("|")}|`;
     }).filter(Boolean).join("\n").replace(/^(.*)\n/, "$1\n| --- | --- | --- |\n") : "Not assessed — incomplete review coverage.";
-    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${reason}\n\n${attemptLink}${marker}\n\n${footer[0]}`;
+    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${reason}\n\n${attemptReference}${marker}\n\n${footer[0]}`;
     if (compact.length <= MAX_GITHUB_COMMENT_BODY) return compact;
   }
   const room = MAX_GITHUB_COMMENT_BODY - marker.length;

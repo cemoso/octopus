@@ -1,7 +1,7 @@
 import { reconcileScoreTable, stripDetailedFindings } from "@/lib/review-helpers";
 import { describe, expect, it } from "bun:test";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
-import { sha256, prepareReviewInput, inspectReviewPatch, applyReviewCoverage, coverageCounts, unknownReviewCoverage, reviewCheckResult, type ReviewInput } from "@/lib/review-coverage";
+import { sha256, prepareReviewInput, inspectReviewPatch, applyReviewCoverage, renderReviewCoverage, coverageCounts, unknownReviewCoverage, reviewCheckResult, type ReviewInput } from "@/lib/review-coverage";
 import { fetchGitHubReviewInput } from "@/lib/github-review-input";
 import { createCoveredReviewRequest } from "@/lib/review-request";
 import { prepareReviewComment } from "@/lib/review-comment-context";
@@ -14,6 +14,29 @@ const patch = (text = "export const validate = () => true;") => `@@ -0,0 +1 @@\n
 const input = (files: ReviewInput["files"]): ReviewInput => ({ provider: "github", headSha: head, baseSha: base, inventoryComplete: true, expectedFiles: files.length, files, limitations: [] });
 
 describe("review input coverage", () => {
+  it("renders plain Markdown evidence without losing metadata, coverage states or escaped source text", () => {
+    const states = ["supplied", "partial", "omitted", "excluded", "unavailable"] as const;
+    const plan = prepareReviewInput(input(states.map(state => ({ path: `src/${state}.ts`, change: "added", patch: patch() }))), { maxChars: 10000 });
+    plan.coverage.files.forEach((file, i) => { file.state = states[i]; file.reason = `Reason ${states[i]}`; });
+    plan.coverage.files[0].path = "src/<tag>&|`\n.ts";
+    plan.coverage.files[0].reason = "<reason>&|`\r\ncontinued";
+    plan.coverage.complete = false;
+    plan.coverage.comment = { receivedChars: 50, suppliedChars: 20, truncated: true, verifiedAsChangedSource: false };
+    const before = structuredClone(plan.coverage);
+    const rendered = renderReviewCoverage(plan.coverage, "attempt-plain");
+    const attemptUrl = new URL("/api/review-attempts/attempt-plain", process.env.NEXT_PUBLIC_APP_URL ?? "https://octopus-review.ai").href;
+    expect(rendered).toContain(`Attempt: attempt-plain ${attemptUrl}.\nHead: \`${head}\`. Base: \`${base}\`.`);
+    expect(rendered).toContain("#### Changed-file coverage (5 known paths)");
+    expect(rendered).not.toMatch(/<\/?(?:details|summary)>|Attempt: \[/);
+    expect(rendered).toContain("1/5 files fully supplied, 1 partial, 1 omitted, 1 unavailable, 1 excluded");
+    expect(rendered).toContain("20/50 characters supplied (truncated)");
+    expect(rendered).toContain("source excerpts and hashes remain unverified and do not add changed-file coverage");
+    expect(rendered).toContain("**Overall: not assessed — incomplete coverage.**");
+    expect(rendered).toContain("| src/&lt;tag&gt;&amp;&#124;&#96; .ts | supplied | &lt;reason&gt;&amp;&#124;&#96;  continued |");
+    for (const state of states.slice(1)) expect(rendered).toContain(`| src/${state}.ts | ${state} | Reason ${state} |`);
+    expect(plan.coverage).toEqual(before);
+  });
+
   it("retains late source after an early huge fixture in the 203-file provider case", async () => {
     const files = Array.from({ length: 200 }, (_, i) => ({ filename: `fixtures/${String(i).padStart(3, "0")}.json`, status: "added", additions: 1, deletions: 0, patch: patch(i === 0 ? "x".repeat(1_800_000) : "{}") }));
     for (const path of ["package.json", "src/validation.ts", "scripts/artifacts.ts"]) files.push({ filename: path, status: "added", additions: 1, deletions: 0, patch: patch(`SOURCE:${path}`) });
