@@ -67,12 +67,39 @@ const historicalRepo = { ...activeRepo, id: "old-repo", isActive: false, updated
 for (const historical of [historicalRepo, { ...historicalRepo, dismissedAt: new Date() }]) {
   repositoryRows = [historical, activeRepo];
   const connected = await connect.POST(request());
+  const body = await connected.json();
+  console.log(JSON.stringify({ scenario: historical.dismissedAt ? "dismissed history plus active" : "inactive history plus active", method: "POST", path: "/api/cli/repos/connect", request: { fullName: "acme/app" }, status: connected.status, body, syncs }));
   expect(connected.status).toBe(200);
-  expect(await connected.json()).toEqual({ state: "connected", repoId: "repo-1" });
+  expect(body).toEqual({ state: "connected", repoId: "repo-1" });
 }
 repositoryRows = [{ ...historicalRepo, dismissedAt: new Date() }];
-expect(await (await connect.POST(request())).json()).toMatchObject({ state: "repository_dismissed" });
+const dismissedResponse = await connect.POST(request());
+const dismissedBody = await dismissedResponse.json();
+console.log(JSON.stringify({ scenario: "dismissed only", status: dismissedResponse.status, body: dismissedBody, syncs }));
+expect(dismissedResponse.status).toBe(200);
+expect(dismissedBody).toMatchObject({ state: "repository_dismissed" });
 expect(syncs).toBe(0);
+// Newer active rows win; equal timestamps use the stable ID tie-breaker.
+for (const rows of [
+  [activeRepo, { ...activeRepo, id: "repo-new", updatedAt: new Date("2026-09-12T10:00:00Z") }],
+  [{ ...activeRepo, id: "repo-z" }, activeRepo],
+  [{ ...activeRepo, id: "foreign", organizationId: "org-other", updatedAt: new Date("2026-09-13T10:00:00Z") },
+    { ...activeRepo, id: "other-provider", provider: "gitlab", updatedAt: new Date("2026-09-13T10:00:00Z") }, activeRepo],
+]) {
+  repositoryRows = rows;
+  const result = await connect.POST(request({ fullName: "ACME/App" }));
+  const body = await result.json();
+  console.log(JSON.stringify({ scenario: "deterministic scoped lookup", candidateIds: rows.map(row => row.id), status: result.status, body }));
+  expect(result.status).toBe(200);
+  expect(body).toEqual({ state: "connected", repoId: rows.some(row => row.id === "repo-new") ? "repo-new" : "repo-1" });
+}
+expect(syncs).toBe(0);
+repositoryRows = [{ ...activeRepo, installationId: 99 }];
+const wrongInstallation = await connect.POST(request());
+const wrongInstallationBody = await wrongInstallation.json();
+console.log(JSON.stringify({ scenario: "wrong installation cannot connect", status: wrongInstallation.status, body: wrongInstallationBody }));
+expect(wrongInstallation.status).toBe(503);
+expect(wrongInstallationBody).not.toHaveProperty("repoId");
 repositoryRows = [activeRepo];
 
 // A lost compare-and-set must not start a second job.
