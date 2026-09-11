@@ -4,7 +4,7 @@ import { applyReviewCoverage, reviewAssessmentComplete } from "@/lib/review-cove
 import { validReviewFindings, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { normalizeLastReviewedCommit, normalizeScoreDenominators, reconcileScoreTable } from "@/lib/review-helpers";
 import { sanitizeMermaidInMarkdown } from "@/lib/mermaid-utils";
-import { containExcludedInputClaims, parseReviewFindingsSet } from "@/lib/review-evidence";
+import { containExcludedInputClaims, parseReviewFindingsSet, recoveryFindingsBody } from "@/lib/review-evidence";
 
 function findingsBlocks(body: string): string[] {
   return body.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/g) ?? [];
@@ -66,7 +66,14 @@ export function finalizeReviewPresentation(
   return { report: finalize(report), comment: finalize(comment) };
 }
 
-export function prepareRecoveredReviewPresentation(body: string, findings: InlineFinding[], coverage: ReviewCoverage): string | null {
+export function prepareRecoveredReviewPresentation(body: string, rawRecovery: string, findings: InlineFinding[], coverage: ReviewCoverage): string | null {
+  const recoveryBody = recoveryFindingsBody(rawRecovery);
+  if (parseReviewFindingsSet(recoveryBody) === null) {
+    const rejected = containExcludedInputClaims(recoveryBody, coverage);
+    if (rejected.paths.length === 0) return null;
+    markExcludedInputAssessment(coverage);
+    return prepareReviewPresentation(rejected.body, coverage);
+  }
   const intact = parseReviewFindingsSet(body) !== null;
   const presentation = intact ? body.replace(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/g, "") : body;
   const combined = `${presentation}\n<!-- OCTOPUS_FINDINGS_START -->\n${JSON.stringify(findings)}\n<!-- OCTOPUS_FINDINGS_END -->`;

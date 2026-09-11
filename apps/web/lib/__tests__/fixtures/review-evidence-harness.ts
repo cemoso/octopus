@@ -129,6 +129,7 @@ async function plan(excluded = true) {
 }
 
 const scenarios = [
+  { name: "recovery-malformed-set", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([])), excluded: true, valid: false, kept: [], recovery: [unsupported, security, null] },
   { name: "recovery-excluded-claim", body: report([unsupported, security], "Two findings require attention.").replace(block([unsupported, security]), block([])), excluded: true, valid: false, kept: [security], recovery: [unsupported, security] },
   { name: "excluded-subject", body: report([unsupported, security]), excluded: true, valid: true, kept: [security] },
   { name: "excluded-only-claim", body: report([unsupported], "> ✅ No new issues detected since the last review."), excluded: true, valid: true, kept: [] },
@@ -164,14 +165,19 @@ for (const scenario of scenarios) {
   if (scenario.recovery) {
     responseText = JSON.stringify(scenario.recovery);
     const recovered = await executeFindingsRecovery({ model: "gpt-test", reviewBody: prepared, parsedFindingsCount: 0, tableFindingsTotal: 2 }, input.coverage, params => openaiProvider.create(params, "fixture-key"));
+    assert.deepEqual(recovered.findings, scenario.name === "recovery-malformed-set" ? null : scenario.recovery);
+    if (scenario.name === "recovery-malformed-set") {
+      assert.equal(input.coverage.assessment!.recoveries![0].state, "incomplete");
+      assert.ok(input.coverage.assessment!.reason.includes("Findings recovery JSON set is malformed"));
+    }
     const recoveryReceipt = structuredClone(input.coverage.assessment!.recoveries![0]);
-    const contained = prepareRecoveredReviewPresentation(prepared, parseFindings(block(JSON.parse(recovered.text))), input.coverage);
+    const contained = prepareRecoveredReviewPresentation(prepared, recovered.text, recovered.findings ?? [], input.coverage);
     assert.notEqual(contained, null);
     prepared = contained!;
     const combinedReason = input.coverage.assessment!.reason;
     assert.ok(combinedReason.startsWith(originalFailure!), "recovery retains the original format failure first");
     assert.ok(combinedReason.includes("Excluded-input claims require verification"));
-    prepareRecoveredReviewPresentation(prepared, scenario.recovery, input.coverage);
+    prepareRecoveredReviewPresentation(prepared, recovered.text, recovered.findings ?? [], input.coverage);
     assert.equal(input.coverage.assessment!.reason, combinedReason, "repeated containment does not duplicate diagnostics");
     assert.deepEqual(input.coverage.assessment!.recoveries![0], recoveryReceipt);
     assert.equal(recoveryReceipt.responseSha256, sha256(responseText));

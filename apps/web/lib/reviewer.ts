@@ -100,8 +100,6 @@ import {
   FINDINGS_START_MARKER,
   FINDINGS_END_MARKER,
   extractDiffFiles,
-  parseFindingsFromJson,
-  parseFindingsFromMarkdown,
   parseFindings,
   extractKeywords,
   deduplicateAgainstPrior,
@@ -1842,22 +1840,13 @@ export async function processReview(pullRequestId: string): Promise<void> {
             organizationId: org.id,
           });
 
-          // Try JSON parse first (requested format), then markdown fallback
-          const wrappedBlock = `${FINDINGS_START_MARKER}\n${findingsBlock}\n${FINDINGS_END_MARKER}`;
-          let followUpFindings = parseFindingsFromJson(wrappedBlock);
-          if (!followUpFindings) {
-            // Try direct JSON parse (AI may omit markers but output valid JSON)
-            try {
-              const fenceMatch = findingsBlock.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
-              const raw = fenceMatch ? fenceMatch[1].trim() : findingsBlock.trim();
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed)) {
-                followUpFindings = parseFindingsFromJson(`${FINDINGS_START_MARKER}\n\`\`\`json\n${JSON.stringify(parsed)}\n\`\`\`\n${FINDINGS_END_MARKER}`);
-              }
-            } catch {
-              // Final fallback: legacy markdown parser
-              followUpFindings = parseFindingsFromMarkdown(findingsBlock);
-              if (followUpFindings.length === 0) followUpFindings = null;
+          const followUpFindings = followUp.findings;
+          if (followUpFindings === null) {
+            const rejected = prepareRecoveredReviewPresentation(reviewBody, findingsBlock, [], coverage);
+            if (rejected !== null) {
+              reviewBody = rejected;
+              effectiveReviewBody = rejected;
+              mainCommentBody = stripDetailedFindings(rejected);
             }
           }
           if (followUpFindings && followUpFindings.length > 0) {
@@ -1867,7 +1856,7 @@ export async function processReview(pullRequestId: string): Promise<void> {
             findings = [...findings, ...newFindings];
             // Append findings block to reviewBody so it gets stored in DB
             effectiveReviewBody = `${reviewBody}\n\n${FINDINGS_START_MARKER}\n\`\`\`json\n${JSON.stringify(followUpFindings, null, 2)}\n\`\`\`\n${FINDINGS_END_MARKER}`;
-            const containedRecovery = prepareRecoveredReviewPresentation(reviewBody, findings, coverage);
+            const containedRecovery = prepareRecoveredReviewPresentation(reviewBody, findingsBlock, findings, coverage);
             if (containedRecovery !== null) {
               reviewBody = containedRecovery;
               effectiveReviewBody = containedRecovery;

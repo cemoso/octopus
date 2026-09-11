@@ -74,6 +74,11 @@ function assertsAbsence(statement: string, visibilityPenalty: boolean): boolean 
     || (visibilityPenalty && unseen);
 }
 
+export function recoveryFindingsBody(raw: string): string {
+  return raw.includes("<!-- OCTOPUS_FINDINGS_START -->") || raw.includes("<!-- OCTOPUS_FINDINGS_END -->")
+    ? raw : `<!-- OCTOPUS_FINDINGS_START -->\n${raw}\n<!-- OCTOPUS_FINDINGS_END -->`;
+}
+
 type FindingRecord = Record<string, unknown>;
 export function parseReviewFindingsSet(body: string): FindingRecord[] | null {
   if (body.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2

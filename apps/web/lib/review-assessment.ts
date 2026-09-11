@@ -1,7 +1,8 @@
 import type { AiCreateParams, AiResponse } from "@/lib/providers";
 import type { AiRequestReceipt } from "@/lib/providers/request-evidence";
 import { sha256, type ReviewCoverage } from "@/lib/review-coverage";
-import { parseFindingsFromJson } from "@/lib/review-dedup";
+import { parseReviewFindingsSet, recoveryFindingsBody } from "@/lib/review-evidence";
+import { parseFindingsFromJson, type InlineFinding } from "@/lib/review-dedup";
 
 export type FindingsRecoveryEvidence = {
   state: "completed" | "incomplete" | "failed";
@@ -62,7 +63,7 @@ export async function executeFindingsRecovery(
   input: { model: string; reviewBody: string; parsedFindingsCount: number; tableFindingsTotal: number },
   coverage: ReviewCoverage,
   call: (request: AiCreateParams) => Promise<AiResponse>,
-): Promise<AiResponse> {
+): Promise<AiResponse & { findings: InlineFinding[] | null }> {
   const assessment = coverage.assessment;
   if (!assessment) throw new Error("Primary review assessment unavailable for findings recovery");
   const { model, reviewBody, parsedFindingsCount, tableFindingsTotal } = input;
@@ -100,7 +101,15 @@ export async function executeFindingsRecovery(
   evidence.reason = !observed ? "Actual findings recovery request provenance unavailable"
     : response.completion?.state !== "completed" ? "Findings recovery completion incomplete or unknown"
       : "Provider completed the findings recovery response; source assessment unchanged";
-  return response;
+  const body = recoveryFindingsBody(response.text);
+  const valid = parseReviewFindingsSet(body) !== null;
+  if (!valid) {
+    const reason = "Findings recovery JSON set is malformed";
+    evidence.state = "incomplete";
+    evidence.reason = `${evidence.reason}; ${reason}`;
+    markReviewAssessmentIncomplete(coverage, `${assessment.reason}; ${reason}`);
+  }
+  return { ...response, findings: valid ? parseFindingsFromJson(body) ?? [] : null };
 }
 
 /** Fixed diagnostic messages only: never include untrusted response excerpts. */
