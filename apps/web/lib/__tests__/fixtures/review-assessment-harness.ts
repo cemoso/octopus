@@ -198,6 +198,52 @@ for (const corruption of ["lost", "changed", "summary"] as const) {
   assert.ok(!/Overall[^\n]*[1-5]\/5/.test(published!.body));
   assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, "failure");
 }
+for (const scenario of ["partial-completed", "partial-oversized", "partial-corrupted"] as const) {
+  const input = { provider: "github" as const, headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true, expectedFiles: 1, limitations: [], files: [{ path: "src/validator.ts", change: "modified", patch: "@@ -0,0 +1 @@\n+one\n@@ -4,0 +5 @@\n+two\n" }] };
+  const full = prepareReviewInput(input, { maxChars: 1000 });
+  const p = prepareReviewInput(input, { maxChars: full.diff.length - 1 });
+  p.coverage.reviewRequestVersion = 1;
+  assert.equal(p.coverage.files[0].state, "partial");
+  assert.equal(p.coverage.files[0].hunks.length, 1);
+  const response = scenario === "partial-oversized" ? valid.replace("The changed validator is consistent with its documented contract.", "Subset commentary 🔴 ".repeat(10000)) : valid;
+  output = { choices: [{ message: { content: response }, finish_reason: "stop" }] };
+  await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
+  const completionEvidence = structuredClone(p.coverage.assessment);
+  assert.equal(completionEvidence?.state, "completed");
+  assert.equal(p.coverage.complete, false);
+  let report = applyReviewCoverage(prepareReviewPresentation(response, p.coverage), p.coverage, scenario);
+  if (scenario === "partial-corrupted") report = report.replace("[]", JSON.stringify([finding]));
+  enforceReviewFindingsIntegrity(response, report, p.coverage, true);
+  const result = finalizeReviewPresentation(response, report, stripDetailedFindings(report), p.coverage, scenario, { hasCritical: false, hasHigh: false, hasMedium: false });
+  await saveReviewAttempt(scenario, "pr", p.coverage, result.report);
+  await updatePullRequestComment(1, "fixture", "review", 123, `Review attempt: ${scenario}. Head: ${p.coverage.headSha}.\n\n${result.comment}`, "fixture-token");
+  const stored = rows.get(scenario)!.coverage as typeof p.coverage;
+  assert.equal(stored.complete, false);
+  assert.equal(stored.assessment?.responseSha256, completionEvidence?.responseSha256);
+  assert.deepEqual(stored.assessment?.completion, completionEvidence?.completion);
+  if (scenario === "partial-corrupted") {
+    assert.equal(stored.assessment?.state, "incomplete");
+    assert.match(stored.assessment!.reason, /lost, changed or inconsistent/);
+  } else {
+    assert.deepEqual(stored.assessment, completionEvidence);
+    assert.ok(!published!.body.includes("lost, changed or inconsistent"));
+  }
+  assert.ok(published!.body.includes(stored.assessment!.reason));
+  assert.ok(published!.body.includes("not assessed"));
+  assert.ok(!/Overall[^\n]*[1-5]\/5/.test(published!.body));
+  assert.ok(!/Overall[^\n]*[1-5]\/5/.test(result.report));
+  assert.ok(published!.body.endsWith(`Last reviewed commit: ${p.coverage.headSha}`));
+  const nativeCheck = { id: 456, head_sha: p.coverage.headSha, app: { slug: "octopus-review" }, status: "completed", ...reviewCheckResult(p.coverage, false, 0) };
+  assert.equal(nativeCheck.conclusion, "failure");
+  if (scenario === "partial-oversized") {
+    assert.ok(published!.body.includes("Comment truncated"));
+    assert.ok(published!.body.length <= MAX_GITHUB_COMMENT_BODY);
+    assert.ok(!/\|[^\n]*[1-5]\/5/.test(published!.body));
+  }
+  if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/assessment-${scenario}.json`, JSON.stringify({ sourceRevision: process.env.REVIEW_TEST_SOURCE_REVISION ?? null, sourceDiffSha256: process.env.REVIEW_TEST_DIFF_SHA256 ?? null, request: received, coverage: p.coverage, report: result.report, publishedComment: published!.body, nativeCheck }, null, 2));
+  }
+}
 const filtered = plan();
 output = { choices: [{ message: { content: withFinding }, finish_reason: "stop" }] };
 await executeCoveredReview(requestFor(filtered), filtered.coverage, "v1", request => openaiProvider.create(request, "fake"));

@@ -1,6 +1,6 @@
 import type { ReviewCoverage } from "@/lib/review-coverage";
 import { applyReviewCoverage } from "@/lib/review-coverage";
-import { validReviewResponse } from "@/lib/review-assessment";
+import { validReviewFindings } from "@/lib/review-assessment";
 import { normalizeLastReviewedCommit, normalizeScoreDenominators, reconcileScoreTable } from "@/lib/review-helpers";
 import { sanitizeMermaidInMarkdown } from "@/lib/mermaid-utils";
 
@@ -22,7 +22,7 @@ export function enforceReviewFindingsIntegrity(original: string, current: string
   const before = findingsBlocks(original);
   const after = findingsBlocks(current);
   if (before.length === 1 && after.length === 1 && before[0] === after[0]
-    && (!checkSummary || validReviewResponse(current))) return;
+    && (!checkSummary || validReviewFindings(current))) return;
   coverage.complete = false;
   coverage.assessment.state = "incomplete";
   coverage.assessment.reason = "Validated findings were lost, changed or inconsistent during report preparation";

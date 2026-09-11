@@ -28,6 +28,10 @@ export function validReviewResponse(text: string): boolean {
   }
   const overall = score.split("\n").filter(line => /Overall/i.test(line));
   if (overall.length !== 1 || !/^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/.test(overall[0])) return false;
+  return validReviewFindings(text);
+}
+
+export function validReviewFindings(text: string): boolean {
   const matches = [...text.matchAll(/<!-- OCTOPUS_FINDINGS_START -->\s*([\s\S]*?)\s*<!-- OCTOPUS_FINDINGS_END -->/g)];
   if (matches.length !== 1
     || text.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2
