@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import type { AiCreateParams } from "@/lib/providers";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 mock.module("server-only", () => ({}));
+let nativeFailure = false;
+let directComments = 0;
 let prior: ReviewCoverage | null = null;
 let lookupFailure = false;
 let received: { messages: { role: string; content: string }[] };
@@ -69,6 +71,15 @@ mock.module("@/lib/review-validation", () => ({
 const archived: { findings: { title: string }[]; coverage: unknown; body: string }[] = [];
 const summaries: string[] = [];
 const published: { body: string; comments: unknown[] }[] = [];
+mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async (target: { body: string; headSha: string; reviewRequestVersion: number; expectedReviewBody?: string }) => {
+  if (target.expectedReviewBody !== undefined) {
+    assert.equal(target.expectedReviewBody, archived.at(-1)?.body);
+    assert.equal(target.headSha, pr.headSha);
+    assert.equal(target.reviewRequestVersion, pr.reviewRequestVersion);
+  }
+  summaries.push(target.body);
+  return 123;
+} }));
 mock.module("@/lib/review-attempt", () => ({
   createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
   updateCurrentReview: async () => ({ count: 1 }),
@@ -85,9 +96,10 @@ mock.module("@/lib/github", () => ({
     files: [{ path: "src/check.ts", change: "modified", patch: "@@ -1 +1 @@\n-return value;\n+return value.name;\n", additions: 1, deletions: 1 }],
   } }),
   getPullRequestDetails: async () => ({ body: "Handle missing values" }),
-  createPullRequestComment: async () => 123,
+  createPullRequestComment: async () => { directComments++; return 123; },
   updatePullRequestComment: async (_installation: number, _owner: string, _repo: string, _id: number, body: string) => { summaries.push(body); },
   createPullRequestReview: async (_installation: number, _owner: string, _repo: string, _number: number, body: string, _event: string, comments: unknown[]) => {
+    if (nativeFailure) throw new Error("fixture native review rejected");
     published.push({ body, comments });
     return 456;
   },
@@ -251,3 +263,19 @@ try {
   }
 } finally { console.warn = warn; }
 console.log("PASS incomplete retry findings, inline publication and assessment gates");
+
+prior = null;
+malformed = false;
+responseOverride = null;
+providerInterrupted = false;
+nativeFailure = true;
+lookupFailure = false;
+const beforeFallback = archived.length;
+const originalError = console.error;
+console.error = () => {};
+try { await processReview("pr"); } finally { console.error = originalError; }
+assert.equal(archived.length, beforeFallback + 1);
+assert.equal(directComments, 0, "Native failures must not create untracked comments");
+assert.ok(summaries.at(-1)?.includes("Missing null check"));
+assert.ok(summaries.at(-1)?.includes("### Score"));
+assert.ok(summaries.at(-1)?.includes("Review coverage"));

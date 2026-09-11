@@ -17,8 +17,10 @@ let member = true;
 let queries = 0;
 mock.module("server-only", () => ({}));
 const db = {
+  $queryRaw: async () => [{ ...current, headSha: currentHead, reviewRequestVersion: currentVersion, reviewCommentId: current.reviewCommentId ?? null }],
   organization: { findUnique: async () => ({ reviewsPaused: false, blockedAuthors: [] }) },
   reviewAttempt: {
+    findMany: async () => [...rows.values()].reverse().slice(0, 5).map(row => ({ id: row.id, headSha: row.headSha, createdAt: row.createdAt ?? new Date("2026-09-11T00:00:00Z") })),
     createMany: async ({ data, skipDuplicates }: { data: Row[]; skipDuplicates: boolean }) => {
       if (failArchive) throw new Error("Archive unavailable");
       let count = 0;
@@ -86,8 +88,11 @@ const db = {
     createMany: async ({ data }: { data: unknown[] }) => { issues = structuredClone(data); },
   },
 };
+let transactionTail = Promise.resolve<unknown>(undefined);
+let serializeTransactions = false;
 mock.module("@octopus/db", () => ({ Prisma: { DbNull: null }, prisma: { ...db,
-  $transaction: async (run: (tx: typeof db) => Promise<unknown>) => {
+  $transaction: (run: (tx: typeof db) => Promise<unknown>) => {
+    const result = (serializeTransactions ? transactionTail : Promise.resolve()).then(async () => {
     const savedRows = new Map(rows), savedCurrent = structuredClone(current), savedIssues = structuredClone(issues);
     try { return await run(db); }
     catch (error) {
@@ -95,6 +100,9 @@ mock.module("@octopus/db", () => ({ Prisma: { DbNull: null }, prisma: { ...db,
       current = savedCurrent; issues = savedIssues;
       throw error;
     }
+    });
+    transactionTail = result.catch(() => {});
+    return result;
   },
 } }));
 mock.module("@/lib/auth", () => ({ auth: { api: { getSession: async ({ headers }: { headers: Headers }) => headers.get("x-user") ? { user: { id: headers.get("x-user") } } : null } } }));
@@ -161,14 +169,17 @@ let failCheck = false;
 let failSummary = false;
 const published: unknown[][] = [];
 let allowPublication = false;
+let nativeOnlyFailure = false;
 let duringPublication: (() => Promise<void>) | undefined;
 const unexpectedPublication = () => { throw new Error("Delayed result published to current PR"); };
 mock.module("@/lib/github", () => ({
+  findPullRequestSummaryComment: async () => null,
+  getInstallationToken: async () => "fixture-token",
   getPullRequestDetails: async () => ({ headSha: providerHead }),
   updateCheckRun: async (...args: unknown[]) => { assert.ok([...rows.values()].some(row => (row.coverage as { nativeCheckId?: string }).nativeCheckId === String(args[3])), "Native completion requires a durable archive"); checks.push(args); if (failCheck) throw new Error("Transient check failure"); },
   createPullRequestComment: async (...args: unknown[]) => { if (failSummary && String(args[4]).includes("Large PR —")) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); return 900; },
-  updatePullRequestComment: unexpectedPublication,
-  createPullRequestReview: async (...args: unknown[]) => { if (failSummary) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
+  updatePullRequestComment: async (...args: unknown[]) => { if (failSummary && String(args[4]).includes("Large PR —")) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); await duringPublication?.(); published.push(args); },
+  createPullRequestReview: async (...args: unknown[]) => { if (failSummary || nativeOnlyFailure) throw new Error("Transient summary failure"); if (!allowPublication) unexpectedPublication(); published.push(args); return 901; },
 }));
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: unexpectedPublication } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: unexpectedPublication } }));
@@ -232,8 +243,8 @@ providerHead = currentHead;
 assert.deepEqual(await startReviewFlow({ provider: "github", installationId: 123, repoFullName: "owner/repo", repoId: "repo", orgId: "owner-org", prNumber: 1, prTitle: "Title", prUrl: "https://example.test/pr/1", prAuthor: "author", headSha: currentHead, triggerCommentId: 1, triggerCommentBody: "review" }), { started: true, pullRequestId: "pr" });
 assert.equal((statusEvents.at(-1)?.data.pullRequest as { headSha: string }).headSha, currentHead);
 assert.equal(published.length, 1);
-assert.equal(current.reviewCommentId, 900);
-console.log("PASS review triggers create new comments without editing previous attempts");
+assert.equal(current.reviewCommentId, 200);
+console.log("PASS review triggers reuse the summary while preserving immutable attempts");
 
 const emptyId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const { buildGeneratedMatcher } = await import("../../generated-files");
@@ -306,11 +317,18 @@ const racingJob = { ...failedJob, attemptId: "3456789a-3456-4456-8456-3456789abc
 allowPublication = false;
 await assert.rejects(handleLargeReviewResult(racingJob), /Delayed result published/);
 allowPublication = true;
+let replacement: Promise<void> | undefined;
+serializeTransactions = true;
 duringPublication = async () => {
-  await saveReviewAttempt("456789ab-4567-4567-8567-456789abcdef", "pr", emptyCoverage, "Won during publication", [issue("race winner")]);
-  await updateCurrentReview("pr", currentHead, currentVersion, { reviewCommentId: 456 });
+  // A competing writer waits for the publisher's row lock to be released.
+  replacement = (async () => {
+    await saveReviewAttempt("456789ab-4567-4567-8567-456789abcdef", "pr", emptyCoverage, "Won during publication", [issue("race winner")]);
+    await updateCurrentReview("pr", currentHead, currentVersion, { reviewCommentId: 456 });
+  })();
 };
 await handleLargeReviewResult(racingJob);
+await replacement;
+serializeTransactions = false;
 assert.equal(current.status, "completed");
 assert.equal(current.reviewBody, "Won during publication");
 assert.equal(current.reviewCommentId, 456);
@@ -371,7 +389,7 @@ finally { console.error = originalConsoleError; }
 assert.equal(summaryErrors.length, 1);
 assert.match(String(summaryErrors[0][1]), /Transient summary failure/);
 assert.equal(published.length, beforeArchiveFailure.comments + 1);
-assert.equal(deliveries.get(interruptedSuccess.attemptId)?.mainCommentId, 900n);
+assert.equal(deliveries.get(interruptedSuccess.attemptId)?.mainCommentId, 456n);
 assert.equal(deliveries.get(interruptedSuccess.attemptId)?.summaryPublished, false);
 failSummary = false;
 await handleLargeReviewResult(interruptedSuccess);
@@ -502,3 +520,18 @@ if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
     immutableAttempts: [...rows.values()],
   }, null, 2));
 }
+
+const fallbackJob = { ...archiveFailureJob, headSha: currentHead, reviewRequestVersion: currentVersion, attemptId: "19191919-1919-4919-8919-191919191919" };
+allowPublication = true;
+duringPublication = undefined;
+nativeOnlyFailure = true;
+const beforeFallback = published.length;
+console.error = () => {};
+try { await handleLargeReviewResult(fallbackJob); } finally { console.error = originalConsoleError; }
+const fallbackCalls = published.slice(beforeFallback);
+assert.equal(fallbackCalls.length, 2);
+assert.ok(fallbackCalls.every(call => call[3] === Number(current.reviewCommentId)), "Fallback must update the tracked comment");
+assert.ok(String(fallbackCalls[1][4]).includes("Large PR —"));
+assert.ok(String(fallbackCalls[1][4]).includes("Review coverage"));
+assert.ok(String(fallbackCalls[1][4]).endsWith(`Last reviewed commit: ${currentHead}`));
+assert.ok(deliveries.get(fallbackJob.attemptId)?.summaryPublished);

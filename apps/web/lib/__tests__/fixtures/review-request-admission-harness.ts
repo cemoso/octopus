@@ -17,6 +17,7 @@ const completed = (headSha = B, version = 2): Row => ({
 let current: Row | null = completed();
 let providerHead: string | null = B;
 let headReads = 0, writes = 0, comments = 0, events = 0, enqueued = 0;
+mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async () => ++comments }));
 let duringHeadRead: (() => Promise<void>) | undefined;
 let beforeWrite: (() => Promise<void>) | undefined;
 let headFailure = false;
