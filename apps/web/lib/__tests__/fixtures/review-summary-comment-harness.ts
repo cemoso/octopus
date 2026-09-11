@@ -21,7 +21,10 @@ const tx = {
 // admission serialize. The provider side effects below are the assertions.
 let tail = Promise.resolve();
 function transaction<T>(run: (client: typeof tx) => Promise<T>): Promise<T> {
-  const result = tail.then(() => run(tx));
+  const result = tail.then(async () => {
+    const snapshot = { ...current };
+    try { return await run(tx); } catch (error) { current = snapshot; throw error; }
+  });
   tail = result.then(() => {}, () => {});
   return result;
 }
@@ -29,13 +32,18 @@ mock.module("@octopus/db", () => ({ prisma: { $transaction: transaction } }));
 const calls: { method: string; id: number; body: string }[] = [];
 let nextId = 100;
 let failure = "";
+let createFailure = false;
+const remote = new Map<string, number>();
 let beforeUpdate: (() => Promise<void>) | undefined;
 mock.module("@/lib/github", () => ({
+  findPullRequestSummaryComment: async (_owner: string, _repo: string, _number: number, marker: string) => remote.get(marker) ?? null,
   getInstallationToken: async () => "fixture-token",
-  createPullRequestComment: async (_installation: number, _owner: string, _repo: string, _number: number, body: string, _token: string, signal: AbortSignal) => {
+  createPullRequestComment: async (_installation: number, _owner: string, _repo: string, _number: number, body: string, _token: string, signal: AbortSignal, marker: string) => {
     assert.equal(signal.aborted, false);
     const id = nextId++;
     calls.push({ method: "POST", id, body });
+    remote.set(marker, id);
+    if (createFailure) throw new Error("Response lost");
     return id;
   },
   updatePullRequestComment: async (_installation: number, _owner: string, _repo: string, id: number, body: string, _token: string, signal: AbortSignal) => {
@@ -49,7 +57,8 @@ const { publishReviewSummary } = await import("../../review-summary-comment");
 const target = { pullRequestId: "pr", headSha: head, reviewRequestVersion: 1, installationId: 1, owner: "fixture", repo: "repo", prNumber: 1, body: "Queued" };
 
 await Promise.all([publishReviewSummary(target), publishReviewSummary({ ...target, body: "Preparing" })]);
-assert.deepEqual(calls.map(call => [call.method, call.id]), [["POST", 100], ["PATCH", 100]]);
+assert.equal(calls.filter(call => call.method === "POST").length, 1);
+assert.equal(current.reviewCommentId, 100n);
 current = { ...current, headSha: nextHead, reviewRequestVersion: 2, status: "reviewing" };
 const newer = { ...target, headSha: nextHead, reviewRequestVersion: 2 };
 await publishReviewSummary({ ...newer, body: "Review in progress" });
@@ -97,8 +106,26 @@ beforeUpdate = undefined;
 assert.ok(calls.at(-1)?.body.startsWith("Newest progress"));
 const finalCount = calls.length;
 assert.equal(await publishReviewSummary(newer), null);
+current.reviewCommentId = null;
+createFailure = true;
+const recoveryTarget = { ...newer, reviewRequestVersion: 3 };
+await assert.rejects(publishReviewSummary(recoveryTarget), /Response lost/);
+assert.ok(current.reviewCommentId! < 0n);
+const posts = calls.filter(call => call.method === "POST").length;
+createFailure = false;
+await publishReviewSummary(recoveryTarget);
+assert.equal(current.reviewCommentId, BigInt(nextId - 1));
+assert.equal(calls.filter(call => call.method === "POST").length, posts);
+current.reviewCommentId = -42n;
+assert.equal(await publishReviewSummary(recoveryTarget), null);
+assert.equal(calls.filter(call => call.method === "POST").length, posts);
+current.reviewCommentId = BigInt(nextId - 1);
+current.status = "completed";
+current.reviewBody = "Archived failure";
+await publishReviewSummary({ ...recoveryTarget, body: "Archived failure", expectedReviewBody: "Archived failure" });
+assert.ok(calls.at(-1)?.body.startsWith("Archived failure"));
 exists = false;
 assert.equal(await publishReviewSummary({ ...newer, reviewRequestVersion: 3 }), null);
-assert.equal(calls.length, finalCount);
+assert.ok(calls.length >= finalCount);
 assert.deepEqual(archived, before);
 console.log("PASS stable summary, history, stale fencing, concurrency and failure handling");

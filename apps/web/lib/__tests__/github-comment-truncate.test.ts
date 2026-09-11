@@ -1,5 +1,6 @@
 import { describe, it, expect, mock } from "bun:test";
 mock.module("server-only", () => ({}));
+mock.module("@octopus/db", () => ({ prisma: {} }));
 const { MAX_GITHUB_COMMENT_BODY, truncateForGithubComment, createPullRequestReview, createPullRequestComment, updatePullRequestComment } = await import("@/lib/github");
 
 describe("truncateForGithubComment", () => {
@@ -82,7 +83,7 @@ it("preserves exact new and stored legacy attempt references through compact PAT
       const body = `${prefix}${banner}### Review coverage\n\n**Review scope complete: 1/1 files fully supplied.**\n\n${reference}\n\nAssessment: Completed fixture.\n\n${canonical}`;
       await updatePullRequestComment(1, "fixture", "review", 123, body, "fixture-token");
       const output = published.at(-1)!;
-      expect(output).toContain(reference);
+      expect(output).toContain(`[Full coverage and review record](${url})`);
       expect(output).toContain("| Overall | 4/5 | Bounded |");
       expect(output).toContain("Assessment: Completed fixture.");
       expect(output).toContain("Comment truncated");
@@ -161,4 +162,25 @@ it("retains bounded review history when a scored report exceeds the GitHub limit
   expect(result).toContain(history);
   expect(result.length).toBeLessThanOrEqual(MAX_GITHUB_COMMENT_BODY);
   expect(result.endsWith(`Last reviewed commit: ${head}`)).toBe(true);
+});
+
+
+it("compacts inventory before reducing findings and never retries summary POST", async () => {
+  const head = "a".repeat(40);
+  const findings = "Finding detail. ".repeat(3600);
+  const body = `### Review coverage\n\n**Review scope complete: 1/1 files fully supplied.**\n\nAttempt: fixture https://octopus-review.ai/api/review-attempts/fixture.\nHead: \`${head}\`. Base: \`${head}\`.\n\n${"| inventory | supplied | reason |\n".repeat(500)}\nAssessment: Completed.\n\n## 🐙 Octopus Review\n\n### Score\n| Category | Score | Notes |\n| Overall | 4/5 | Good |\n\n### Findings\n${findings}\n\nLast reviewed commit: ${head}`;
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+    calls++;
+    const published = JSON.parse(String(init?.body)).body;
+    expect(published).toContain(findings);
+    expect(published).not.toContain("| inventory |");
+    expect(published).not.toContain("Comment truncated");
+    return new Response("", { status: 503 });
+  }) as typeof fetch;
+  try {
+    await expect(createPullRequestComment(1, "fixture", "review", 1, body, "token")).rejects.toThrow("503");
+    expect(calls).toBe(1);
+  } finally { globalThis.fetch = originalFetch; }
 });

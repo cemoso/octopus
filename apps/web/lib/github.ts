@@ -604,7 +604,10 @@ function compactCoverageReference(body: string): string {
   if (!header) return "";
   const preamble = body.slice(header[0].length, header[0].length + 2048);
   const reference = /^(?:Attempt: ([A-Za-z0-9_-]+) (https?:\/\/[^\s<>()`]+)\.\r?\n|Attempt: \[`([A-Za-z0-9_-]+)`\]\((https?:\/\/[^\s<>()`]+)\)\. )Head: `(?:[0-9a-f]{40}|unknown)`\. Base: `(?:[0-9a-f]{40}|unknown)`\.(?=\r?\n|$)/i.exec(preamble);
-  if (!reference) return "";
+  if (!reference) {
+    const compact = /^(?:\*\*Overall: not assessed[^\n]+\n\n)?(\[Full coverage and review record\]\(https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+\) · Octopus sign-in required\.)/.exec(preamble);
+    return compact ? `**${header[1]}**\n\n${compact[0]}` : "";
+  }
   const attemptId = reference[1] ?? reference[3];
   try {
     const url = new URL(reference[2] ?? reference[4]);
@@ -693,6 +696,28 @@ export function compactReviewCoverageComment(body: string): string {
     + body.slice(end.index);
 }
 
+function formatSummaryComment(body: string, marker?: string): string {
+  const compact = truncateForGithubComment(compactReviewCoverageComment(body));
+  if (!marker) return compact;
+  const footer = /\n*Last reviewed commit: [0-9a-f]{40}\s*$/i.exec(compact)?.[0] ?? "";
+  return (footer ? compact.slice(0, -footer.length) : compact) + `\n\n${marker}` + footer;
+}
+
+export async function findPullRequestSummaryComment(
+  owner: string, repo: string, prNumber: number, marker: string, token: string, signal: AbortSignal,
+): Promise<number | null> {
+  for (let page = 1; ; page++) {
+    const res = await fetchWithRetry(`${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/comments?per_page=100&page=${page}`, {
+      signal, headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+    });
+    if (!res.ok) throw new Error(`Failed to reconcile PR summary: ${res.status}`);
+    const comments = await res.json() as { id: number; body?: string; user?: { type?: string } }[];
+    const match = comments.find(comment => comment.body?.split("\n").includes(marker));
+    if (match) return match.id;
+    if (comments.length < 100) return null;
+  }
+}
+
 export async function createPullRequestComment(
   installationId: number,
   owner: string,
@@ -702,10 +727,11 @@ export async function createPullRequestComment(
   /** Pre-resolved token (bot-account mode). Skips getInstallationToken when provided. */
   providedToken?: string,
   signal?: AbortSignal,
+  summaryMarker?: string,
 ): Promise<number> {
-  const safeBody = compactReviewCoverageComment(truncateForGithubComment(body));
+  const safeBody = formatSummaryComment(body, summaryMarker);
   const token = providedToken ?? await getInstallationToken(installationId);
-  const res = await fetchWithRetry(
+  const res = await fetch(
     `${GITHUB_API}/repos/${owner}/${repo}/issues/${prNumber}/comments`,
     {
       method: "POST",
@@ -735,8 +761,9 @@ export async function updatePullRequestComment(
   /** Pre-resolved token (bot-account mode). Skips getInstallationToken when provided. */
   providedToken?: string,
   signal?: AbortSignal,
+  summaryMarker?: string,
 ): Promise<void> {
-  const safeBody = compactReviewCoverageComment(truncateForGithubComment(body));
+  const safeBody = formatSummaryComment(body, summaryMarker);
   const token = providedToken ?? await getInstallationToken(installationId);
   const res = await fetchWithRetry(
     `${GITHUB_API}/repos/${owner}/${repo}/issues/comments/${commentId}`,

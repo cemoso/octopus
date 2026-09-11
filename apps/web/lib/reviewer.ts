@@ -2494,7 +2494,9 @@ export async function processReview(pullRequestId: string): Promise<void> {
     }
 
     // Update placeholder comment with error if possible
-    if (reviewCommentId) {
+    if (isGitHub && failureBody) {
+      await publishMainComment(failureBody, failureBody).catch((e) => console.error("[reviewer] Failed to publish archived failure:", e));
+    } else if (reviewCommentId) {
       await providerUpdateComment(
         reviewCommentId,
         failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
