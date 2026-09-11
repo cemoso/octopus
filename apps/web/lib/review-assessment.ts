@@ -44,7 +44,7 @@ export function validReviewResponse(text: string): boolean {
     const summaries = [...text.matchAll(/^### Findings Summary[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |<!-- OCTOPUS_FINDINGS_START -->|(?![\s\S]))/gm)];
     if (summaries.length !== 1) return false;
     const summary = summaries[0][1].trim();
-    if (summary === "No issues found.") return findings.length === 0;
+    if (summary && !/[|🔴🟠🟡🔵💡]/u.test(summary)) return findings.length === 0;
     const counts = new Map<string, number>();
     for (const line of summary.split("\n").map(line => line.trim()).filter(Boolean)) {
       if (/^\|\s*Severity\s*\|\s*Count\s*\|$/.test(line)

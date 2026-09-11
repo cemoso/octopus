@@ -609,6 +609,28 @@ export function truncateForGithubComment(body: string): string {
   const marker =
     "\n\n---\n\n> ⚠️ **Comment truncated** — this review exceeded GitHub's per-comment size cap. " +
     "Visit the dashboard for the full version.";
+  const heading = /^## 🐙 Octopus Review[ \t]*$/m.exec(body);
+  const footer = /^Last reviewed commit: [0-9a-f]{40}[ \t]*$/im.exec(body);
+  const score = /^### Score[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |^Last reviewed commit:|(?![\s\S]))/m.exec(body);
+  if (heading && footer && score) {
+    const prefix = /^Review attempt:[^\n]*\n\n/.exec(body)?.[0] ?? "";
+    const attemptLink = /Attempt: \[.*?\]\([^\n]+\)\./.exec(body)?.[0] ?? "";
+    const table = score[1].split("\n").filter(line => {
+      const category = line.split("|")[1]?.trim().replaceAll("**", "");
+      return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
+    });
+    const compactScore = table.length > 0 ? table.map(line => {
+      const cells = line.split("|");
+      if (cells.length !== 5) return "";
+      return `|${cells.slice(1, 4).map(cell => {
+        if (cell.length <= 300) return cell;
+        const shortened = cell.slice(0, 300).replace(/[\uD800-\uDBFF]$/, "");
+        return `${shortened}…`;
+      }).join("|")}|`;
+    }).filter(Boolean).join("\n").replace(/^(.*)\n/, "$1\n| --- | --- | --- |\n") : "Not assessed — incomplete review coverage.";
+    const compact = `${prefix}${heading[0]}\n\n### Score\n${compactScore}\n\n${attemptLink}${marker}\n\n${footer[0]}`;
+    if (compact.length <= MAX_GITHUB_COMMENT_BODY) return compact;
+  }
   const room = MAX_GITHUB_COMMENT_BODY - marker.length;
   // Prefer cutting at a paragraph boundary near the limit so the truncation
   // doesn't land mid-codeblock or mid-finding.
