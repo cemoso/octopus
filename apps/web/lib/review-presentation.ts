@@ -3,6 +3,7 @@ import { applyReviewCoverage, reviewAssessmentComplete } from "@/lib/review-cove
 import { validReviewFindings, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
 import { normalizeLastReviewedCommit, normalizeScoreDenominators, reconcileScoreTable } from "@/lib/review-helpers";
 import { sanitizeMermaidInMarkdown } from "@/lib/mermaid-utils";
+import { containExcludedInputClaims } from "@/lib/review-evidence";
 
 function findingsBlocks(body: string): string[] {
   return body.match(/<!-- OCTOPUS_FINDINGS_START -->[\s\S]*?<!-- OCTOPUS_FINDINGS_END -->/g) ?? [];
@@ -27,7 +28,11 @@ export function enforceReviewFindingsIntegrity(original: string, current: string
 }
 
 export function prepareReviewPresentation(body: string, coverage: ReviewCoverage): string {
-  const cleaned = mapReviewPresentation(body, presentation => {
+  const contained = containExcludedInputClaims(body, coverage);
+  if (contained.paths.length > 0 && coverage.assessment?.state === "completed") {
+    markReviewAssessmentIncomplete(coverage, "Excluded-input claims require verification; no valid overall assessment");
+  }
+  const cleaned = mapReviewPresentation(contained.body, presentation => {
     let result = presentation.replace(/([^\n])```(\n|$)/g, "$1\n```$2")
       .replace(/```([^`\n\sa-z])/g, "```\n\n$1");
     result = normalizeScoreDenominators(result);

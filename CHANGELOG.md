@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.146] - 2026-09-11
+
 ### Fixed
 - Reviews: a standalone Conflict Risk advisory after the Findings Summary no longer invalidates an otherwise valid review. Invalid assessments explicitly distinguish complete input from an unassessed result and show no category or overall scores.
 - Operators: response validation records a specific structural failure reason without retaining response excerpts. Complete changed-file input alone cannot pass the review check; malformed findings, missing request evidence and incomplete provider responses still fail. No database migration is required.
+- Reviews: hosted PR reviewers receive the changed-file visibility manifest. Explicit unsupported claims about missing content in excluded files are withheld with a verification gap and no overall score, while unrelated parsed findings remain available.
+- Operators: excluded-input containment preserves the original response digest and provider receipt, keeps eligible-input coverage independent, and fails assessment rather than inventing a passing score. This bounded English claim guard does not verify arbitrary paraphrases or unseen source; repository exclusions and all severity/confidence settings remain unchanged.
 
 ## [1.0.145] - 2026-09-11
 

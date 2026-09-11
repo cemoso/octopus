@@ -46,6 +46,16 @@ Apply the `20260910223000_review_coverage_attempts`, `20260911090000_review_requ
 
 ## Author comments and source supplements
 
+### Claims about excluded input
+
+Hosted PR requests include a machine-authored changed-file visibility manifest, including policy-excluded paths. Supplied input describes changed hunks, not necessarily complete files. Exclusion and missing review context do not establish a repository defect.
+
+A bounded presentation guard withholds explicit English absence claims referencing known excluded paths, including claims anchored to another supplied file and score notes based on unseen excluded input. Full paths use exact case-sensitive identity; a basename is accepted only when unique in the changed-file inventory. Ordinary visibility disclosures and claims about supplied paths remain unchanged. This guard does not fetch excluded contents or change exclusions.
+
+If a claim is withheld, the original holistic summary, score and checklist cannot be trusted to be consistent with the retained findings. The report replaces them with an unscored verification gap and retains unrelated parsed findings for the existing confidence, validation and severity stages. Malformed or multiple findings blocks do not become a valid findings set through this rewrite. The original provider response digest and completion receipt remain in the immutable attempt; input completeness is preserved and the assessment/native check stays incomplete. Score reconciliation cannot manufacture a passing assessment.
+
+This is containment for explicit known-path assertions, not general semantic verification. Implicit subjects, arbitrary paraphrases, other languages, unchanged paths absent from the inventory and independently verified source supplements require further evidence contracts and versioned model evaluation. The legacy local-review protocol has no coverage manifest and is outside this hosted guard. Synthetic regressions validate the emitted request, containment and publication interfaces; they do not prove model interpretation.
+
 The trigger comment is sent once as untrusted context, outside system instructions. The receipt records received/supplied character counts and any truncation. Source excerpts and claimed hashes in comments are not independently verified and do not add changed-hunk coverage. This fixes duplicated 59k-character supplements and makes the current trust boundary explicit; it does not establish a new verified-source upload protocol.
 
 ## Limits and follow-up work
