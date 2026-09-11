@@ -216,6 +216,10 @@ assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.state, "i
 assert.ok(!summaries.at(-1)!.includes("No new issues detected"));
 assert.ok(!/\|[^\n]*[1-5]\/5/.test(summaries.at(-1)!));
 assert.ok(summaries.at(-1)!.includes("Input complete; assessment invalid or unavailable"));
+if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/invalid-zero-follow-up.json`, JSON.stringify({ archived: archived.at(-1), publishedComment: summaries.at(-1) }, null, 2));
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/invalid-zero-follow-up.html`, '<!doctype html><meta charset="utf-8"><title>Invalid zero-findings follow-up</title>' + Bun.markdown.html(summaries.at(-1)!));
+}
 responseOverride = report.replace("### Findings\n", "> ⚠️ **Conflict Risk**: Shared files changed; coordinate with related work.\n\n### Findings\n");
 await processReview("pr");
 assert.equal((archived.at(-1)!.coverage as ReviewCoverage).assessment?.state, "completed");
