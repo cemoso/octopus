@@ -415,5 +415,10 @@ for (const stage of ["summary-send", "summary-timeout", "check-send", "gitlab-au
   assert.ok(["failure", "failed"].includes(checkConclusions.at(-1)!), stage);
   assert.ok(!outcomeEvents.some(event => event.type === "review-completed" || event.status === "completed"), stage);
   assert.ok(outcomeEvents.some(event => event.type === "review-failed"), stage);
+  if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/publication-${stage}.json`, JSON.stringify({ archived: archived.slice(before), publishedComment: summaries.at(-1), finalCheck: checkConclusions.at(-1), usageRecorded: usageCount - priorUsage, events: outcomeEvents }, null, 2));
+    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/publication-${stage}.html`, '<!doctype html><meta charset="utf-8"><title>Synthetic publication expiry</title>' + Bun.markdown.html(summaries.at(-1)!));
+  }
+
 }
 console.log("PASS after-save publication expiry and unrelated transport controls");

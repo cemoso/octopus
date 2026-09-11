@@ -5,7 +5,7 @@
 // 350k covers moderately large inputs that exceeded the former 300k ceiling.
 // RAG, rulepacks and model output also consume context; characters are not a
 // token guarantee. Env-tunable (MAX_DIFF_CHARS) for operator cost/context limits.
-// The coverage manifest keeps oversized reviews explicitly incomplete.
+// Default-overflow eligibility lives in review-capacity.ts; explicit caps never opt in.
 
 export function parseDiffCharCap(raw: string | undefined): { value: number; source: "default" | "explicit" | "invalid" } {
   const n = Number(raw);

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Eligible oversized reviews can supply the complete diff when the selected model's measured input, output, cost and execution limits allow it. Explicit input limits remain in effect; counting alone never produces a score.
-- Operators: the default-overflow path uses the existing direct Anthropic Fable 5.1 route, a frozen counted request and fresh revision, billing and credential checks. Admission receipts distinguish refusals before generation from attempted requests. Expired processing cannot complete a passing review; saved assessment history remains immutable. The conservative $15 primary estimate excludes other workflow calls and is not an invoice cap. No database migration is required.
+- Operators: see [measured complete review admission](docs/measured-review-capacity.md) for eligibility, limits, billing attribution and expiry handling. No database migration is required.
 
 ## [1.0.150] - 2026-09-11
 

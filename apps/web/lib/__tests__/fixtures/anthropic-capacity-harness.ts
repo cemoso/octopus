@@ -140,6 +140,10 @@ async function refusal(reason: CapacityRefusalReason, edit?: (params: AiCreatePa
   assert.equal(saved?.coverage.complete, false);
   assert.ok(!JSON.stringify(saved).includes("private provider error"));
   assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, "failure");
+  if (process.env.REVIEW_TEST_EVIDENCE_DIR && reason === "cost-limit") {
+    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/capacity-refusal.json`, JSON.stringify({ archived: saved, check: reviewCheckResult(p.coverage, false, 0) }, null, 2));
+    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/capacity-refusal.html`, '<!doctype html><meta charset="utf-8"><title>Synthetic capacity refusal</title>' + Bun.markdown.html(body));
+  }
 }
 
 reset();
@@ -166,6 +170,13 @@ assert.equal(receipt.estimatedPrimaryUsd, 11.76);
 assert.equal(receipt.count?.requestId, "req_synthetic_count");
 assert.ok(Object.isFrozen(generationBody)); assert.ok(Object.isFrozen(generationBody!.messages));
 assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, "success");
+if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
+  const body = applyReviewCoverage(response.text, p.coverage, "synthetic-admitted-attempt");
+  await saveReviewAttempt("synthetic-admitted-attempt", "synthetic-pr", p.coverage, body);
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/capacity-admitted.json`, JSON.stringify({ archived: saved, check: reviewCheckResult(p.coverage, false, 0) }, null, 2));
+  await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/capacity-admitted.html`, '<!doctype html><meta charset="utf-8"><title>Synthetic admitted review</title>' + Bun.markdown.html(body));
+}
+
 assert.equal(await getOrgSpendLimitStatus("synthetic", "repo", { model: policy.model, provider: "anthropic" }).then(s => s.blocked), false);
 org = { ...org, anthropicApiKey: "" };
 assert.equal(await getOrgSpendLimitStatus("synthetic", "repo", { model: policy.model, provider: "anthropic" }).then(s => s.blocked), true);
