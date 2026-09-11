@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.141] - 2026-09-11
+
+### Fixed
+- Large pull requests now retain a complete changed-file inventory, prioritize source files, and explicitly report omitted or partial coverage. Incomplete coverage or unfinished model responses no longer receive a passing overall review score.
+- Review reports preserve findings and revision details through formatting and comment-size limits. Older reviews and delayed retries cannot replace a newer review result.
+
+### Added
+- Authenticated, organization-scoped review-attempt downloads retain immutable coverage and assessment evidence for troubleshooting.
+
 ## [1.0.140] - 2026-09-09
 
 ### Fixed
