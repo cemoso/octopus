@@ -29,10 +29,32 @@ export function validReviewResponse(text: string): boolean {
   const overall = score.split("\n").filter(line => /Overall/i.test(line));
   if (overall.length !== 1 || !/^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/.test(overall[0])) return false;
   const matches = [...text.matchAll(/<!-- OCTOPUS_FINDINGS_START -->\s*([\s\S]*?)\s*<!-- OCTOPUS_FINDINGS_END -->/g)];
-  if (matches.length !== 1) return false;
+  if (matches.length !== 1
+    || text.split("<!-- OCTOPUS_FINDINGS_START -->").length !== 2
+    || text.split("<!-- OCTOPUS_FINDINGS_END -->").length !== 2) return false;
   try {
-    const findings: unknown = JSON.parse(matches[0][1]);
-    return Array.isArray(findings) && (findings.length === 0 || parseFindingsFromJson(text)?.length === findings.length);
+    const block = matches[0][1].trim();
+    const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/.exec(block);
+    const findings: unknown = JSON.parse(fenced ? fenced[1] : block);
+    if (!Array.isArray(findings)
+      || (findings.length > 0 && parseFindingsFromJson(text)?.length !== findings.length)) return false;
+    const severities = ["🔴", "🟠", "🟡", "🔵", "💡"];
+    if (findings.some(finding => !severities.includes(finding.severity)
+      || !Number.isInteger(finding.startLine) || finding.startLine < 1)) return false;
+    const summaries = [...text.matchAll(/^### Findings Summary[ \t]*\r?\n([\s\S]*?)(?=^#{1,6} |<!-- OCTOPUS_FINDINGS_START -->|(?![\s\S]))/gm)];
+    if (summaries.length !== 1) return false;
+    const summary = summaries[0][1].trim();
+    if (summary === "No issues found.") return findings.length === 0;
+    const counts = new Map<string, number>();
+    for (const line of summary.split("\n").map(line => line.trim()).filter(Boolean)) {
+      if (/^\|\s*Severity\s*\|\s*Count\s*\|$/.test(line)
+        || /^\|[ :|-]+\|$/.test(line)) continue;
+      const row = /^\|\s*(🔴|🟠|🟡|🔵|💡)[^|]*\|\s*(\d+)\s*\|$/.exec(line);
+      if (!row || counts.has(row[1]) || !Number.isSafeInteger(Number(row[2]))) return false;
+      counts.set(row[1], Number(row[2]));
+    }
+    return counts.size > 0 && severities.every(severity =>
+      (counts.get(severity) ?? 0) === findings.filter(finding => finding.severity === severity).length);
   } catch { return false; }
 }
 

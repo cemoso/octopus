@@ -2419,6 +2419,8 @@ Rules:
 
     // Keep an immutable final result before exposing completion. Retries update
     // the current PR view, but cannot erase this attempt's coverage and body.
+    effectiveReviewBody = normalizeLastReviewedCommit(effectiveReviewBody, coverage.headSha);
+    mainCommentBody = normalizeLastReviewedCommit(mainCommentBody, coverage.headSha);
     const promoted = await saveReviewAttempt(attemptId, pr.id, coverage, effectiveReviewBody, mergedIssues);
     attemptSaved = true;
 

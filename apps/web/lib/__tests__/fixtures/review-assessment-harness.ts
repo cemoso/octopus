@@ -35,6 +35,16 @@ const { executeCoveredReview, recordNoModelAssessment } = await import("../../re
 const { prepareReviewInput, applyReviewCoverage, reviewCheckResult, sha256 } = await import("../../review-coverage");
 const { createCoveredReviewRequest } = await import("../../review-request");
 const { saveReviewAttempt } = await import("../../review-attempt");
+const { normalizeLastReviewedCommit, stripDetailedFindings, reconcileScoreTable } = await import("../../review-helpers");
+const { parseFindingsFromJson } = await import("../../review-dedup");
+const { updatePullRequestComment } = await import("../../github");
+let published: { body: string };
+globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+  assert.equal(String(url), "https://api.github.com/repos/fixture/review/issues/comments/123");
+  assert.equal(init?.method, "PATCH");
+  published = JSON.parse(String(init?.body));
+  return Response.json({ id: 123 });
+}) as typeof fetch;
 const valid = `## 🐙 Octopus Review
 
 ### Summary
@@ -50,6 +60,9 @@ The changed validator is consistent with its documented contract.
 | Consistency | 5/5 | Consistent |
 | **Overall** | **4/5** | Lowest category |
 
+### Findings Summary
+No issues found.
+
 ### Findings
 <!-- OCTOPUS_FINDINGS_START -->
 []
@@ -57,6 +70,9 @@ The changed validator is consistent with its documented contract.
 
 Last reviewed commit: ${"a".repeat(40)}
 `;
+const finding = { severity: "🔴", title: "Missing validation", filePath: "src/validator.ts", startLine: 1, description: "The value needs validation." };
+const withFinding = valid.replace("No issues found.", "| Severity | Count |\n| --- | --- |\n| 🔴 Critical | 1 |").replace("[]", JSON.stringify([finding]));
+const fenced = (text: string) => text.replace(/(<!-- OCTOPUS_FINDINGS_START -->\n)([\s\S]*?)(\n<!-- OCTOPUS_FINDINGS_END -->)/, '$1```json\n$2\n```$3');
 function plan() {
   const result = prepareReviewInput({ provider: "github", headSha: "a".repeat(40), baseSha: "b".repeat(40), inventoryComplete: true, expectedFiles: 1, limitations: [], files: [{ path: "src/validator.ts", change: "added", patch: "@@ -0,0 +1 @@\n+export const valid = true;\n", additions: 1, deletions: 0 }] }, { maxChars: 300000 });
   result.coverage.reviewRequestVersion = 1;
@@ -64,7 +80,22 @@ function plan() {
 }
 const requestFor = (p: ReturnType<typeof plan>, model = "gpt-test"): AiCreateParams => createCoveredReviewRequest({ model, system: "Trusted review template", number: 1, title: "Validators", author: "fixture", diff: p.diff, coverage: p.coverage, comment: "@octopus context", repoConfig: "" });
 for (const [name, text, finish, complete] of [
-  ["valid", valid, "stop", true], ["empty", "", "stop", false],
+  ["valid", valid, "stop", true],
+  ["fenced-empty", fenced(valid), "stop", true],
+  ["duplicate-marker", valid + "\n<!-- OCTOPUS_FINDINGS_END -->", "stop", false],
+  ["fenced-finding", fenced(withFinding), "stop", true],
+  ["plain-finding", withFinding, "stop", true],
+  ["summary-missing-finding", withFinding.replace(JSON.stringify([finding]), "[]"), "stop", false],
+  ["summary-wrong-severity", withFinding.replace("🔴 Critical", "🟠 High"), "stop", false],
+  ["summary-extra-finding", valid.replace("[]", JSON.stringify([finding])), "stop", false],
+  ["summary-duplicate-count", withFinding.replace("| 🔴 Critical | 1 |", "| 🔴 Critical | 1 |\n| 🔴 Critical | 1 |"), "stop", false],
+  ["fenced-trailing-prose", fenced(valid).replace("\n```\n<!--", "\n```\nextra prose\n<!--"), "stop", false],
+  ["fenced-broken", fenced(valid).replace("\n```\n<!--", "\n<!--"), "stop", false],
+  ["plain-surrounding-prose", valid.replace("[]", "prose [] prose"), "stop", false],
+  ["missing-head", valid.replace(/Last reviewed commit:[^\n]*/, ""), "stop", true],
+  ["duplicate-head", valid + "\nLast reviewed commit: wrong\n", "stop", true],
+  ["wrong-head", valid.replace("Last reviewed commit: " + "a".repeat(40), "Last reviewed commit: " + "c".repeat(40)), "stop", true],
+  ["empty", "", "stop", false],
   ["malformed", "Everything is good. Overall 5/5", "stop", false],
   ["invalid-json", valid.replace("[]", "[null]"), "stop", false],
   ["truncated", valid, "length", false], ["unknown", valid, null, false],
@@ -76,19 +107,39 @@ for (const [name, text, finish, complete] of [
   assert.equal(p.coverage.complete, complete, name);
   assert.equal(p.coverage.assessment?.responseSha256, sha256(text));
   assert.equal(p.coverage.assessment?.requests[0].sha256, createHash("sha256").update(JSON.stringify(received)).digest("hex"));
-  const report = applyReviewCoverage(text, p.coverage, name);
+  const findings = parseFindingsFromJson(text) ?? [];
+  const flags = { hasCritical: findings.some(f => f.severity === "🔴"), hasHigh: findings.some(f => f.severity === "🟠"), hasMedium: findings.some(f => f.severity === "🟡") };
+  let report = applyReviewCoverage(normalizeLastReviewedCommit(text, p.coverage.headSha), p.coverage, name);
+  let comment = stripDetailedFindings(report);
+  if (p.coverage.complete) {
+    report = reconcileScoreTable(report, flags);
+    comment = reconcileScoreTable(comment, flags);
+  }
+  report = normalizeLastReviewedCommit(report, p.coverage.headSha);
+  comment = normalizeLastReviewedCommit(comment, p.coverage.headSha);
   await saveReviewAttempt(name, "pr", p.coverage, report);
   assert.equal((current.reviewCoverage as typeof p.coverage).complete, complete);
-  assert.equal(reviewCheckResult(p.coverage, false, 0).conclusion, complete ? "success" : "failure");
-  if (!complete) assert.ok(!/Overall[^\n]*[1-5]\/5/.test(report), name);
-  else {
-    assert.equal((report.match(/^## 🐙 Octopus Review$/gm) ?? []).length, 1);
-    assert.equal((report.match(/^### Score$/gm) ?? []).length, 1);
-    assert.equal((report.match(/\| \*\*Overall\*\* \| \*\*4\/5\*\*/g) ?? []).length, 1);
+  await updatePullRequestComment(1, "fixture", "review", 123, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${comment}`, "fixture-token");
+  const nativeCheck = { id: 456, head_sha: p.coverage.headSha, app: { slug: "octopus-review" }, status: "completed", ...reviewCheckResult(p.coverage, flags.hasCritical, findings.length) };
+  assert.equal(nativeCheck.conclusion, complete && !flags.hasCritical ? "success" : "failure");
+  assert.equal(rows.get(name)?.reviewBody, report);
+  assert.equal(published!.body, `Review attempt: ${name}. Head: ${p.coverage.headSha}.\n\n${comment}`);
+  assert.ok(!published!.body.includes("OCTOPUS_FINDINGS_"));
+  for (const body of [report, published!.body]) {
+    assert.equal((body.match(/Last reviewed commit:/g) ?? []).length, 1);
+    assert.ok(body.endsWith(`Last reviewed commit: ${p.coverage.headSha}`));
+  }
+  if (!complete) {
+    assert.ok(!/Overall[^\n]*[1-5]\/5/.test(report), name);
+    assert.ok(!/Overall[^\n]*[1-5]\/5/.test(published!.body), name);
+  } else {
+    assert.equal((published!.body.match(/^## 🐙 Octopus Review$/gm) ?? []).length, 1);
+    assert.equal((published!.body.match(/^### Score$/gm) ?? []).length, 1);
+    assert.equal((published!.body.match(/\| \*\*Overall\*\* \| \*\*4\/5\*\*/g) ?? []).length, 1);
     assert.equal((report.match(/Last reviewed commit: a{40}/g) ?? []).length, 1);
   }
   if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
-    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/assessment-${name}.json`, JSON.stringify({ request: received, coverage: p.coverage, report, current, nativeCheck: reviewCheckResult(p.coverage, false, 0) }, null, 2));
+    await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/assessment-${name}.json`, JSON.stringify({ request: received, coverage: p.coverage, report, publishedComment: published!.body, current, nativeCheck }, null, 2));
   }
   assert.equal(await saveReviewAttempt(name, "pr", p.coverage, report), false);
   const changed = structuredClone(p.coverage);

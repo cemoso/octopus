@@ -160,12 +160,12 @@ export const MIN_SCORE_WITHOUT_BLOCKING_FINDINGS = 4;
  * short-SHA style of the example, or paraphrases it. Downstream consumers (merge
  * gates that verify a review belongs to an exact commit) need the full
  * 40-character SHA, so the value is rewritten from the pull request's recorded
- * head rather than trusted from the model. Bodies without the line, or reviews
- * without a known head, are returned unchanged.
+ * head rather than trusted from the model.
  */
 export function normalizeLastReviewedCommit(reviewBody: string, headSha: string | null | undefined): string {
   if (!headSha || !/^[0-9a-f]{40}$/i.test(headSha)) return reviewBody;
-  return reviewBody.replace(/^([ \t]*)Last reviewed commit:[^\n]*$/m, `$1Last reviewed commit: ${headSha}`);
+  const body = reviewBody.replace(/^[ \t]*(?:\*\*)?Last reviewed commit:(?:\*\*)?[^\n]*$/gm, "").trimEnd();
+  return `${body}${body ? "\n\n" : ""}Last reviewed commit: ${headSha}`;
 }
 
 export function reconcileScoreTable(
