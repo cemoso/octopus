@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.144] - 2026-09-11
+
+### Fixed
+- GitHub reviews can assess accompanying text when an added or modified PNG has a validated provider binary declaration. Coverage lists those images as excluded and not reviewed; missing source patches and incomplete model assessments still block a complete result.
+
 ## [1.0.143] - 2026-09-11
 
 ### Fixed

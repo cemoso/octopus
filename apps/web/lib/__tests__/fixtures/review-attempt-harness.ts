@@ -468,6 +468,30 @@ assert.deepEqual(current, sameHeadRequested);
 assert.equal((rows.get(lateSameHeadJob.attemptId)?.coverage as { reviewRequestVersion: number }).reviewRequestVersion, versionB);
 console.log("PASS persisted same-head re-request rejects prior-version worker promotion");
 
+const { fetchGitHubReviewInput } = await import("../../github-review-input");
+const binaryBlob = "c".repeat(40), binaryBase = "2".repeat(40);
+const binaryInput = await fetchGitHubReviewInput({
+  expectedHead: currentHead, maxPatchChars: 1000,
+  fetchDiff: async () => "diff --git a/docs/example.png b/docs/example.png\nnew file mode 100644\nindex 0000000..ccccccc\nBinary files /dev/null and b/docs/example.png differ\n",
+  readJson: async suffix => suffix
+    ? [{ filename: "docs/example.png", status: "added", additions: 0, deletions: 0, sha: binaryBlob }]
+    : { head: { sha: currentHead }, base: { sha: binaryBase }, changed_files: 1 },
+});
+const binaryCoverage = prepareReviewInput(binaryInput.input, { maxChars: 1000 }).coverage;
+binaryCoverage.reviewRequestVersion = currentVersion;
+assert.equal(binaryCoverage.files[0].state, "excluded");
+assert.ok(binaryCoverage.files[0].binaryEvidence);
+const binaryAttempt = "bacdef01-abcd-4bcd-8bcd-abcdef012345";
+await saveReviewAttempt(binaryAttempt, "pr", binaryCoverage, "Binary asset not reviewed");
+const binaryDownload = await GET(new NextRequest("https://example.test/api/review-attempts/" + binaryAttempt, { headers: { authorization: "Bearer owner" } }), { params: Promise.resolve({ id: binaryAttempt }) });
+assert.equal(binaryDownload.status, 200);
+assert.deepEqual((await binaryDownload.json()).coverage, JSON.parse(JSON.stringify(binaryCoverage)));
+const alteredBinaryCoverage = structuredClone(binaryCoverage);
+alteredBinaryCoverage.files[0].binaryEvidence!.rawSectionSha256 = "0".repeat(64);
+await assert.rejects(saveReviewAttempt(binaryAttempt, "pr", alteredBinaryCoverage, "Binary asset not reviewed"), /identity conflict/);
+assert.deepEqual(rows.get(binaryAttempt)?.coverage, JSON.parse(JSON.stringify(binaryCoverage)));
+console.log("PASS binary evidence survives immutable archive/download and cannot be overwritten");
+
 if (process.env.REVIEW_TEST_EVIDENCE_DIR) {
   const download = await request({ authorization: "Bearer owner" });
   await Bun.write(`${process.env.REVIEW_TEST_EVIDENCE_DIR}/attempt-contract.json`, JSON.stringify({

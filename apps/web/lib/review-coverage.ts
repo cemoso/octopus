@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Ignore } from "ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
+import { validateBinaryPngEvidence, type BinaryPngEvidence } from "@/lib/review-binary-assets";
 
 const defaultGenerated = buildGeneratedMatcher();
 
@@ -13,6 +14,7 @@ export type ReviewFileInput = {
   deletions?: number;
   blobSha?: string;
   unavailable?: string;
+  binaryEvidence?: BinaryPngEvidence;
 };
 
 export type ReviewInput = {
@@ -30,6 +32,7 @@ export type FileCoverage = {
   previousPath?: string;
   change: string;
   blobSha?: string;
+  binaryEvidence?: BinaryPngEvidence;
   state: "supplied" | "partial" | "omitted" | "excluded" | "unavailable";
   reason?: string;
   patchSha256: string | null;
@@ -134,12 +137,19 @@ export function prepareReviewInput(input: ReviewInput, options: { maxChars: numb
     seen.add(file.path);
     const record: FileCoverage = { path: file.path, previousPath: file.previousPath, change: file.change, blobSha: file.blobSha, state: "omitted", reason: "Review input budget exhausted", patchSha256: file.patch === undefined ? null : sha256(file.patch), suppliedSha256: null, suppliedChars: 0, hunks: [] };
     coverage.files.push(record);
+    const binaryEvidence = validateBinaryPngEvidence(file, input, file.binaryEvidence);
+    if (binaryEvidence) record.binaryEvidence = binaryEvidence;
     if (options.ignored?.ignores(file.path) || (options.generated?.ignores(file.path) && (!isProtectedReviewSource(file.path) || defaultGenerated.ignores(file.path)))) {
       record.state = "excluded";
       record.reason = options.ignored?.ignores(file.path) ? "Repository .octopusignore policy" : "Generated-file policy";
       continue;
     }
     const fileHeader = header(file);
+    if (fileHeader && binaryEvidence) {
+      record.state = "excluded";
+      record.reason = `Declared binary PNG policy (${binaryEvidence.policy}); image content not reviewed`;
+      continue;
+    }
     if (!fileHeader || file.patch === undefined || file.unavailable) {
       record.state = "unavailable";
       record.reason = !fileHeader ? "Path cannot be mapped safely" : file.unavailable ?? "Provider patch missing (binary or too large)";
