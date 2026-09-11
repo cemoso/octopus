@@ -1,6 +1,6 @@
 {
   "name": "@octopus/web",
-  "version": "1.0.154",
+  "version": "1.0.155",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -46,7 +46,7 @@
     "pdfkit": "^0.19.1",
     "pg-boss": "^12.15.0",
     "radix-ui": "^1.4.3",
-    "react": "19.2.5",
+    "react": "19.2.8",
     "react-dom": "19.2.8",
     "react-email": "^6.6.5",
     "react-force-graph-2d": "^1.29.1",

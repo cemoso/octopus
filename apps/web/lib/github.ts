@@ -633,7 +633,7 @@ function compactCoverageReference(body: string): string {
   const preamble = body.slice(header[0].length, header[0].length + 2048);
   const reference = /^(?:Attempt: ([A-Za-z0-9_-]+) (https?:\/\/[^\s<>()`]+)\.\r?\n|Attempt: \[`([A-Za-z0-9_-]+)`\]\((https?:\/\/[^\s<>()`]+)\)\. )Head: `(?:[0-9a-f]{40}|unknown)`\. Base: `(?:[0-9a-f]{40}|unknown)`\.(?=\r?\n|$)/i.exec(preamble);
   if (!reference) {
-    const compact = /^(?:\*\*Overall: not assessed[^\n]+\n\n)?(?:\[Full coverage and review record\]\((https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+)\)|Full coverage and review record: (https?:\/\/[^\s<>()`]+\/api\/review-attempts\/[A-Za-z0-9_-]+)) · Octopus sign-in required\./.exec(preamble);
+    const compact = /^(?:\*\*Overall: not assessed[^\n]+\n\n)?(?:\[Full coverage and review record\]\((https?:\/\/[^\s()]+\/api\/review-attempts\/[A-Za-z0-9_-]+)\)|Full coverage and review record: (https?:\/\/[^\s<>()`]+\/api\/review-attempts\/[A-Za-z0-9_-]+))(?: · Octopus sign-in required\.)?(?=\r?\n|$)/.exec(preamble);
     return compact ? `**${header[1]}**\n\n${compact[0]}` : "";
   }
   const attemptId = reference[1] ?? reference[3];
@@ -665,7 +665,8 @@ export function truncateForGithubComment(body: string): string {
   if (heading && footer && score) {
     const prefix = /^Review attempt:[^\n]*\n\n/.exec(body)?.[0] ?? "";
     const attemptReference = compactCoverageReference(body);
-    const history = /^### Review history \(latest [1-5]\)\n\n(?:- (?:[0-9a-f]{7}|Unknown head) · [^\n]{1,30} · https?:\/\/[^\s<>()`]+\/api\/review-attempts\/[A-Za-z0-9_-]+\n?){1,5}\n\nReview records require Octopus organization access\./m.exec(body)?.[0] ?? "";
+    const history = /^Review history: https?:\/\/[^\s<>()`]+\/review-attempts\/[A-Za-z0-9_-]+[ \t]*$/m.exec(body)?.[0]
+      ?? /^### Review history \(latest [1-5]\)\n\n(?:- (?:[0-9a-f]{7}|Unknown head) · [^\n]{1,30} · https?:\/\/[^\s<>()`]+\/api\/review-attempts\/[A-Za-z0-9_-]+\n?){1,5}\n\nReview records require Octopus organization access\./m.exec(body)?.[0] ?? "";
     const table = score[1].split("\n").filter(line => {
       const category = line.split("|")[1]?.trim().replaceAll("**", "");
       return category && ["Category", "Security", "Code Quality", "Performance", "Error Handling", "Consistency", "Overall"].includes(category);
@@ -720,7 +721,7 @@ export function compactReviewCoverageComment(body: string): string {
   const warning = /^\*\*Overall: not assessed[^\n]+/m.exec(coverage)?.[0];
   // Inventory rows and technical receipts stay in the archive, not the PR feed.
   return header[0] + (warning ? warning + "\n\n" : "")
-    + `Full coverage and review record: ${url} · Octopus sign-in required.\n`
+    + `Full coverage and review record: ${url}\n`
     + body.slice(end.index);
 }
 

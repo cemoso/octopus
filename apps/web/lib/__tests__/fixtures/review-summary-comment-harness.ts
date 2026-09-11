@@ -13,7 +13,7 @@ const tx = {
   $queryRaw: async (_sql: TemplateStringsArray, id: string) => { assert.equal(id, "pr"); await duringLock?.(); return exists ? [{ ...current }] : []; },
   reviewAttempt: { findMany: async (query: { where: { pullRequestId: string }; take: number; select: Record<string, boolean> }) => {
     assert.equal(query.where.pullRequestId, "pr");
-    assert.equal(query.take, 5);
+    assert.ok(query.take <= 10, "Publication must not load an unbounded history");
     assert.equal(query.select.reviewBody, undefined);
     return archived.map(({ id, headSha, createdAt }) => ({ id, headSha, createdAt }));
   } },
@@ -81,8 +81,7 @@ current = { ...current, headSha: nextHead, reviewRequestVersion: 2, status: "rev
 const newer = { ...target, headSha: nextHead, reviewRequestVersion: 2 };
 await publishReviewSummary({ ...newer, body: "Review in progress" });
 assert.equal(calls.at(-1)?.id, 100);
-assert.ok(calls.at(-1)?.body.includes(`/api/review-attempts/${archived[0].id}`));
-assert.ok(calls.at(-1)?.body.includes("Review history"));
+assert.equal(calls.at(-1)?.body, `Review in progress\n\nReview history: https://octopus-review.ai/review-attempts/${archived[0].id}`);
 assert.deepEqual(archived, before);
 const count = calls.length;
 assert.equal(await publishReviewSummary(target), null);

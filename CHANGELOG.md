@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Native CLI 0.5.1 finishes writing onboarding JSON before it exits, so coding agents receive complete onboarding results when capturing output through a pipe.
 
+## [1.0.155] - 2026-09-11
+
+### Fixed
+- GitHub summaries now offer one Review history link to a readable page with saved results, dates and commits. JSON is an explicit download; existing record links open the readable page in browsers.
+- Removed blanket sign-in and organisation-access notices from summary comments. Actual access checks remain on the review page and exports.
+- Operators: immutable records, coverage, scores and tenant boundaries are preserved. React is aligned with the existing React DOM patch version for server rendering. No database migration is required.
+
 ## [1.0.154] - 2026-09-11
 
 ### Fixed
