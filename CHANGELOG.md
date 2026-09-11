@@ -10,8 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Clarified where review explanations belong so re-review commentary does not follow the findings count table without a section heading. Invalid or inconsistent assessments still receive no overall score.
 
-## [Unreleased]
-
 ## [1.0.151] - 2026-09-11
 
 ### Added
