@@ -65,7 +65,7 @@ export async function doctorCommand(_argv: string[]): Promise<number> {
       `${sanitizeTerminal(creds.orgName)} (${sanitizeTerminal(creds.orgSlug)}) on ${sanitizeTerminal(creds.baseUrl)}`,
     );
 
-    // Live token check — hits /api/cli/me with the saved bearer.
+    // Check the endpoint for the credential's scope without sending user secrets to org APIs.
     const res = await getJson(`${creds.baseUrl}${creds.kind === "user" ? "/api/cli/auth/user" : "/api/cli/me"}`, {
       headers: { authorization: `Bearer ${creds.token}` },
     });

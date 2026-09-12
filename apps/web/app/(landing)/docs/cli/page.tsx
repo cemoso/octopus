@@ -97,7 +97,7 @@ octp --org another-org repo list`}</CodeBlock>
         <CodeBlock>octp login --token oct_your_token_here</CodeBlock>
         <Paragraph>
           Need a token for CI/CD or a script? Use <Mono>setup-token</Mono>. It
-          runs the same browser approval flow but prints the token to stdout
+          uses organisation-scoped browser approval and prints the token to stdout
           (progress messages go to stderr) so it can be captured directly:
         </Paragraph>
         <CodeBlock>{`# Print token to stdout

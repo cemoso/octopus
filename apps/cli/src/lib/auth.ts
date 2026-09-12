@@ -3,12 +3,9 @@ import { postJson } from "./api.js";
 import type { Credentials } from "./credentials.js";
 
 /**
- * Headless auth for the operational commands. Extracted so `login`,
- * `setup-token`, and the onboarding wizard share one device-flow
- * implementation. Endpoints:
- *   POST /api/cli/auth/device        → { deviceCode, expiresAt }
- *   GET  /api/cli/auth/poll?...      → { status, token, organization, user }
- *   POST /api/cli/auth/verify        → { user, organization }   (token paste)
+ * Shared device flow: login opts into user sessions; setup-token and the
+ * wizard retain organisation approval. Do not silently downgrade a requested
+ * user session when talking to an older server.
  */
 
 const MAX_POLL_ATTEMPTS = 450;

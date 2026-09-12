@@ -106,18 +106,34 @@ octp --org another-org repo list
 ```
 
 `--org` accepts an organisation slug or ID for that command only. Without it,
-Octopus uses a unique repository match, then a unique GitHub owner match. If the
-choice remains ambiguous it returns `organization_required`, the available
-`organizations`, and exit 3 before starting work. The agent must ask which one to
-use and retry with `--org`. A single organisation with no GitHub installation can
-start its first installation. A new user with no memberships must create or join
-an organisation first.
+Octopus uses a unique repository match, then a unique GitHub owner match among
+active, non-dismissed repositories in your current organisations. An explicit
+repository target takes priority over the working directory. If that target
+cannot be resolved uniquely (including a short repository name), choose with
+`--org`; the CLI only consults the current Git remote when no target was supplied.
+Agent onboarding can select a single organisation with no GitHub installation
+to start its first installation.
+
+When a choice is needed, agent onboarding returns `organization_required` and
+the available `organizations` in JSON. Other organisation-scoped commands print
+the choices to stderr. Both exit 3 before starting work. Ask which organisation
+to use and retry with `--org`. A new user with no memberships must create or join
+an organisation in Octopus first.
+
+Local `agent watch` operations remain offline and use `--account` for their
+profile; they do not accept `--org`. Use `--org` with `agent serve` when selecting
+the organisation for an authenticated bridge.
 
 `--account` switches saved user profiles; `--org` switches organisations within
 one user's current memberships. Existing organisation tokens continue to work
 for their original organisation. Run `octp login` again to replace one with a
 user session and enable switching. The interactive wizard and `setup-token`
 retain their organisation-scoped flow for compatibility and CI credentials.
+User login saves only the user secret; organisation credentials stay local to
+the command. Each organisation API authentication checks the parent session's
+expiry and revocation, current membership, and account standing. These credentials
+retain existing organisation-token permissions; the user secret itself cannot
+authenticate an organisation API request.
 
 For repository access, the command returns the signed GitHub App installation
 link or the existing installation's repository settings link. Once access is
