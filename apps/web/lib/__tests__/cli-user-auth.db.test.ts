@@ -108,6 +108,29 @@ suite("CLI user sessions with PostgreSQL", () => {
     expect(await apiAuth.authenticateApiToken(request("/api/cli/me", other.token))).toBeNull();
     expect((await exchange(raw)).status).toBe(401);
   });
+  it("revokes by possession during a ban or after expiry without restoring access", async () => {
+    for (const state of ["banned", "expired"]) {
+      const { raw, row } = await session();
+      const { token } = await (await exchange(raw)).json();
+      try {
+        if (state === "banned") await prisma.user.update({ where: { id: userId }, data: { bannedAt: new Date() } });
+        else await prisma.cliUserToken.update({ where: { id: row.id }, data: { expiresAt: new Date(0) } });
+        expect((await userRoute.GET(request("/api/cli/auth/user", raw))).status).toBe(401);
+        expect((await exchange(raw)).status).toBe(401);
+        expect((await userRoute.DELETE(request("/api/cli/auth/user", raw))).status).toBe(200);
+        expect((await prisma.cliUserToken.findUniqueOrThrow({ where: { id: row.id } })).deletedAt).not.toBeNull();
+      } finally {
+        await prisma.user.update({ where: { id: userId }, data: { bannedAt: null } });
+      }
+      expect((await userRoute.GET(request("/api/cli/auth/user", raw))).status).toBe(401);
+      expect((await exchange(raw)).status).toBe(401);
+      expect(await apiAuth.authenticateApiToken(request("/api/cli/me", token))).toBeNull();
+      expect((await userRoute.DELETE(request("/api/cli/auth/user", raw))).status).toBe(200);
+    }
+    for (const raw of [undefined, "oct_invalid", userAuth.generateCliUserToken()]) {
+      expect((await userRoute.DELETE(request("/api/cli/auth/user", raw))).status).toBe(401);
+    }
+  });
   it("keeps legacy approvals organisation-scoped and refuses expired approval", async () => {
     const deviceCode = randomUUID().replaceAll("-", "") + "87654321";
     const device = await prisma.cliAuthSession.create({ data: { deviceCode, expiresAt: new Date(Date.now() + 60_000), userEmail: `${userId}@example.test` } });

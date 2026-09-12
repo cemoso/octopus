@@ -21,7 +21,7 @@ import { updateCommand } from "./commands/update.js";
 import { chatCommand } from "./commands/chat.js";
 import { orgCommand } from "./commands/org.js";
 import { setOrganizationOverride } from "./lib/organizations.js";
-import { ORGANIZATION_COMMANDS, prepareCommandOrganization } from "./lib/command-organization.js";
+import { isOrganizationCommand, prepareCommandOrganization } from "./lib/command-organization.js";
 import { accountCommand } from "./commands/account.js";
 import { ensureProfilesMigrated, isValidProfileName, ensureProfile, setActiveProfile } from "./lib/profile.js";
 import { setActiveProfileOverride } from "./lib/paths.js";
@@ -146,8 +146,8 @@ async function main(rawArgv: string[]): Promise<number> {
     if (orgFlag) { setOrganizationOverride(orgFlag); argv = stripValueFlag(argv, "--org"); }
   }
   const first = argv[0];
-  if (orgFlag && !ORGANIZATION_COMMANDS.includes(first) && !["onboard", "whoami", "doctor"].includes(first)) {
-    console.error("Use --org with a repository command, onboard, whoami, or doctor after signing in.");
+  if (orgFlag && !isOrganizationCommand(argv) && !["onboard", "whoami", "doctor"].includes(first)) {
+    console.error("Use --org with a repository command, agent serve, onboard, whoami, or doctor after signing in. Local agent watch operations use --account.");
     return 2;
   }
 

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,18 +42,18 @@ describe("compiled multi-organisation CLI", () => {
     } finally { server.stop(true); await rm(home, { recursive: true, force: true }); }
   }, 15_000);
   it("switches one user credential by repository or --org, and blocks ambiguity before work", async () => {
-    const calls: { path: string; method: string; auth: string | null }[] = [];
+    const calls: { path: string; method: string; auth: string | null; repo: string | null }[] = [];
     let revoked = false;
     let connectedRepository = "";
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const url = new URL(request.url);
       const auth = request.headers.get("authorization");
-      calls.push({ path: url.pathname, method: request.method, auth });
+      calls.push({ path: url.pathname, method: request.method, auth, repo: url.searchParams.get("repo") });
       if (url.pathname === "/api/cli/organizations") {
         if (auth !== `Bearer ${userToken}` || revoked) return Response.json({ error: "Sign in again" }, { status: 401 });
         if (request.method === "GET") return Response.json({ organizations: ["alpha", "beta"].map((slug) => ({
           id: slug, slug, name: slug, hasInstallation: true,
-          matchesRepository: url.searchParams.get("repo") === `${slug}/app`, matchesOwner: false,
+          matchesRepository: url.searchParams.get("repo") === "shared/app" || url.searchParams.get("repo") === `${slug}/app`, matchesOwner: false,
         })) });
         const body = await request.json() as { organization: keyof typeof childTokens };
         const slug = body.organization;
@@ -100,6 +101,40 @@ describe("compiled multi-organisation CLI", () => {
         expect(JSON.parse(result.out)).toMatchObject({ state: "organization_required", organizations: [{ slug: "alpha" }, { slug: "beta" }] });
         expect(calls.every((call) => call.path === "/api/cli/organizations" && call.method === "GET")).toBe(true);
       }
+      for (const args of [["init", "--quiet"], ["remote", "add", "origin", "https://github.com/alpha/app.git"]]) {
+        expect(spawnSync("git", args, { cwd: home }).status).toBe(0);
+      }
+      for (const args of [
+        ["review", "https://github.com/shared/app/pull/12"],
+        ["review", "--format", "json", "https://github.com/shared/app/pull/12"],
+        ["review", "--pr", "https://github.com/shared/app/pull/12"],
+        ["analyze-deps", "https://github.com/shared/app"],
+        ["analyze-deps", "https://github.com/shared/app/tree/main"],
+      ]) {
+        calls.length = 0;
+        const ambiguous = await run(args);
+        expect(ambiguous.code).toBe(3);
+        expect(ambiguous.err).toContain("--org alpha");
+        expect(ambiguous.err).toContain("--org beta");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ method: "GET", repo: "shared/app" });
+        calls.length = 0;
+        await run(["--org", "beta", ...args]);
+        expect(calls.some((call) => call.method === "POST" && call.path === "/api/cli/organizations")).toBe(true);
+        expect(calls.some((call) => call.auth === `Bearer ${childTokens.beta}`)).toBe(true);
+      }
+      calls.length = 0;
+      await run(["review", "--since", "main", "--format", "json", "12"]);
+      expect(calls[0].repo).toBe("alpha/app");
+      for (const args of [["agent", "watch", "--list"], ["agent", "watch", "--remove"]]) {
+        calls.length = 0;
+        expect((await run(args)).code).toBe(0);
+        expect(calls).toHaveLength(0);
+        const invalid = await run(["--org", "alpha", ...args]);
+        expect(invalid.code).toBe(2);
+        expect(invalid.err).toContain("Local agent watch");
+        expect(calls).toHaveLength(0);
+      }
       revoked = true;
       calls.length = 0;
       const denied = await run(["--org", "alpha", "onboard", "--agent", "--json", "--repo", "alpha/app"]);
@@ -107,6 +142,10 @@ describe("compiled multi-organisation CLI", () => {
       expect(JSON.parse(denied.out).state).toBe("authentication_required");
       expect(calls).toHaveLength(1);
       expect(await readFile(join(home, "profiles", "default", "credentials"), "utf8")).toBe(credential);
+      server.stop(true);
+      expect((await run(["agent", "watch", "--list"])).code).toBe(0);
+      expect((await run(["agent", "watch", "--remove"])).code).toBe(0);
+
     } finally { server.stop(true); await rm(home, { recursive: true, force: true }); }
   }, 30_000);
 });

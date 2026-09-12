@@ -32,6 +32,7 @@ export type Credentials = {
  */
 let commandCredentials: Credentials | undefined;
 export function setCommandCredentials(value: Credentials): void { commandCredentials = value; }
+export function clearCommandCredentials(): void { commandCredentials = undefined; }
 
 export async function loadCredentials(): Promise<Credentials | null> {
   return commandCredentials ?? await loadStoredCredentials();
