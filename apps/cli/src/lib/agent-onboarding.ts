@@ -1,7 +1,7 @@
 import type { ApiResult } from "./api.js";
 
 export type OnboardingState =
-  | "authentication_required" | "connection_required" | "repository_dismissed"
+  | "organization_required" | "authentication_required" | "connection_required" | "repository_dismissed"
   | "indexing" | "analyzing" | "ready" | "failed" | "invalid_input";
 
 export interface AgentOnboardingResult {
@@ -10,6 +10,7 @@ export interface AgentOnboardingResult {
   account: string;
   repository: string;
   organization?: { id: string; name: string };
+  organizations?: Array<{ id: string; slug: string; name: string }>;
   message: string;
   completed: string[];
   nextAction?: { kind: "run_command" | "open_url" | "retry"; argv?: string[]; url?: string };
@@ -29,6 +30,7 @@ export interface OnboardingServices {
 }
 
 export interface OnboardingContext {
+  org?: string;
   account: string;
   repository: string;
   organization?: { id: string; name: string };
@@ -40,7 +42,7 @@ export function onboardingResult(context: OnboardingContext, state: OnboardingSt
     schemaVersion: 1, state, account: context.account, repository: context.repository,
     ...(context.organization ? { organization: context.organization } : {}),
     message, completed: [],
-    continueWith: ["octp", "--account", context.account, "onboard", "--agent", "--json", "--repo", context.repository],
+    continueWith: ["octp", "--account", context.account, ...(context.org ? ["--org", context.org] : []), "onboard", "--agent", "--json", "--repo", context.repository],
   };
 }
 

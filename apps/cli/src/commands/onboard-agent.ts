@@ -1,4 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { detectOnboardingRepository } from "../lib/git-repository.js";
+export { detectOnboardingRepository } from "../lib/git-repository.js";
+import { resolveOrganization, getOrganizationOverride } from "../lib/organizations.js";
 import { loadCredentials } from "../lib/credentials.js";
 import { loadConfig } from "../lib/config.js";
 import { getActiveProfileName } from "../lib/paths.js";
@@ -32,19 +34,6 @@ export function parseAgentOnboardingArgs(argv: string[]): { repo?: string; help?
   return { repo };
 }
 
-export function detectOnboardingRepository(runGit: (args: string[]) => string | null = (args) => {
-  const result = spawnSync("git", args, { encoding: "utf8", timeout: 5000 });
-  return result.status === 0 ? result.stdout.trim() : null;
-}): string {
-  const remotes = runGit(["remote"])?.split("\n").filter(Boolean) ?? [];
-  const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
-  if (!remote) throw new Error("No unambiguous git remote. Supply --repo owner/name for the intended GitHub repository.");
-  const url = runGit(["remote", "get-url", remote]);
-  // Accept github.com only; never print a raw remote URL that may contain credentials.
-  const match = url?.match(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i);
-  if (!match || [".", ".."].includes(match[1].split("/")[1])) throw new Error("Agent onboarding currently supports github.com remotes. Supply --repo owner/name only for a GitHub repository.");
-  return match[1];
-}
 
 export async function onboardAgentCommand(argv: string[]): Promise<number> {
   const context: OnboardingContext = { account: getActiveProfileName(), repository: "", baseUrl: "https://octopus-review.ai" };
@@ -61,12 +50,25 @@ export async function onboardAgentCommand(argv: string[]): Promise<number> {
     return 2;
   }
   try {
-    const creds = await loadCredentials();
+    let creds = await loadCredentials();
     const candidate = creds?.baseUrl ?? (await loadConfig()).selfHostedBaseUrl ?? context.baseUrl;
     const baseUrl = normalizeBaseUrl(candidate);
     if (!baseUrl || !isTransportSafe(baseUrl)) throw new Error("unsafe_server");
     context.baseUrl = baseUrl;
-    if (creds) context.organization = { id: creds.orgId, name: creds.orgName };
+    context.org = getOrganizationOverride();
+    if (creds) {
+      const resolved = await resolveOrganization(creds, context.org, context.repository);
+      if (!resolved.ok) {
+        const result = onboardingResult(context, resolved.state, resolved.message);
+        result.organizations = resolved.organizations;
+        if (resolved.state === "authentication_required") result.nextAction = { kind: "run_command", argv: ["octp", "--account", context.account, "login", "--no-open", "--api-url", baseUrl] };
+        await writeResult(result);
+        return onboardingExitCode(result);
+      }
+      creds = resolved.credentials;
+      context.organization = { id: creds.orgId, name: creds.orgName };
+      if (resolved.userSession) context.org = creds.orgSlug;
+    }
     const result = !creds ? (() => {
       const result = onboardingResult(context, "authentication_required", "Run login, show its approval URL to the user, wait for login to finish, then resume setup.");
       result.nextAction = { kind: "run_command" as const, argv: ["octp", "--account", context.account, "login", "--no-open", "--api-url", baseUrl] };

@@ -75,7 +75,7 @@ export default function SecurityOverviewPage() {
           <li><strong>Authentication</strong> — Better Auth with GitHub OAuth, Google OAuth, Microsoft / Entra ID OAuth, and magic-link email. Passwords are not used; we have no password store.</li>
           <li><strong>Session management</strong> — short-lived bearer tokens with refresh; sessions revocable from <code>/settings/sessions</code>.</li>
           <li><strong>Role-based access</strong> — per-organisation roles (owner / admin / member); the audit log records role transitions.</li>
-          <li><strong>CLI tokens</strong> — issued via the device-code flow, scoped to one organisation, revocable per-token.</li>
+          <li><strong>CLI tokens</strong> — see the <a href="https://github.com/octopusreview/octopus/blob/master/apps/cli/README.md#set-up-a-repository-with-your-ai" className="underline">CLI authentication contract</a> for user sessions, organisation-scoped credentials, and revocation.</li>
           <li><strong>Webhook secrets</strong> — set per-organisation; every inbound payload is verified via HMAC signature (GitHub, Bitbucket) or per-organisation hook-token comparison (GitLab).</li>
         </UL>
       </Section>

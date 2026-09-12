@@ -9,7 +9,7 @@ Read the project's Git remote to identify the repository. If it is ambiguous, as
 
 Install or update octp using the official instructions at https://octopus-review.ai/docs/cli (macOS/Linux: https://octopus-review.ai/install.sh; Windows: https://octopus-review.ai/install.ps1). Check octp --help, then run octp onboard --agent --json from this project.
 
-Follow the returned nextAction and continueWith instructions. If sign-in is required, run the supplied login command with --no-open, show me its approval URL, and keep the login process running while I approve. For GitHub App installation, organisation authorisation or repository access, give me the exact approval URL returned by octp. After approval, continue through the CLI.
+Follow the returned nextAction and continueWith instructions. If sign-in is required, run the supplied login command with --no-open, show me its approval URL, and keep the login process running while I approve. Login signs me in as a user without choosing an organisation. Let octp infer the organisation from the repository. If it returns organization_required, show me the available organisations and retry with --org <slug> after I choose; never guess. Use octp org list --json to inspect my memberships. For GitHub App installation, organisation authorisation or repository access, give me the exact approval URL returned by octp. After approval, continue through the CLI.
 
 Let octp connect this repository, start or join indexing and analysis, and check progress using retryAfterSeconds. Continue until it reports ready or a specific blocker. Report the actual repository, indexing and analysis results. Keep existing organisation settings and never print credentials. Use the browser only for the approvals I need to make.`;
 

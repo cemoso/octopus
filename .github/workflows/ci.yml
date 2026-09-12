@@ -132,3 +132,9 @@ jobs:
       - name: Test billing auto-reload invariants against PostgreSQL
         run: bun test lib/__tests__/billing.db.test.ts
         working-directory: apps/web
+
+      - name: Test CLI user sessions and organisation isolation against PostgreSQL
+        run: bun test lib/__tests__/cli-user-auth.db.test.ts
+        working-directory: apps/web
+        env:
+          RUN_CLI_AUTH_DB_TESTS: "1"

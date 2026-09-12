@@ -1,3 +1,4 @@
+import "server-only";
 import { prisma } from "@octopus/db";
 import { createHash } from "crypto";
 import {
@@ -24,6 +25,7 @@ export async function authenticateApiToken(request: Request) {
     include: {
       organization: true,
       createdBy: true,
+      cliUserToken: true,
     },
   });
 
@@ -34,6 +36,17 @@ export async function authenticateApiToken(request: Request) {
   // Check expiration
   if (apiToken.expiresAt && apiToken.expiresAt < new Date()) {
     return null;
+  }
+
+  // User-session child tokens follow current membership and parent revocation.
+  if (apiToken.cliUserTokenId) {
+    const parent = apiToken.cliUserToken;
+    if (!parent || parent.deletedAt || parent.expiresAt <= new Date() || parent.userId !== apiToken.createdById || apiToken.createdBy.bannedAt) return null;
+    const member = await prisma.organizationMember.findFirst({
+      where: { organizationId: apiToken.organizationId, userId: apiToken.createdById, deletedAt: null },
+      select: { id: true },
+    });
+    if (!member) return null;
   }
 
   // Check if org is banned

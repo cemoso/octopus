@@ -12,6 +12,7 @@ import { ValidateStep } from "./steps/ValidateStep.js";
 import { RepoStep } from "./steps/RepoStep.js";
 import { DoneStep } from "./steps/DoneStep.js";
 import { loadConfig, type OctopusConfig } from "./lib/config.js";
+import { clearCommandCredentials } from "./lib/credentials.js";
 import { buildSequence } from "./lib/sequence.js";
 
 /**
@@ -180,6 +181,7 @@ export function OnboardWizard({ reset = false }: OnboardWizardProps = {}) {
  * saved config.
  */
 export async function renderWizard(reset = false): Promise<void> {
+  clearCommandCredentials();
   const { waitUntilExit } = render(<OnboardWizard reset={reset} />);
   await waitUntilExit();
 }
