@@ -13,4 +13,3 @@ export function detectOnboardingRepository(runGit: (args: string[]) => string | 
   if (!match || [".", ".."].includes(match[1].split("/")[1])) throw new Error("Agent onboarding currently supports github.com remotes. Supply --repo owner/name only for a GitHub repository.");
   return match[1];
 }
-
