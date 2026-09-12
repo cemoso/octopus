@@ -93,7 +93,31 @@ Exit codes: **0** ready, **3** waiting or approval required, **2** invalid input
 The first run detects the GitHub repository from the current remote. Authentication
 uses `octp login --no-open`, which prints the approval URL and waits for the
 user. The agent keeps that login process running until it finishes, then resumes
-onboarding. Login credentials stay in the existing account store.
+onboarding. CLI 0.6.0 and server 1.0.157 add user-level login: browser approval does not
+select an organisation. The session expires after 30 days; `octp logout` revokes
+it and its derived organisation credentials. Login credentials stay in the
+existing account store.
+
+```bash
+octp login --no-open
+octp org list --json
+octp --org acme onboard --agent --json --repo acme/app
+octp --org another-org repo list
+```
+
+`--org` accepts an organisation slug or ID for that command only. Without it,
+Octopus uses a unique repository match, then a unique GitHub owner match. If the
+choice remains ambiguous it returns `organization_required`, the available
+`organizations`, and exit 3 before starting work. The agent must ask which one to
+use and retry with `--org`. A single organisation with no GitHub installation can
+start its first installation. A new user with no memberships must create or join
+an organisation first.
+
+`--account` switches saved user profiles; `--org` switches organisations within
+one user's current memberships. Existing organisation tokens continue to work
+for their original organisation. Run `octp login` again to replace one with a
+user session and enable switching. The interactive wizard and `setup-token`
+retain their organisation-scoped flow for compatibility and CI credentials.
 
 For repository access, the command returns the signed GitHub App installation
 link or the existing installation's repository settings link. Once access is

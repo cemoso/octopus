@@ -59,9 +59,9 @@ export async function loginCommand(argv: string[]): Promise<number> {
         return 2;
       }
       const verified = await verifyToken(baseUrl, token);
-      identity = { token, organization: verified.organization, user: verified.user };
+      identity = { token, ...verified };
     } else {
-      identity = await runDeviceFlow(baseUrl, { noOpen: hasFlag(argv, "--no-open"), onAuthorizeUrl: (url) => info(c.dim(url)) });
+      identity = await runDeviceFlow(baseUrl, { userSession: true, noOpen: hasFlag(argv, "--no-open"), onAuthorizeUrl: (url) => info(c.dim(url)) });
     }
     // Land the credentials in the active profile (which reflects --account),
     // registering + activating it so `account list` shows it and later commands
@@ -72,7 +72,7 @@ export async function loginCommand(argv: string[]): Promise<number> {
     await setActiveProfile(profileName);
     const email = identity.user.email ? ` (${sanitizeTerminal(identity.user.email)})` : "";
     success(
-      `Logged in as ${sanitizeTerminal(identity.user.name)}${email} — org: ${sanitizeTerminal(identity.organization.name)} [account: ${sanitizeTerminal(profileName)}]`,
+      `Logged in as ${sanitizeTerminal(identity.user.name)}${email}${identity.kind === "user" ? "" : ` — org: ${sanitizeTerminal(identity.organization.name)}`} [account: ${sanitizeTerminal(profileName)}]`,
     );
     return 0;
   } catch (err) {

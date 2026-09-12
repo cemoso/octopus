@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Native CLI 0.5.1 finishes writing onboarding JSON before it exits, so coding agents receive complete onboarding results when capturing output through a pipe.
 
+## [1.0.157] - 2026-09-12
+
+### Added
+- Native CLI 0.6.0 signs in once as a user. Use `octp org list --json` and per-command `--org <slug|id>` across current memberships; repository setup infers a unique organisation or returns choices before starting work.
+- CLI browser approval no longer asks new user sessions to select an organisation. Sessions expire after 30 days; logout, revocation and membership removal invalidate derived organisation access. Existing organisation tokens and legacy device clients remain supported.
+- Operators: apply the additive `20260912005000_cli_user_sessions` migration through the normal backup/migration/deploy gates before publishing CLI 0.6.0. The previous app remains compatible with the expanded schema.
+
 ## [1.0.156] - 2026-09-12
 
 ### Fixed

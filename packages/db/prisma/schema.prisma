@@ -50,6 +50,7 @@ model User {
   deletedKnowledgeDocs  KnowledgeDocument[] @relation("DeletedKnowledgeDocs")
   knowledgeAuditLogs    KnowledgeAuditLog[]
   createdApiTokens      OrgApiToken[] @relation("CreatedApiTokens")
+  cliUserTokens         CliUserToken[]
   packageAnalyses       PackageAnalysis[]
   safePackageRequests   SafePackageRequest[]
   packageDeepDives      PackageDeepDive[]
@@ -911,15 +912,35 @@ model OrgApiToken {
   createdById    String
   createdBy      User @relation("CreatedApiTokens", fields: [createdById], references: [id], onDelete: Cascade)
 
+  cliUserTokenId String?
+  cliUserToken   CliUserToken? @relation(fields: [cliUserTokenId], references: [id], onDelete: Cascade)
+
   localAgents    LocalAgent[]
+
+  @@unique([cliUserTokenId, organizationId])
 
   @@index([tokenHash])
   @@map("org_api_tokens")
 }
 
+model CliUserToken {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  deletedAt  DateTime?
+  createdAt  DateTime @default(now())
+  orgTokens  OrgApiToken[]
+
+  @@index([userId])
+  @@map("cli_user_tokens")
+}
+
 model CliAuthSession {
   id         String   @id @default(cuid())
   deviceCode String   @unique
+  scope      String   @default("organization")
   status     String   @default("pending") // pending | approved | expired
   token      String?  // raw token, cleared after CLI polls it
   orgId      String?

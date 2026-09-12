@@ -19,6 +19,9 @@ import { analyzeDepsCommand } from "./commands/analyze-deps.js";
 import { skillsCommand } from "./commands/skills.js";
 import { updateCommand } from "./commands/update.js";
 import { chatCommand } from "./commands/chat.js";
+import { orgCommand } from "./commands/org.js";
+import { setOrganizationOverride } from "./lib/organizations.js";
+import { ORGANIZATION_COMMANDS, prepareCommandOrganization } from "./lib/command-organization.js";
 import { accountCommand } from "./commands/account.js";
 import { ensureProfilesMigrated, isValidProfileName, ensureProfile, setActiveProfile } from "./lib/profile.js";
 import { setActiveProfileOverride } from "./lib/paths.js";
@@ -73,6 +76,7 @@ Auth & accounts:
   octp whoami                Show the signed-in user + org
   octp setup-token           Print a token to stdout (for CI/CD)
   octp account <list|set|show|remove>   Manage signed-in accounts (profiles)
+  octp org list [--json]      List organisations available to your user
 
 Reviews:
   octp review [--staged|--since <ref>]   Review local changes pre-PR
@@ -96,7 +100,8 @@ Agent & ops:
   octp update [--check]      Update the CLI
 
 Flags:
-  --account <name>           Use a specific account for one command (e.g. --account work)
+  --account <name>           Use a specific user/account profile for one command
+  --org <slug|id>            Select an organisation (otherwise infer from the repository)
   --version, -v              Print version
   --help, -h                 Print this help
   (run \`octp <command> --help\` for command-specific flags)
@@ -129,7 +134,22 @@ async function main(rawArgv: string[]): Promise<number> {
     argv = stripValueFlag(stripValueFlag(rawArgv, "--account"), "--profile");
   }
 
+  // Admin commands already own an unrelated --org flag; leave their grammar intact.
+  let orgFlag: string | undefined;
+  if (argv[0] !== "admin") {
+    if (argv.some((arg) => arg.startsWith("--org="))) { console.error("Use --org <slug>, with a space before the value."); return 2; }
+    orgFlag = flagValue(argv, "--org");
+    if (argv.filter((a) => a === "--org").length > 1 || (argv.includes("--org") && (!orgFlag || !/^[A-Za-z0-9_-]{1,128}$/.test(orgFlag)))) {
+      console.error("--org requires one organisation slug or ID.");
+      return 2;
+    }
+    if (orgFlag) { setOrganizationOverride(orgFlag); argv = stripValueFlag(argv, "--org"); }
+  }
   const first = argv[0];
+  if (orgFlag && !ORGANIZATION_COMMANDS.includes(first) && !["onboard", "whoami", "doctor"].includes(first)) {
+    console.error("Use --org with a repository command, onboard, whoami, or doctor after signing in.");
+    return 2;
+  }
 
   if (first === "--version" || first === "-v") {
     console.log(VERSION);
@@ -170,6 +190,7 @@ async function main(rawArgv: string[]): Promise<number> {
   }
 
   if (first === "onboard") {
+    if (orgFlag && !argv.includes("--agent")) { console.error("Use --org with octp onboard --agent --json."); return 2; }
     if (argv.includes("--agent")) return await onboardAgentCommand(argv.slice(1));
     if (argv.slice(1).some((arg) => arg !== "--reset")) {
       console.error("Use octp onboard [--reset] or octp onboard --agent --json [--repo owner/name].");
@@ -187,6 +208,8 @@ async function main(rawArgv: string[]): Promise<number> {
     }
   }
 
+  const organizationExit = await prepareCommandOrganization(argv, orgFlag);
+  if (organizationExit) return organizationExit;
   const rest = argv.slice(1);
   switch (first) {
     case "login":
@@ -217,6 +240,8 @@ async function main(rawArgv: string[]): Promise<number> {
       return await updateCommand(rest);
     case "doctor":
       return await doctorCommand(rest);
+    case "org":
+      return await orgCommand(rest);
     case "account":
     case "profile":
       return await accountCommand(rest);

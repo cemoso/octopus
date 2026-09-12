@@ -57,7 +57,7 @@ export default function CLIPage() {
         <CodeBlock>octp onboard --agent --json</CodeBlock>
         <Paragraph>
           Run this from the project directory, or supply <Mono>--repo owner/name</Mono>.
-          Use <Mono>--account name</Mono> to select an existing Octopus account profile.
+          Use <Mono>--account name</Mono> to select a saved user profile, and <Mono>--org slug</Mono> to choose an organisation for one command.
         </Paragraph>
         <Paragraph>
           If sign-in is needed, the AI runs the returned login command with <Mono>--no-open</Mono>,
@@ -80,6 +80,19 @@ export default function CLIPage() {
           browser window for authentication.
         </Paragraph>
         <CodeBlock>octp login</CodeBlock>
+        <p className="text-[#a0a0a0]">
+          CLI 0.6.0 with server 1.0.157 signs you in once without selecting an organisation in the browser.
+          Your session lasts 30 days. Run <Mono>octp logout</Mono> to revoke it.
+        </p>
+        <CodeBlock>{`octp org list --json
+octp --org acme onboard --agent --json --repo acme/app
+octp --org another-org repo list`}</CodeBlock>
+        <p className="text-[#a0a0a0]">
+          Without <Mono>--org</Mono>, repository setup uses a unique repository or GitHub owner match.
+          If it cannot choose safely, it returns <Mono>organization_required</Mono> with your available organisations
+          before starting work. Choose one and retry. Existing organisation tokens keep their original scope;
+          run <Mono>octp login</Mono> again to enable switching.
+        </p>
         <Paragraph>You can also authenticate with an API token directly:</Paragraph>
         <CodeBlock>octp login --token oct_your_token_here</CodeBlock>
         <Paragraph>
@@ -340,7 +353,7 @@ octp skills install --codex`}</CodeBlock>
       {/* Profiles */}
       <Section title="Multiple Profiles">
         <Paragraph>
-          Use profiles to switch between different accounts or organizations:
+          Use profiles for different users or servers. Within one user account, switch organisations with --org:
         </Paragraph>
         <CodeBlock>{`octp login --profile work
 octp login --profile personal

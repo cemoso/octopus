@@ -66,7 +66,7 @@ export async function doctorCommand(_argv: string[]): Promise<number> {
     );
 
     // Live token check — hits /api/cli/me with the saved bearer.
-    const res = await getJson(`${creds.baseUrl}/api/cli/me`, {
+    const res = await getJson(`${creds.baseUrl}${creds.kind === "user" ? "/api/cli/auth/user" : "/api/cli/me"}`, {
       headers: { authorization: `Bearer ${creds.token}` },
     });
     if (res.ok) line("ok", "token", "accepted by server");

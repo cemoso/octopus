@@ -9,6 +9,8 @@ import { ensureOctopusHome, getCredentialsPath } from "./paths.js";
  * File: ~/.octopus/credentials, mode 0600.
  */
 export type Credentials = {
+  /** User login is unbound; org fields stay empty until command-local resolution. */
+  kind?: "user";
   /** API base URL — `https://octopus-review.ai` for hosted, custom for self-hosted. */
   baseUrl: string;
   /** Long-lived API token returned by the approve flow. */
@@ -28,7 +30,14 @@ export type Credentials = {
  * Load credentials. Returns null when the file is missing, unreadable, or
  * has the wrong shape — never throws. Callers treat null as "not signed in."
  */
+let commandCredentials: Credentials | undefined;
+export function setCommandCredentials(value: Credentials): void { commandCredentials = value; }
+
 export async function loadCredentials(): Promise<Credentials | null> {
+  return commandCredentials ?? await loadStoredCredentials();
+}
+
+export async function loadStoredCredentials(): Promise<Credentials | null> {
   try {
     const raw = await readFile(getCredentialsPath(), "utf8");
     const parsed = JSON.parse(raw) as unknown;
@@ -76,6 +85,7 @@ function isCredentials(value: unknown): value is Credentials {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
+    (v.kind === undefined || v.kind === "user") &&
     typeof v.baseUrl === "string" &&
     typeof v.token === "string" &&
     typeof v.orgId === "string" &&
