@@ -24,6 +24,13 @@ describe("command organisation selection", () => {
     expect(chooseOrganization([{ ...a, hasInstallation: false }], undefined, "unknown/app")?.id).toBe(a.id);
     expect(chooseOrganization([a])?.id).toBe(a.id);
   });
+  it("requires repository evidence for an explicit target even with one membership", () => {
+    expect(chooseOrganization([a], undefined, undefined, true)).toBeUndefined();
+    expect(chooseOrganization([{ ...a, hasInstallation: false }], undefined, "unknown/app", true)).toBeUndefined();
+    expect(chooseOrganization([a], "alpha", undefined, true)).toEqual(a);
+    const exact = { ...b, matchesRepository: true };
+    expect(chooseOrganization([a, exact], undefined, "beta/app", true)).toEqual(exact);
+  });
   it("keeps legacy tokens scoped and requires login before switching", async () => {
     const credentials = { baseUrl: "https://example.com", token: "legacy", orgId: a.id, orgSlug: a.slug, orgName: a.name, approvedAt: "2026-09-12" };
     expect(await resolveOrganization(credentials, a.slug)).toEqual({ ok: true, credentials, userSession: false });

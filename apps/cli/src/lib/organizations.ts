@@ -13,13 +13,13 @@ let organizationOverride: string | undefined;
 export function setOrganizationOverride(value: string): void { organizationOverride = value; }
 export function getOrganizationOverride(): string | undefined { return organizationOverride; }
 
-export function chooseOrganization(choices: OrganizationChoice[], explicit?: string, repo?: string): OrganizationChoice | undefined {
+export function chooseOrganization(choices: OrganizationChoice[], explicit?: string, repo?: string, requireRepositoryMatch = false): OrganizationChoice | undefined {
   if (explicit) return choices.find((org) => org.id === explicit || org.slug === explicit);
   const exact = choices.filter((org) => org.matchesRepository);
   if (exact.length) return exact.length === 1 ? exact[0] : undefined;
   const owners = choices.filter((org) => org.matchesOwner);
   if (owners.length) return owners.length === 1 ? owners[0] : undefined;
-  if (choices.length === 1 && (!repo || !choices[0].hasInstallation)) return choices[0];
+  if (!requireRepositoryMatch && choices.length === 1 && (!repo || !choices[0].hasInstallation)) return choices[0];
   return undefined;
 }
 
@@ -33,7 +33,7 @@ export async function listOrganizations(creds: Credentials, repo?: string) {
   return { ok: true as const, organizations: rows };
 }
 
-export async function resolveOrganization(creds: Credentials, explicit?: string, repo?: string): Promise<
+export async function resolveOrganization(creds: Credentials, explicit?: string, repo?: string, requireRepositoryMatch = false): Promise<
   { ok: true; credentials: Credentials; userSession: boolean } |
   { ok: false; state: "organization_required" | "authentication_required" | "failed"; message: string; organizations?: OrganizationChoice[] }
 > {
@@ -43,7 +43,7 @@ export async function resolveOrganization(creds: Credentials, explicit?: string,
   }
   const response = await listOrganizations(creds, repo);
   if (!response.ok) return { ok: false, state: response.status === 401 ? "authentication_required" : "failed", message: `Could not list organisations: ${response.error}` };
-  const choice = chooseOrganization(response.organizations, explicit, repo);
+  const choice = chooseOrganization(response.organizations, explicit, repo, requireRepositoryMatch);
   if (!choice) return {
     ok: false, state: "organization_required", organizations: response.organizations.map(({ id, slug, name }) => ({ id, slug, name })),
     message: explicit ? "The requested organisation is not available to this user. Select an available --org slug." : response.organizations.length ? "Select an organisation with --org <slug>, then retry. No work has started." : "No organisations are available. Create or join one in Octopus, then retry.",

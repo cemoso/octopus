@@ -44,6 +44,8 @@ describe("compiled multi-organisation CLI", () => {
   it("switches one user credential by repository or --org, and blocks ambiguity before work", async () => {
     const calls: { path: string; method: string; auth: string | null; repo: string | null }[] = [];
     let revoked = false;
+    let availableSlugs = ["alpha", "beta"];
+    let hasInstallation = true;
     let connectedRepository = "";
     const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
       const url = new URL(request.url);
@@ -51,8 +53,8 @@ describe("compiled multi-organisation CLI", () => {
       calls.push({ path: url.pathname, method: request.method, auth, repo: url.searchParams.get("repo") });
       if (url.pathname === "/api/cli/organizations") {
         if (auth !== `Bearer ${userToken}` || revoked) return Response.json({ error: "Sign in again" }, { status: 401 });
-        if (request.method === "GET") return Response.json({ organizations: ["alpha", "beta"].map((slug) => ({
-          id: slug, slug, name: slug, hasInstallation: true,
+        if (request.method === "GET") return Response.json({ organizations: availableSlugs.map((slug) => ({
+          id: slug, slug, name: slug, hasInstallation,
           matchesRepository: url.searchParams.get("repo") === "shared/app" || url.searchParams.get("repo") === `${slug}/app`, matchesOwner: false,
         })) });
         const body = await request.json() as { organization: keyof typeof childTokens };
@@ -61,6 +63,11 @@ describe("compiled multi-organisation CLI", () => {
       }
       const selected = Object.entries(childTokens).find(([, token]) => auth === `Bearer ${token}`)?.[0];
       if (!selected) return Response.json({ error: "Wrong credential scope" }, { status: 401 });
+      if (url.pathname === "/api/cli/repos") return Response.json({ repos: [
+        { id: "shared-repo", name: "app", fullName: "shared/app", provider: "github" },
+        { id: "local-repo", name: "app", fullName: "alpha/app", provider: "github" },
+      ] });
+      if (url.pathname === "/api/cli/chat") return new Response('data: {"type":"delta","text":"Answer"}\ndata: [DONE]\n', { headers: { "content-type": "text/event-stream" } });
       if (url.pathname === "/api/cli/repos/connect") {
         connectedRepository = (await request.json() as { fullName: string }).fullName;
         return Response.json({ state: "connected", repoId: `${selected}-repo` });
@@ -105,6 +112,11 @@ describe("compiled multi-organisation CLI", () => {
         expect(spawnSync("git", args, { cwd: home }).status).toBe(0);
       }
       for (const args of [
+        ["chat", "-p", "Summarize", "shared/app"],
+        ["chat", "--print", "Summarize", "shared/app"],
+        ["repo", "--", "index", "shared/app"],
+        ["repo", "index", "--", "shared/app"],
+        ["repo", "--", "analyze", "shared/app"],
         ["review", "https://github.com/shared/app/pull/12"],
         ["review", "--format", "json", "https://github.com/shared/app/pull/12"],
         ["review", "--pr", "https://github.com/shared/app/pull/12"],
@@ -123,6 +135,42 @@ describe("compiled multi-organisation CLI", () => {
         expect(calls.some((call) => call.method === "POST" && call.path === "/api/cli/organizations")).toBe(true);
         expect(calls.some((call) => call.auth === `Bearer ${childTokens.beta}`)).toBe(true);
       }
+      const shortTargets = [
+        ["chat", "-p", "Summarize", "app"],
+        ["chat", "app", "--print", "Summarize"],
+        ["repo", "--", "index", "app"],
+        ["repo", "analyze", "--", "app"],
+      ];
+      for (const args of shortTargets) {
+        calls.length = 0;
+        const result = await run(args);
+        expect(result.code).toBe(3);
+        expect(result.err).toContain("--org alpha");
+        expect(result.err).toContain("--org beta");
+        expect(calls).toEqual([{ path: "/api/cli/organizations", method: "GET", auth: `Bearer ${userToken}`, repo: null }]);
+        calls.length = 0;
+        await run(["--org", "beta", ...args]);
+        expect(calls.some((call) => call.method === "POST" && call.auth === `Bearer ${childTokens.beta}` && call.path !== "/api/cli/organizations")).toBe(true);
+      }
+      availableSlugs = ["alpha"];
+      hasInstallation = false;
+      for (const args of [shortTargets[0], ["chat", "-p", "Summarize", "unknown/app"]]) {
+        calls.length = 0;
+        expect((await run(args)).code).toBe(3);
+        expect(calls).toHaveLength(1);
+        expect(calls[0].method).toBe("GET");
+      }
+      availableSlugs = ["alpha", "beta"];
+      hasInstallation = true;
+      calls.length = 0;
+      expect((await run(["chat", "-p", "Summarize"])).code).toBe(0);
+      expect(calls[0].repo).toBe("alpha/app");
+      const credentialPath = join(home, "profiles", "default", "credentials");
+      await writeFile(credentialPath, JSON.stringify({ ...JSON.parse(credential), kind: undefined, token: childTokens.alpha, orgId: "alpha", orgSlug: "alpha" }));
+      calls.length = 0;
+      expect((await run(shortTargets[0])).code).toBe(0);
+      expect(calls.every((call) => call.path !== "/api/cli/organizations" && call.auth === `Bearer ${childTokens.alpha}`)).toBe(true);
+      await writeFile(credentialPath, credential);
       calls.length = 0;
       await run(["review", "--since", "main", "--format", "json", "12"]);
       expect(calls[0].repo).toBe("alpha/app");
