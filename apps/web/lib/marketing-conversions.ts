@@ -120,6 +120,7 @@ export async function deliverConversion(
   timeoutMs = 10_000,
 ): Promise<DeliveryResult> {
   if (Buffer.byteLength(body) > MAX_BODY_BYTES) return { kind: "blocked", code: "payload_too_large" };
+  const { sourceId, environment, serverKey } = config;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -127,9 +128,39 @@ export async function deliverConversion(
   });
   try {
     return await Promise.race([timeout, (async (): Promise<DeliveryResult> => {
+      const identityResponse = await send(new Request(`${MARKETING_RECEIVER}/identity`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${serverKey}` },
+        redirect: "error",
+        credentials: "omit",
+        cache: "no-store",
+        signal: controller.signal,
+      }));
+      if (identityResponse.status !== 200) {
+        await identityResponse.body?.cancel().catch(() => {});
+        return {
+          kind: "retry",
+          code: `receiver_identity_http_${identityResponse.status}`,
+          status: identityResponse.status,
+          retryAfterMs: retryAfter(identityResponse.headers.get("retry-after")),
+        };
+      }
+      try {
+        const identity = await readReceipt(identityResponse) as Record<string, unknown> | null;
+        if (!identity || identity.schemaVersion !== 1 || identity.sourceId !== sourceId ||
+          identity.environment !== environment || typeof identity.keyId !== "string" || !UUID.test(identity.keyId) ||
+          !Array.isArray(identity.capabilities) || !identity.capabilities.every(value => typeof value === "string") ||
+          !["purchases", "refunds", "registrations"].every(value => (identity.capabilities as unknown[]).includes(value))) {
+          return { kind: "retry", code: "receiver_identity_invalid", status: 200 };
+        }
+      } catch {
+        return { kind: "retry", code: "receiver_identity_invalid", status: 200 };
+      }
+      // A timed-out preflight must never resume into an event POST.
+      controller.signal.throwIfAborted();
       const response = await send(new Request(MARKETING_RECEIVER, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.serverKey}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${serverKey}` },
         body,
         redirect: "error",
         credentials: "omit",

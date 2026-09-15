@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
   conversionId,
-  deliverConversion,
+  deliverConversion as deliverWithIdentity,
   registrationEvent,
   resolveMarketingConfig,
   retryDelayMs,
@@ -13,6 +13,13 @@ const key = `uads_${sourceId}_${"x".repeat(43)}`;
 const config = { sourceId, environment: "test" as const, serverKey: key, from: new Date("2026-09-09T00:00:00Z") };
 const event = registrationEvent("opaque-user", new Date("2026-09-15T12:00:00Z"));
 const receiptId = "eb5a06a6-a7d1-4dfe-b2aa-b9f1c93c8db0";
+
+const identity = { schemaVersion: 1, sourceId, environment: "test", keyId: receiptId, capabilities: ["refunds", "registrations", "purchases"] };
+
+const deliverConversion: typeof deliverWithIdentity = (binding, body, send, timeoutMs) =>
+  deliverWithIdentity(binding, body, request => request.method === "GET"
+    ? Promise.resolve(Response.json(identity))
+    : send!(request), timeoutMs);
 
 describe("Unified Ads business events", () => {
   it("uses stable opaque registration identities and the actual creation time", () => {
@@ -110,4 +117,82 @@ describe("Unified Ads business events", () => {
     expect(result).toMatchObject({ kind: "retry", retryAfterMs: 86_400_000 });
     if (result.kind !== "delivered") expect(retryDelayMs(1, result.retryAfterMs)).toBe(86_400_000);
   });
+});
+
+describe("authenticated receiver source binding", () => {
+  it("checks identity on every attempt with the same captured key and unchanged bytes", async () => {
+    const binding = { ...config };
+    const body = serializeConversion(event);
+    const calls: Request[] = [];
+    const rotatedKey = `uads_${sourceId}_${"y".repeat(43)}`;
+    const send = async (request: Request) => {
+      calls.push(request);
+      if (request.method === "GET") {
+        expect(request.url).toBe("https://ads.weezboo.com/api/conversion-events/identity");
+        expect(request.redirect).toBe("error");
+        expect(request.cache).toBe("no-store");
+        expect(request.headers.has("origin")).toBe(false);
+        expect(request.headers.has("cookie")).toBe(false);
+        expect(await request.text()).toBe("");
+        binding.serverKey = rotatedKey;
+        return Response.json(identity);
+      }
+      expect(await request.text()).toBe(body);
+      return Response.json({ receiptId, duplicate: true, status: "stored", attribution: "not_established" });
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(await deliverWithIdentity(binding, body, send)).toEqual({ kind: "delivered", receiptId, status: 200 });
+    }
+    expect(calls.map(request => request.method)).toEqual(["GET", "POST", "GET", "POST"]);
+    expect(calls.map(request => request.headers.get("authorization"))).toEqual([
+      `Bearer ${key}`, `Bearer ${key}`, `Bearer ${rotatedKey}`, `Bearer ${rotatedKey}`,
+    ]);
+  });
+
+  it("honors identity throttling without posting", async () => {
+    const methods: string[] = [];
+    const result = await deliverWithIdentity(config, serializeConversion(event), async request => {
+      methods.push(request.method);
+      return new Response(null, { status: 429, headers: { "Retry-After": "120" } });
+    });
+    expect(result).toMatchObject({ kind: "retry", status: 429, retryAfterMs: 120_000 });
+    expect(methods).toEqual(["GET"]);
+  });
+
+  it("never posts after a stalled identity body completes past the deadline", async () => {
+    const methods: string[] = [];
+    let stream: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const result = await deliverWithIdentity(config, serializeConversion(event), async request => {
+      methods.push(request.method);
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }));
+    }, 20);
+    expect(result).toMatchObject({ kind: "retry", code: "receiver_timeout" });
+    stream!.enqueue(new TextEncoder().encode(JSON.stringify(identity)));
+    stream!.close();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(methods).toEqual(["GET"]);
+  });
+
+  for (const [name, response] of Object.entries({
+    "wrong source": () => Response.json({ ...identity, sourceId: receiptId }),
+    "wrong environment": () => Response.json({ ...identity, environment: "live" }),
+    "unknown key": () => new Response(null, { status: 401 }),
+    "absent route": () => new Response(null, { status: 404 }),
+    "redirect": () => new Response(null, { status: 302 }),
+    "invalid JSON": () => new Response("{"),
+    "missing identity": () => Response.json(null),
+    "unknown schema": () => Response.json({ ...identity, schemaVersion: 2 }),
+    "missing capability": () => Response.json({ ...identity, capabilities: ["purchases"] }),
+    "invalid key ID": () => Response.json({ ...identity, keyId: "invalid" }),
+  })) {
+    it(`refuses any POST or acknowledgement for ${name}`, async () => {
+      const calls: Request[] = [];
+      const result = await deliverWithIdentity(config, serializeConversion(event), async request => {
+        calls.push(request);
+        return response();
+      });
+      expect(calls.map(request => request.method)).toEqual(["GET"]);
+      expect(result.kind).toBe("retry");
+    });
+  }
 });
