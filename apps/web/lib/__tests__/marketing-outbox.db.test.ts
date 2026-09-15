@@ -17,6 +17,11 @@ let outbox: typeof import("../marketing-outbox");
 let created = false;
 let testUrl: string;
 const received = (duplicate = false) => new Response(JSON.stringify({ receiptId, duplicate, status: "stored", attribution: "not_established" }), { status: duplicate ? 200 : 201 });
+function withIdentity(send: (request: Request) => Promise<Response>): (request: Request) => Promise<Response> {
+  return async request => request.method === "GET"
+    ? Response.json({ schemaVersion: 1, sourceId: config.sourceId, environment: config.environment, keyId: receiptId, capabilities: ["registrations", "purchases", "refunds"] })
+    : send(request);
+}
 async function user(id = "test_user", date = new Date()) {
   await db.query('INSERT INTO users (id, "createdAt") VALUES ($1, $2)', [id, date]);
 }
@@ -105,7 +110,7 @@ async function due(id: string) {
     expect(successor.leaseId).not.toBe(first.leaseId);
     expect(await outbox.finishMarketingConversion(first, { kind: "delivered", status: 201, receiptId })).toBe(false);
     expect(await outbox.processMarketingConversion(first, config, fixture().reader, async () => { throw new Error("stale send"); })).toBe("lease_lost");
-    expect(await outbox.processMarketingConversion(successor, config, fixture().reader, async () => received())).toBe("delivered");
+    expect(await outbox.processMarketingConversion(successor, config, fixture().reader, withIdentity(async () => received()))).toBe("delivered");
   });
 
   it("persists exact bytes before HTTP, retries an uncertain acceptance and survives key rotation", async () => {
@@ -114,19 +119,19 @@ async function due(id: string) {
     const first = (await outbox.claimMarketingConversion(config))!;
     let firstBody = "";
     const reader = fixture().reader;
-    expect(await outbox.processMarketingConversion(first, config, reader, async (request) => {
+    expect(await outbox.processMarketingConversion(first, config, reader, withIdentity(async (request) => {
       firstBody = await request.text();
       expect((await prisma.marketingConversion.findUniqueOrThrow({ where: { id: first.id } })).payload).toBe(firstBody);
       throw new Error("response lost after receiver commit");
-    })).toBe("retry");
+    }))).toBe("retry");
     await due(first.id);
     const retry = (await outbox.claimMarketingConversion(config))!;
     reader.payment = async () => { throw new Error("must not reconstruct accepted payment"); };
-    expect(await outbox.processMarketingConversion(retry, { ...config, serverKey: "rotated-test-key" }, reader, async request => {
+    expect(await outbox.processMarketingConversion(retry, { ...config, serverKey: "rotated-test-key" }, reader, withIdentity(async request => {
       expect(await request.text()).toBe(firstBody);
       expect(request.headers.get("authorization")).toBe("Bearer rotated-test-key");
       return received(true);
-    })).toBe("delivered");
+    }))).toBe("delivered");
     expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id: first.id } })).toMatchObject({ receiptId, status: "delivered", attempts: 2, payload: firstBody });
   });
 
@@ -140,13 +145,13 @@ async function due(id: string) {
     for (let index = 0; index < 4; index++) {
       const row = (await outbox.claimMarketingConversion(config))!;
       expect(row).not.toBeNull();
-      expect(await outbox.processMarketingConversion(row, config, f.reader, async request => {
+      expect(await outbox.processMarketingConversion(row, config, f.reader, withIdentity(async request => {
         const body = await request.text(); const event = JSON.parse(body);
         const previous = bodies.get(event.eventId);
         if (previous) expect(body).toBe(previous);
         bodies.set(event.eventId, body);
         return received(Boolean(previous));
-      })).toBe("delivered");
+      }))).toBe("delivered");
     }
     expect(bodies.size).toBe(2);
     expect(await prisma.marketingConversion.count({ where: { status: "delivered" } })).toBe(4);
@@ -156,7 +161,7 @@ async function due(id: string) {
     await user(); await outbox.captureMarketingConversions(config);
     for (const status of [401, 429, 409]) {
       const row = (await outbox.claimMarketingConversion(config))!;
-      const result = await outbox.processMarketingConversion(row, config, fixture().reader, async () => new Response("untrusted receiver detail", { status }));
+      const result = await outbox.processMarketingConversion(row, config, fixture().reader, withIdentity(async () => new Response("untrusted receiver detail", { status })));
       expect(result).toBe(status === 409 ? "blocked" : "retry");
       const saved = await prisma.marketingConversion.findUniqueOrThrow({ where: { id: row.id } });
       expect(saved.receiptId).toBeNull();
@@ -175,6 +180,30 @@ async function due(id: string) {
     const row = (await outbox.claimMarketingConversion(config))!;
     await expect(outbox.processMarketingConversion(row, live, fixture().reader)).rejects.toMatchObject({ code: "outbox_source_mismatch" });
     await expect(outbox.captureMarketingConversions({ ...config, environment: "live" })).rejects.toMatchObject({ code: "source_environment_mismatch" });
+  });
+
+  it("keeps persisted events pending without POST or acknowledgement when receiver identity is rejected", async () => {
+    await user(); await outbox.captureMarketingConversions(config);
+    for (const identity of [
+      { schemaVersion: 1, sourceId: randomUUID(), environment: "test", keyId: receiptId, capabilities: ["registrations", "purchases", "refunds"] },
+      { schemaVersion: 1, sourceId: config.sourceId, environment: "live", keyId: receiptId, capabilities: ["registrations", "purchases", "refunds"] },
+      null,
+    ]) {
+      const row = (await outbox.claimMarketingConversion(config))!;
+      const methods: string[] = [];
+      expect(await outbox.processMarketingConversion(row, config, fixture().reader, async request => {
+        methods.push(request.method);
+        return identity ? Response.json(identity) : new Response(null, { status: 401 });
+      })).toBe("retry");
+      expect(methods).toEqual(["GET"]);
+      const saved = await prisma.marketingConversion.findUniqueOrThrow({ where: { id: row.id } });
+      expect(saved.status).toBe("pending");
+      expect(saved.receiptId).toBeNull();
+      expect(saved.deliveredAt).toBeNull();
+      expect(saved.payload).toBe(row.payload);
+      expect(saved.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+      await due(row.id);
+    }
   });
 
   it("enforces immutable request bytes/identity and valid lease/receipt state in PostgreSQL", async () => {
