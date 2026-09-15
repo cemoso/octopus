@@ -171,6 +171,13 @@ export async function startQueue(): Promise<PgBoss> {
     expireInSeconds: 300,
   }).catch(() => {});
 
+  // Conversion delivery has its own durable leases and backoff. The next cron
+  // recovers sweep-level failures without involving billing or review jobs.
+  await boss.createQueue("marketing-conversions", {
+    retryLimit: 0,
+    expireInSeconds: 300,
+  });
+
   // Admin-triggered Ollama model downloads (self-hosted). Long expiry — a
   // large model is many GB. No auto-retry: runOllamaPull records failures in
   // the OllamaModelPull row itself and re-pulls are admin-driven from the UI.

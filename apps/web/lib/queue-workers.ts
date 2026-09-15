@@ -12,6 +12,7 @@ import { enforceWebhookDeliveryRetention } from "./webhook-tenant";
 import { refreshReleaseCache } from "./releases";
 import { renewDueSubscriptions } from "./subscription";
 import { reconcileAutoReloadAttempts } from "./credits";
+import { syncMarketingConversions } from "./marketing-outbox";
 import { runOllamaPull } from "./ollama-admin";
 import { reapStuckReviews } from "./reap-stuck-reviews";
 import { discoverRepositories } from "./discover-repositories";
@@ -29,6 +30,15 @@ export interface ProcessReviewJob {
 }
 
 export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promise<void> {
+  await boss.work("marketing-conversions", { localConcurrency: 1 }, async () => {
+    try {
+      await syncMarketingConversions();
+    } catch {
+      // SDK/DB error objects can contain request bodies or credentials.
+      throw new Error("Marketing conversion sweep failed; inspect sanitized outbox status and configuration");
+    }
+  });
+
   await boss.work<RepositoryIndexJob>("index-repository", { localConcurrency: 1 }, async (jobs) => {
     for (const job of jobs) await processRepositoryIndex(job.data);
   });
