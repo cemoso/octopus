@@ -36,6 +36,7 @@ model User {
   welcomeGrantedAt DateTime?
 
   @@index([signupIp])
+  @@index([createdAt, id])
 
   emailSends EmailSend[]
   devices    UserDevice[]
@@ -848,6 +849,35 @@ model CreditTransaction {
 
   @@index([organizationId, createdAt])
   @@map("credit_transactions")
+}
+
+// Backend-only business-event delivery. The source remains the account/Stripe
+// ledger; this table never grants credits or initiates processor operations.
+model MarketingConversion {
+  id              String    @id @default(cuid())
+  sourceId        String
+  environment     String
+  originKey       String
+  kind            String
+  reference       String
+  organizationId  String?
+  sourceCreatedAt DateTime
+  payload         String?   @db.Text
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime  @default(now())
+  leaseId         String?
+  leaseUntil      DateTime?
+  receiptId       String?
+  httpStatus      Int?
+  errorCode       String?
+  deliveredAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([sourceId, originKey])
+  @@index([sourceId, status, nextAttemptAt])
+  @@map("marketing_conversions")
 }
 
 model AutoReloadConfig {

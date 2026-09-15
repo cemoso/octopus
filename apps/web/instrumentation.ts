@@ -107,6 +107,14 @@ export async function register() {
         await boss.schedule("refresh-release-cache", "0 5 * * *");
       }
 
+      // Disabled by default. Existing schedules are removed on opt-out;
+      // the worker rechecks the flag before reading any product facts.
+      if (!isSelfHosted() && process.env.UNIFIED_ADS_ENABLED === "true") {
+        await boss.schedule("marketing-conversions", "* * * * *");
+      } else {
+        await boss.unschedule("marketing-conversions");
+      }
+
       // Daily subscription renewals (06:00 UTC — offset from the jobs above).
       // Cloud-only: self-hosted installs have no billing path. Charges due
       // orgs' saved cards and grants the period's credits; failures retry

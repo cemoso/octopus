@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Operators: optional hosted delivery of registrations, Stripe-confirmed cash payments and successful individual refunds to Unified Ads, with durable retries and separate TEST/LIVE sources. Apply the additive marketing conversion migration before enabling delivery; see [setup and limits](docs/unified-ads-conversions.md). Receiver totals are observed product events; ad attribution and ad-network forwarding are separate capabilities.
+
 ### Fixed
 - Native CLI 0.5.1 finishes writing onboarding JSON before it exits, so coding agents receive complete onboarding results when capturing output through a pipe.
 

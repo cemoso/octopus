@@ -138,3 +138,13 @@ jobs:
         working-directory: apps/web
         env:
           RUN_CLI_AUTH_DB_TESTS: "1"
+
+      - name: Test conversion cash facts and transport
+        run: bun test lib/__tests__/marketing-conversions.test.ts lib/__tests__/marketing-stripe.test.ts
+        working-directory: apps/web
+
+      - name: Test conversion migration, capture and delivery recovery against PostgreSQL
+        run: bun test lib/__tests__/marketing-outbox.db.test.ts
+        working-directory: apps/web
+        env:
+          RUN_MARKETING_DB_TESTS: "1"
