@@ -43,17 +43,32 @@ measured before expanding scale.
 
 Concurrent workers claim rows using PostgreSQL `SKIP LOCKED` and 120-second
 leases. A tick processes at most 20 rows and checks its 90-second time budget
-between rows. Source reads have 10-second timeouts; HTTP and receipt reading share
-a 10-second deadline. Expired workers cannot acknowledge a successor's lease.
+between rows. Each Stripe read has a 10-second timeout; receiver identity checks,
+event delivery and response-body reading share one 10-second deadline per
+attempt. Expired workers cannot acknowledge a successor's lease.
 
-The serialized body is committed before the first HTTP request. Database
+The serialized body is committed before the first receiver HTTP request. Database
 constraints preserve source identity and those exact bytes across retries,
-worker restarts and key rotation. A lost response retries the same event; only a
-valid committed `201` receipt or matching `200` duplicate receipt acknowledges it.
-Network errors, malformed success, `401`, `408`, `429` and server errors retry
-with bounded exponential backoff. `Retry-After` is respected up to 24 hours.
-Other rejections, including identity conflict `409`, are held as `blocked`.
+worker restarts and key rotation. Before every event POST, the producer calls
+`GET /api/conversion-events/identity` using the same bearer key as that POST,
+without caching or following redirects. It requires a `200` response with
+`schemaVersion: 1`, the configured source ID and environment, a UUID `keyId`, and
+all three capabilities: `registrations`, `purchases`, `refunds`. A mismatched,
+malformed or unavailable identity leaves the row pending with backoff and no
+event POST or acknowledgement. Inspect `receiver_identity_invalid` or
+`receiver_identity_http_<status>` when diagnosing these failures.
+
+A lost response retries the same event; only a valid committed `201` receipt or
+matching `200` duplicate receipt acknowledges it. Network errors, malformed
+success, and event POST `401`, `408`, `429` and server errors retry with bounded
+exponential backoff. `Retry-After` is respected up to 24 hours.
+Other event POST rejections, including event conflict `409`, are held as `blocked`.
 Delivery never charges, refunds or grants credits.
+
+Stripe credentials are needed only to resolve a financial row that has no saved
+payload. Registrations and retries of persisted bodies can deliver without
+`STRIPE_SECRET_KEY`; unresolved financial rows remain pending with
+`source_unavailable` until processor access is restored.
 
 A refund also retains its actual original payment as an outbox dependency when
 needed. Either can arrive first; the receiver owns reconciliation. The receiver
@@ -126,7 +141,8 @@ RUN_MARKETING_DB_TESTS=1 bun test apps/web/lib/__tests__/marketing-outbox.db.tes
 ```
 
 The database suite requires `DATABASE_URL` pointing to a local dedicated database
-whose name contains `test`. It creates and deletes only a uniquely named sibling
+whose name includes `test` as a hyphen- or underscore-delimited segment (or is
+exactly `test`). It creates and deletes only a uniquely named sibling
 test database, using the actual migration and production Prisma/outbox functions.
 The database user needs test-database creation privileges. Stripe and HTTP
 fixtures are synthetic; no live payment or advertising credentials are used.
