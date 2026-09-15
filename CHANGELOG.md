@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.158] - 2026-09-15
+
 ### Added
 - Operators: optional hosted delivery of registrations, Stripe-confirmed cash payments and successful individual refunds to Unified Ads, with durable retries and separate TEST/LIVE sources. Apply the additive marketing conversion migration before enabling delivery; see [setup and limits](docs/unified-ads-conversions.md). Receiver totals are observed product events; ad attribution and ad-network forwarding are separate capabilities.
 
