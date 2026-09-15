@@ -75,7 +75,7 @@ export async function finishMarketingConversion(row: MarketingConversion, result
   return updated.count === 1;
 }
 
-async function persistedBody(row: MarketingConversion, config: MarketingConfig, reader: MarketingStripeReader): Promise<string | null> {
+async function persistedBody(row: MarketingConversion, config: MarketingConfig, reader?: MarketingStripeReader): Promise<string | null> {
   if (row.payload !== null) return row.payload;
   let body: string;
   let original: Awaited<ReturnType<typeof resolveStripeConversion>>["originalPurchase"];
@@ -83,7 +83,7 @@ async function persistedBody(row: MarketingConversion, config: MarketingConfig, 
     body = serializeConversion(registrationEvent(row.reference, row.sourceCreatedAt));
   } else {
     if ((row.kind !== "purchase" && row.kind !== "refund") || !row.organizationId) throw new MarketingSourceError("invalid_outbox_source");
-    const resolved = await resolveStripeConversion(reader, row.kind, row.reference, row.organizationId, config.environment);
+    const resolved = await resolveStripeConversion(reader ?? marketingStripeReader(getStripe()), row.kind, row.reference, row.organizationId, config.environment);
     body = serializeConversion(resolved.event);
     original = resolved.originalPurchase;
   }
@@ -113,7 +113,7 @@ async function persistedBody(row: MarketingConversion, config: MarketingConfig, 
 export async function processMarketingConversion(
   row: MarketingConversion,
   config: MarketingConfig,
-  reader: MarketingStripeReader,
+  reader?: MarketingStripeReader,
   send?: (request: Request) => Promise<Response>,
 ): Promise<"delivered" | "retry" | "blocked" | "lease_lost"> {
   if (row.sourceId !== config.sourceId || row.environment !== config.environment) throw new MarketingSourceError("outbox_source_mismatch");
@@ -141,13 +141,12 @@ export async function syncMarketingConversions(): Promise<void> {
   if (!config) return;
   if (config.environment !== "live" && process.env.NODE_ENV === "production") throw new MarketingSourceError("production_requires_live_source");
   const captured = await captureMarketingConversions(config);
-  const reader = marketingStripeReader(getStripe());
   const deadline = Date.now() + TICK_MS;
   const counts = { delivered: 0, retry: 0, blocked: 0, lease_lost: 0 };
   for (let processed = 0; processed < DELIVERY_BATCH && Date.now() < deadline; processed++) {
     const row = await claimMarketingConversion(config);
     if (!row) break;
-    counts[await processMarketingConversion(row, config, reader)]++;
+    counts[await processMarketingConversion(row, config)]++;
   }
   // Counts only: no source references, Stripe objects, bearer keys or bodies.
   console.log("[marketing-conversions]", { captured, ...counts });

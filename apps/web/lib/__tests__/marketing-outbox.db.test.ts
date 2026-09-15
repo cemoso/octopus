@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -81,6 +81,53 @@ async function due(id: string) {
     expect(rows.filter(row => row.kind === "refund")).toHaveLength(1);
     expect(rows.find(row => row.kind === "registration")?.payload).toContain(conversionId("user", "test_user"));
     expect(await outbox.captureMarketingConversions(config)).toBe(0);
+  });
+
+  it("delivers registrations and replays persisted cash without Stripe credentials in the scheduled worker", async () => {
+    const env = {
+      UNIFIED_ADS_ENABLED: "true", UNIFIED_ADS_SOURCE_ID: config.sourceId,
+      UNIFIED_ADS_ENVIRONMENT: "test", UNIFIED_ADS_SERVER_KEY: `uads_${receiptId}_${"a".repeat(43)}`,
+      UNIFIED_ADS_FROM: config.from.toISOString(), NODE_ENV: "test",
+      OCTOPUS_SELF_HOSTED: "false", NEXT_PUBLIC_OCTOPUS_SELF_HOSTED: "false",
+      STRIPE_SECRET_KEY: undefined,
+    };
+    const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+    const bodies: string[] = [];
+    const send = spyOn(globalThis, "fetch").mockImplementation(withIdentity(async request => {
+      bodies.push(await request.text());
+      return received(true);
+    }) as typeof fetch);
+    try {
+      for (const [key, value] of Object.entries(env)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      await ledger("payment", "subscription", "pi_fixture");
+      await outbox.captureMarketingConversions(config);
+      const payment = (await outbox.claimMarketingConversion(config))!;
+      expect(await outbox.processMarketingConversion(payment, config, fixture().reader, withIdentity(async () => {
+        throw new Error("receipt lost");
+      }))).toBe("retry");
+      const persisted = (await prisma.marketingConversion.findUniqueOrThrow({ where: { id: payment.id } })).payload!;
+      await due(payment.id);
+      await user();
+      // An unresolved cash row must retry without starving independent delivery.
+      await ledger("unresolved", "purchase", "pi_unresolved");
+      await outbox.syncMarketingConversions();
+      const rows = await prisma.marketingConversion.findMany();
+      expect(rows.find(row => row.kind === "registration")).toMatchObject({ status: "delivered", receiptId, attempts: 1 });
+      expect(rows.find(row => row.id === payment.id)).toMatchObject({ status: "delivered", receiptId, attempts: 2, payload: persisted });
+      expect(rows.find(row => row.reference === "pi_unresolved")).toMatchObject({ status: "pending", errorCode: "source_unavailable", receiptId: null, payload: null });
+      expect(bodies).toHaveLength(2);
+      expect(bodies).toContain(persisted);
+      expect(bodies.map(body => JSON.parse(body).eventType).sort()).toEqual(["purchase", "registration"]);
+    } finally {
+      send.mockRestore();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it("finds a transaction that commits after a sweep with an older timestamp", async () => {
