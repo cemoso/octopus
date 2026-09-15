@@ -25,4 +25,3 @@ export function fixture() {
   };
   return { reader, payment, checkout, charge, refund };
 }
-
