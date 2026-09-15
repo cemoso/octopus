@@ -55,6 +55,7 @@ async function due(id: string) {
     ({ prisma } = await import("@octopus/db"));
     outbox = await import("../marketing-outbox");
   });
+  // DROP DATABASE can wait for a PostgreSQL checkpoint on shared CI storage.
   afterAll(async () => {
     await prisma?.$disconnect();
     await db?.end();
@@ -62,7 +63,7 @@ async function due(id: string) {
     await admin?.end();
     if (originalUrl === undefined) delete process.env.DATABASE_URL;
     else process.env.DATABASE_URL = originalUrl;
-  });
+  }, 30_000);
   beforeEach(async () => {
     await db.query("TRUNCATE marketing_conversions, users, credit_transactions");
   });
