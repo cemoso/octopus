@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { prisma, type MarketingConversion } from "@octopus/db";
+import { deliverTracking, parseTrackingPayload, resolveTrackingConfig, type TrackingConfig } from "./marketing-tracking";
 import { getStripe } from "./stripe";
 import {
   deliverConversion,
@@ -17,6 +18,25 @@ const CAPTURE_BATCH = 100;
 const LEASE_MS = 120_000;
 const TICK_MS = 90_000;
 const DELIVERY_BATCH = 20;
+
+/** Internal server interface only. Capture must verify consent and campaign membership first. */
+export async function enqueueMarketingTracking(config: TrackingConfig, payload: string): Promise<string> {
+  const record = parseTrackingPayload(payload, config);
+  const originKey = `tracking:${config.trackingId}:${record.eventId}`;
+  const row = await prisma.marketingConversion.upsert({
+    where: { sourceId_originKey: { sourceId: config.sourceId, originKey } },
+    create: {
+      sourceId: config.sourceId, environment: config.environment, originKey,
+      kind: record.recordType, reference: config.trackingId,
+      sourceCreatedAt: new Date(record.occurredAt), payload,
+    },
+    update: {},
+  });
+  if (row.payload !== payload || row.environment !== config.environment || row.reference !== config.trackingId) {
+    throw new MarketingSourceError("tracking_identity_conflict");
+  }
+  return row.id;
+}
 
 /** Reconcile committed facts, not hook callbacks or an unsafe commit-time cursor. */
 export async function captureMarketingConversions(config: MarketingConfig): Promise<number> {
@@ -115,6 +135,7 @@ export async function processMarketingConversion(
   config: MarketingConfig,
   reader?: MarketingStripeReader,
   send?: (request: Request) => Promise<Response>,
+  tracking?: TrackingConfig | null,
 ): Promise<"delivered" | "retry" | "blocked" | "lease_lost"> {
   if (row.sourceId !== config.sourceId || row.environment !== config.environment) throw new MarketingSourceError("outbox_source_mismatch");
   let result: DeliveryResult;
@@ -123,7 +144,14 @@ export async function processMarketingConversion(
     if (body === null) return "lease_lost";
     const owned = await prisma.marketingConversion.count({ where: { id: row.id, leaseId: row.leaseId, status: "processing", leaseUntil: { gt: new Date() } } });
     if (!owned) return "lease_lost";
-    result = await deliverConversion(config, body, send);
+    if (row.kind === "visit" || row.kind === "conversion_context") {
+      if (!tracking) throw new MarketingSourceError("tracking_disabled", true);
+      if (tracking.sourceId !== config.sourceId || tracking.environment !== config.environment ||
+          tracking.serverKey !== config.serverKey || tracking.trackingId !== row.reference) {
+        throw new MarketingSourceError("tracking_binding_mismatch");
+      }
+      result = await deliverTracking(tracking, body, send);
+    } else result = await deliverConversion(config, body, send);
   } catch (error) {
     if (error instanceof MarketingSourceError) {
       result = { kind: error.retryable ? "retry" : "blocked", code: error.code };
@@ -140,13 +168,16 @@ export async function syncMarketingConversions(): Promise<void> {
   const config = resolveMarketingConfig(process.env);
   if (!config) return;
   if (config.environment !== "live" && process.env.NODE_ENV === "production") throw new MarketingSourceError("production_requires_live_source");
+  // Invalid/disabled tracking must not interrupt existing business-event delivery.
+  let tracking: TrackingConfig | null = null;
+  try { tracking = resolveTrackingConfig(process.env); } catch { /* Tracking rows stay pending. */ }
   const captured = await captureMarketingConversions(config);
   const deadline = Date.now() + TICK_MS;
   const counts = { delivered: 0, retry: 0, blocked: 0, lease_lost: 0 };
   for (let processed = 0; processed < DELIVERY_BATCH && Date.now() < deadline; processed++) {
     const row = await claimMarketingConversion(config);
     if (!row) break;
-    counts[await processMarketingConversion(row, config)]++;
+    counts[await processMarketingConversion(row, config, undefined, undefined, tracking)]++;
   }
   // Counts only: no source references, Stripe objects, bearer keys or bodies.
   console.log("[marketing-conversions]", { captured, ...counts });

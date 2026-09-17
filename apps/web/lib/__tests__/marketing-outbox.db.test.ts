@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { conversionId, type MarketingConfig } from "../marketing-conversions";
+import { trackingIdentity, TRACKING_MODEL, type TrackingConfig } from "../marketing-tracking";
 import { fixture } from "./fixtures/marketing-stripe";
 
 const enabled = process.env.RUN_MARKETING_DB_TESTS === "1";
@@ -50,6 +51,7 @@ async function due(id: string) {
     // from the shipped SQL, rather than db push or a test copy of that schema.
     await db.query('CREATE TABLE users (id TEXT PRIMARY KEY, "createdAt" TIMESTAMP(3) NOT NULL); CREATE TABLE credit_transactions (id TEXT PRIMARY KEY, "createdAt" TIMESTAMP(3) NOT NULL, "organizationId" TEXT NOT NULL, type TEXT NOT NULL, "stripeSessionId" TEXT, "stripeRefundId" TEXT)');
     await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260915140000_marketing_conversion_outbox/migration.sql", import.meta.url), "utf8"));
+    await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260917100000_marketing_tracking_outbox/migration.sql", import.meta.url), "utf8"));
     process.env.DATABASE_URL = testUrl;
     mock.module("server-only", () => ({}));
     ({ prisma } = await import("@octopus/db"));
@@ -66,6 +68,57 @@ async function due(id: string) {
   }, 30_000);
   beforeEach(async () => {
     await db.query("TRUNCATE marketing_conversions, users, credit_transactions");
+  });
+
+  it("persists tracking bytes in the same outbox, recovers a lost response, and fences foreign bindings", async () => {
+    const tracking: TrackingConfig = { ...config, trackingId: randomUUID(), projectId: randomUUID(), origin: "https://octopus-review.ai", trackingFrom: config.from };
+    const body = JSON.stringify({ schemaVersion: 1, recordType: "visit", eventId: randomUUID(), trackingId: tracking.trackingId,
+      occurredAt: new Date().toISOString(), visitorId: trackingIdentity("visitor", config.sourceId, randomUUID()),
+      sessionId: trackingIdentity("session", config.sourceId, randomUUID()), origin: tracking.origin,
+      analyticsConsent: "granted", attributionConsent: false, campaignLinkId: null });
+    const id = await outbox.enqueueMarketingTracking(tracking, body);
+    expect(await outbox.enqueueMarketingTracking(tracking, body)).toBe(id);
+    await expect(outbox.enqueueMarketingTracking(tracking, body.replace('"attributionConsent":false', '"attributionConsent":true'))).rejects.toThrow("tracking_identity_conflict");
+    await expect(Promise.resolve(prisma.marketingConversion.update({ where: { id }, data: { payload: "{}" } }))).rejects.toThrow();
+    const identities: string[] = []; const bodies: string[] = [];
+    const send = async (request: Request) => {
+      identities.push(request.method);
+      if (request.method === "GET") return Response.json({ schemaVersion: 1, sourceId: tracking.sourceId,
+        environment: tracking.environment, keyId: receiptId, trackingId: tracking.trackingId,
+        projectId: tracking.projectId, origin: tracking.origin, model: TRACKING_MODEL, recordTypes: ["visit", "conversion_context"] });
+      bodies.push(await request.text());
+      if (bodies.length === 1) throw new Error("lost successful response");
+      return Response.json({ receiptId, duplicate: true, status: "stored", sourceId: tracking.sourceId, environment: tracking.environment, trackingId: tracking.trackingId });
+    };
+    let row = (await outbox.claimMarketingConversion(config))!;
+    expect(await outbox.processMarketingConversion(row, config, undefined, send, tracking)).toBe("retry");
+    await due(id);
+    row = (await outbox.claimMarketingConversion(config))!;
+    expect(await outbox.processMarketingConversion(row, config, undefined, send, tracking)).toBe("delivered");
+    expect(bodies).toEqual([body, body]);
+    expect(identities).toEqual(["GET", "POST", "GET", "POST"]);
+    expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id } })).toMatchObject({ payload: body, receiptId, attempts: 2, status: "delivered" });
+    const second = await outbox.enqueueMarketingTracking(tracking, body.replace(JSON.parse(body).eventId, randomUUID()));
+    row = (await outbox.claimMarketingConversion(config))!;
+    expect(row.id).toBe(second);
+    expect(await outbox.processMarketingConversion(row, config, undefined, send, { ...tracking, trackingId: randomUUID() })).toBe("blocked");
+    expect(identities).toHaveLength(4);
+  });
+
+  it("keeps disabled tracking pending while business events continue to deliver", async () => {
+    const tracking: TrackingConfig = { ...config, trackingId: randomUUID(), projectId: randomUUID(), origin: "https://octopus-review.ai", trackingFrom: config.from };
+    const id = await outbox.enqueueMarketingTracking(tracking, JSON.stringify({ schemaVersion: 1, recordType: "conversion_context", eventId: randomUUID(),
+      trackingId: tracking.trackingId, occurredAt: new Date().toISOString(), visitorId: trackingIdentity("visitor", config.sourceId, randomUUID()),
+      conversionType: "registration", conversionId: conversionId("user", "test_user"), attributionConsent: "granted" }));
+    const trackingRow = (await outbox.claimMarketingConversion(config))!;
+    let sends = 0;
+    expect(await outbox.processMarketingConversion(trackingRow, config, undefined, async () => { sends++; throw Error(); })).toBe("retry");
+    expect(sends).toBe(0);
+    expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "pending", errorCode: "tracking_disabled" });
+    await user(); await outbox.captureMarketingConversions(config);
+    const businessRow = (await outbox.claimMarketingConversion(config))!;
+    expect(businessRow.kind).toBe("registration");
+    expect(await outbox.processMarketingConversion(businessRow, config, undefined, withIdentity(async () => received()))).toBe("delivered");
   });
 
   it("captures actual registrations and Stripe-linked cash facts, including usage-typed refunds", async () => {
