@@ -70,7 +70,7 @@ export function parseTrackingPayload(body: string, config: TrackingConfig): Trac
     }
   } else if (d.recordType === "conversion_context") {
     fields = [...common, "conversionType", "conversionId", "attributionConsent"];
-    if (!["registration", "purchase"].includes(String(d.conversionType)) || d.attributionConsent !== "granted" ||
+    if ((d.conversionType !== "registration" && d.conversionType !== "purchase") || d.attributionConsent !== "granted" ||
         typeof d.conversionId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(d.conversionId)) {
       throw new Error("Invalid conversion context");
     }

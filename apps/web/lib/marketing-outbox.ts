@@ -66,13 +66,14 @@ export async function captureMarketingConversions(config: MarketingConfig): Prom
   return (await prisma.marketingConversion.createMany({ data: rows, skipDuplicates: true })).count;
 }
 
-export async function claimMarketingConversion(config: MarketingConfig, now = new Date()): Promise<MarketingConversion | null> {
+export async function claimMarketingConversion(config: MarketingConfig, now = new Date(), trackingEnabled = false): Promise<MarketingConversion | null> {
   const leaseId = randomUUID();
   const leaseUntil = new Date(now.getTime() + LEASE_MS);
   const rows = await prisma.$queryRaw<MarketingConversion[]>`
     WITH candidate AS (
       SELECT id FROM marketing_conversions
       WHERE "sourceId" = ${config.sourceId} AND environment = ${config.environment}
+        AND (${trackingEnabled} OR kind NOT IN ('visit', 'conversion_context'))
         AND ((status = 'pending' AND "nextAttemptAt" <= ${now}) OR (status = 'processing' AND "leaseUntil" <= ${now}))
       ORDER BY "nextAttemptAt", id FOR UPDATE SKIP LOCKED LIMIT 1
     )
@@ -175,7 +176,7 @@ export async function syncMarketingConversions(): Promise<void> {
   const deadline = Date.now() + TICK_MS;
   const counts = { delivered: 0, retry: 0, blocked: 0, lease_lost: 0 };
   for (let processed = 0; processed < DELIVERY_BATCH && Date.now() < deadline; processed++) {
-    const row = await claimMarketingConversion(config);
+    const row = await claimMarketingConversion(config, new Date(), tracking !== null);
     if (!row) break;
     counts[await processMarketingConversion(row, config, undefined, undefined, tracking)]++;
   }

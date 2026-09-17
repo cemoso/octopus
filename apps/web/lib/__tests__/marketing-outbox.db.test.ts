@@ -90,36 +90,68 @@ async function due(id: string) {
       if (bodies.length === 1) throw new Error("lost successful response");
       return Response.json({ receiptId, duplicate: true, status: "stored", sourceId: tracking.sourceId, environment: tracking.environment, trackingId: tracking.trackingId });
     };
-    let row = (await outbox.claimMarketingConversion(config))!;
+    let row = (await outbox.claimMarketingConversion(config, new Date(), true))!;
     expect(await outbox.processMarketingConversion(row, config, undefined, send, tracking)).toBe("retry");
     await due(id);
-    row = (await outbox.claimMarketingConversion(config))!;
+    row = (await outbox.claimMarketingConversion(config, new Date(), true))!;
     expect(await outbox.processMarketingConversion(row, config, undefined, send, tracking)).toBe("delivered");
     expect(bodies).toEqual([body, body]);
     expect(identities).toEqual(["GET", "POST", "GET", "POST"]);
     expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id } })).toMatchObject({ payload: body, receiptId, attempts: 2, status: "delivered" });
     const second = await outbox.enqueueMarketingTracking(tracking, body.replace(JSON.parse(body).eventId, randomUUID()));
-    row = (await outbox.claimMarketingConversion(config))!;
+    row = (await outbox.claimMarketingConversion(config, new Date(), true))!;
     expect(row.id).toBe(second);
     expect(await outbox.processMarketingConversion(row, config, undefined, send, { ...tracking, trackingId: randomUUID() })).toBe("blocked");
     expect(identities).toHaveLength(4);
   });
 
-  it("keeps disabled tracking pending while business events continue to deliver", async () => {
-    const tracking: TrackingConfig = { ...config, trackingId: randomUUID(), projectId: randomUUID(), origin: "https://octopus-review.ai", trackingFrom: config.from };
-    const id = await outbox.enqueueMarketingTracking(tracking, JSON.stringify({ schemaVersion: 1, recordType: "conversion_context", eventId: randomUUID(),
-      trackingId: tracking.trackingId, occurredAt: new Date().toISOString(), visitorId: trackingIdentity("visitor", config.sourceId, randomUUID()),
-      conversionType: "registration", conversionId: conversionId("user", "test_user"), attributionConsent: "granted" }));
-    const trackingRow = (await outbox.claimMarketingConversion(config))!;
-    let sends = 0;
-    expect(await outbox.processMarketingConversion(trackingRow, config, undefined, async () => { sends++; throw Error(); })).toBe("retry");
-    expect(sends).toBe(0);
-    expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id } })).toMatchObject({ status: "pending", errorCode: "tracking_disabled" });
-    await user(); await outbox.captureMarketingConversions(config);
-    const businessRow = (await outbox.claimMarketingConversion(config))!;
-    expect(businessRow.kind).toBe("registration");
-    expect(await outbox.processMarketingConversion(businessRow, config, undefined, withIdentity(async () => received()))).toBe("delivered");
-  });
+  for (const activation of ["false", "true"]) {
+    it(`preserves an older tracking backlog without consuming business capacity with tracking ${activation}`, async () => {
+      const tracking: TrackingConfig = { ...config, trackingId: randomUUID(), projectId: randomUUID(), origin: "https://octopus-review.ai", trackingFrom: config.from };
+      for (let index = 0; index < 25; index++) {
+        const common = { schemaVersion: 1, eventId: randomUUID(), trackingId: tracking.trackingId,
+          occurredAt: new Date().toISOString(), visitorId: trackingIdentity("visitor", config.sourceId, randomUUID()) };
+        const record = index % 2 === 0
+          ? { ...common, recordType: "conversion_context", conversionType: "registration", conversionId: conversionId("user", "test_user"), attributionConsent: "granted" }
+          : { ...common, recordType: "visit", sessionId: trackingIdentity("session", config.sourceId, randomUUID()), origin: tracking.origin,
+            analyticsConsent: "granted", attributionConsent: false, campaignLinkId: null };
+        await due(await outbox.enqueueMarketingTracking(tracking, JSON.stringify(record, null, 2)));
+      }
+      const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+      await user();
+      const env = {
+        UNIFIED_ADS_ENABLED: "true", UNIFIED_ADS_SOURCE_ID: config.sourceId,
+        UNIFIED_ADS_ENVIRONMENT: "test", UNIFIED_ADS_SERVER_KEY: `uads_${receiptId}_${"a".repeat(43)}`,
+        UNIFIED_ADS_FROM: config.from.toISOString(), NODE_ENV: "test",
+        OCTOPUS_SELF_HOSTED: "false", NEXT_PUBLIC_OCTOPUS_SELF_HOSTED: "false",
+        UNIFIED_ADS_TRACKING_ENABLED: activation, UNIFIED_ADS_TRACKING_ID: "invalid",
+      };
+      const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+      const bodies: string[] = [];
+      const send = spyOn(globalThis, "fetch").mockImplementation(withIdentity(async request => {
+        bodies.push(await request.text());
+        return received();
+      }) as typeof fetch);
+      try {
+        Object.assign(process.env, env);
+        await outbox.syncMarketingConversions();
+        expect(bodies.map(body => JSON.parse(body).eventType)).toEqual(["registration"]);
+        expect(await prisma.marketingConversion.findMany({ where: { kind: { in: ["visit", "conversion_context"] } }, orderBy: { id: "asc" } })).toEqual(before);
+        expect(await prisma.marketingConversion.findFirstOrThrow({ where: { kind: "registration" } }))
+          .toMatchObject({ status: "delivered", attempts: 1, receiptId });
+        expect(await outbox.claimMarketingConversion(config)).toBeNull();
+        const resumed = (await outbox.claimMarketingConversion(config, new Date(), true))!;
+        expect(resumed.payload).toBe(before.find(row => row.id === resumed.id)!.payload);
+        expect(resumed.attempts).toBe(1);
+      } finally {
+        send.mockRestore();
+        for (const [key, value] of Object.entries(previous)) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
+      }
+    });
+  }
 
   it("captures actual registrations and Stripe-linked cash facts, including usage-typed refunds", async () => {
     await user();

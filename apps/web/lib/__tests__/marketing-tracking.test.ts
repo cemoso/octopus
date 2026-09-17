@@ -51,6 +51,18 @@ describe("Unified Ads tracking delivery", () => {
     expect(parseTrackingPayload(JSON.stringify(context), config)).toEqual(context);
     expect(() => parseTrackingPayload(JSON.stringify({ ...context, conversionType: "refund" }), config)).toThrow();
   });
+  it("rejects non-string conversion types before any HTTP request", async () => {
+    for (const conversionType of [["purchase"], ["registration"], {}, null, 1, true]) {
+      const payload = JSON.stringify({ schemaVersion: 1, recordType: "conversion_context", eventId: randomUUID(),
+        trackingId: config.trackingId, occurredAt: record.occurredAt, visitorId: record.visitorId,
+        conversionType, conversionId: "payment_canonical", attributionConsent: "granted" });
+      expect(() => parseTrackingPayload(payload, config)).toThrow("Invalid conversion context");
+      let calls = 0;
+      expect(await deliverTracking(config, payload, async () => { calls++; return Response.json(identity); }))
+        .toEqual({ kind: "blocked", code: "tracking_payload_invalid" });
+      expect(calls).toBe(0);
+    }
+  });
   it("preflights every attempt and recovers a lost response with identical bytes and receipt", async () => {
     const requests: Request[] = []; const bodies: string[] = [];
     let stored = false;
