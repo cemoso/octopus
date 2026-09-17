@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.159] - 2026-09-17
+
+### Added
+- Choose usage analytics and advertising measurement separately, and change or withdraw optional consent from Privacy choices.
+- Operators: optional consented visitor and verified signup/payment attribution in Unified Ads, with durable retries and unchanged sales/refund identities and currencies. Apply both additive tracking migrations and agree the LIVE enrollment and new-events cutoff before activation; see [setup and rollback](docs/unified-ads-tracking.md).
+
 ## [1.0.158] - 2026-09-15
 
 ### Added
