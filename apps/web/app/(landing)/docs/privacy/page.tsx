@@ -20,7 +20,7 @@ export default function PrivacyPage() {
         <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
           Privacy Policy
         </h1>
-        <p className="mt-3 text-sm text-[#555]">Last updated: June 2026</p>
+        <p className="mt-3 text-sm text-[#555]">Last updated: September 2026</p>
       </div>
 
       <Section title="1. Introduction">
@@ -60,9 +60,15 @@ export default function PrivacyPage() {
 
         <H3>Usage Data</H3>
         <P>
-          We collect anonymous usage analytics (page views, feature usage)
-          through Google Analytics to improve the product. We also track AI
-          token consumption per organization for billing purposes.
+          With your permission, we collect usage analytics (page views and feature
+          usage) through Google Analytics. Separate advertising-measurement
+          permission controls the X pixel and linking consented visits to signups
+          and purchases in Unified Ads. Our first-party visitor identifiers are
+          random and are not derived from email addresses or IP addresses. Use
+          Privacy choices to change or withdraw these permissions. Sales and
+          refunds are also recorded as business transactions independently of
+          optional visitor attribution. We track AI token consumption per
+          organization for billing purposes.
         </P>
       </Section>
 
@@ -111,8 +117,10 @@ export default function PrivacyPage() {
           </li>
           <li>
             <strong className="text-white">Google Analytics</strong> for
-            anonymous usage analytics
+            consented usage analytics
           </li>
+          <li><strong className="text-white">X</strong> for consented advertising measurement</li>
+          <li><strong className="text-white">Unified Ads</strong> for sales reporting and consented visit attribution</li>
         </UL>
         <P>
           Code snippets sent to AI providers are subject to their respective

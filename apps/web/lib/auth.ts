@@ -1,3 +1,5 @@
+import "server-only";
+import { signupMarketingVisit } from "./marketing-capture";
 import { betterAuth } from "better-auth";
 import { APIError, getIp } from "better-auth/api";
 import { magicLink } from "better-auth/plugins";
@@ -89,6 +91,7 @@ export const auth = betterAuth({
     : {}),
   user: {
     additionalFields: {
+      marketingVisitId: { type: "string", required: false, input: false, returned: false },
       // Declared so the adapter persists the signupIp the user.create.before
       // hook stamps (transformInput drops fields not in the schema). Never
       // client-writable, never returned in API responses.
@@ -219,6 +222,7 @@ export const auth = betterAuth({
             data: {
               ...user,
               email: normalizedEmail,
+              marketingVisitId: await signupMarketingVisit(requestHeaders ? new Headers(requestHeaders).get("cookie") : null),
               ...(ip ? { signupIp: ip } : {}),
             },
           };

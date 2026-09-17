@@ -92,14 +92,18 @@ function retryAfter(value: string | null): number {
   return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), 24 * 60 * 60_000)) : 0;
 }
 
-async function readReceipt(response: Response, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
+export async function readMarketingJson(response: { body: ReadableStream<Uint8Array> | null }, maxBytes = MAX_BODY_BYTES, timeoutMs?: number): Promise<unknown> {
   if (!response.body) throw new Error("Missing receipt");
   const reader = response.body.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    if (timeoutMs) timer = setTimeout(() => reject(new Error("JSON read timeout")), timeoutMs);
+  });
   const chunks: Uint8Array[] = [];
   let bytes = 0;
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await Promise.race([reader.read(), deadline]);
       if (done) break;
       bytes += value.byteLength;
       if (bytes > maxBytes) throw new Error("Receipt exceeds limit");
@@ -107,7 +111,8 @@ async function readReceipt(response: Response, maxBytes = MAX_BODY_BYTES): Promi
     }
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } finally {
-    await reader.cancel().catch(() => {});
+    if (timer) clearTimeout(timer);
+    void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -171,7 +176,7 @@ export async function deliverMarketingRecord(
         };
       }
       try {
-        const identity = await readReceipt(identityResponse, contract.maxBytes) as Record<string, unknown> | null;
+        const identity = await readMarketingJson(identityResponse, contract.maxBytes) as Record<string, unknown> | null;
         if (!identity || Array.isArray(identity) || !contract.identity(identity)) {
           return { kind: "retry", code: "receiver_identity_invalid", status: 200 };
         }
@@ -199,7 +204,7 @@ export async function deliverMarketingRecord(
         };
       }
       try {
-        const value = await readReceipt(response, contract.maxBytes) as Record<string, unknown> | null;
+        const value = await readMarketingJson(response, contract.maxBytes) as Record<string, unknown> | null;
         if (!value || value.status !== "stored" || !contract.receipt(value) || value.duplicate !== (status === 200) || typeof value.receiptId !== "string" || !UUID.test(value.receiptId)) {
           throw new Error("Invalid receipt");
         }

@@ -52,6 +52,8 @@ async function due(id: string) {
     await db.query('CREATE TABLE users (id TEXT PRIMARY KEY, "createdAt" TIMESTAMP(3) NOT NULL); CREATE TABLE credit_transactions (id TEXT PRIMARY KEY, "createdAt" TIMESTAMP(3) NOT NULL, "organizationId" TEXT NOT NULL, type TEXT NOT NULL, "stripeSessionId" TEXT, "stripeRefundId" TEXT)');
     await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260915140000_marketing_conversion_outbox/migration.sql", import.meta.url), "utf8"));
     await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260917100000_marketing_tracking_outbox/migration.sql", import.meta.url), "utf8"));
+    await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260917110000_marketing_capture/migration.sql", import.meta.url), "utf8"));
+    await db.query('CREATE TABLE organizations (id TEXT PRIMARY KEY, "stripeCustomerId" TEXT, name TEXT, "billingEmail" TEXT, slug TEXT)');
     process.env.DATABASE_URL = testUrl;
     mock.module("server-only", () => ({}));
     ({ prisma } = await import("@octopus/db"));
@@ -67,7 +69,100 @@ async function due(id: string) {
     else process.env.DATABASE_URL = originalUrl;
   }, 30_000);
   beforeEach(async () => {
-    await db.query("TRUNCATE marketing_conversions, users, credit_transactions");
+    await db.query("TRUNCATE organizations, marketing_payment_attributions, marketing_conversions, users, credit_transactions");
+  });
+
+  it("captures consented visits and immutable signup/payment associations without changing billing", async () => {
+    const capture = await import("../marketing-capture");
+    const { VISIT_COOKIE, ATTRIBUTION_COOKIE } = await import("../marketing-consent");
+    const tracking: TrackingConfig = { ...config, trackingId: randomUUID(), projectId: randomUUID(), origin: "https://octopus-review.ai", trackingFrom: config.from };
+    const env = { UNIFIED_ADS_ENABLED: "true", UNIFIED_ADS_SOURCE_ID: config.sourceId, UNIFIED_ADS_ENVIRONMENT: "test",
+      UNIFIED_ADS_SERVER_KEY: `uads_${receiptId}_${"a".repeat(43)}`, UNIFIED_ADS_FROM: config.from.toISOString(), NODE_ENV: "test",
+      OCTOPUS_SELF_HOSTED: "false", NEXT_PUBLIC_OCTOPUS_SELF_HOSTED: "false", UNIFIED_ADS_TRACKING_ENABLED: "true",
+      UNIFIED_ADS_TRACKING_ID: tracking.trackingId, UNIFIED_ADS_PROJECT_ID: tracking.projectId, UNIFIED_ADS_TRACKING_ORIGIN: tracking.origin, UNIFIED_ADS_TRACKING_FROM: config.from.toISOString() };
+    const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+    try {
+      Object.assign(process.env, env);
+      const data = { analyticsConsent: true, attributionConsent: true, sessionId: randomUUID() };
+      expect(await capture.captureMarketingVisit(tracking, { analyticsConsent: false, attributionConsent: false }, null)).toBeNull();
+      expect(await prisma.marketingConversion.count()).toBe(0);
+      const eventId = await capture.captureMarketingVisit(tracking, data, null);
+      const cookie = `${VISIT_COOKIE}=${eventId}; ${ATTRIBUTION_COOKIE}=granted`;
+      const original = (await capture.readMarketingVisit(tracking, cookie))!;
+      expect(original.visit.attributionConsent).toBe(true);
+      const next = await capture.captureMarketingVisit(tracking, { ...data, sessionId: randomUUID() }, cookie);
+      const second = (await capture.readMarketingVisit(tracking, `${VISIT_COOKIE}=${next}`))!;
+      expect(second.visit.visitorId).toBe(original.visit.visitorId);
+      expect(second.visit.sessionId).not.toBe(original.visit.sessionId);
+      expect(await capture.readMarketingVisit({ ...tracking, sourceId: randomUUID() }, cookie)).toBeNull();
+      expect(await capture.readMarketingVisit({ ...tracking, environment: "live" }, cookie)).toBeNull();
+      expect(await capture.signupMarketingVisit(`${VISIT_COOKIE}=${eventId}`)).toBeNull(); // withdrawn permission, stale response cookie
+      expect(await capture.signupMarketingVisit(cookie)).toBe(original.id);
+      const at = new Date();
+      await db.query(`INSERT INTO users (id, "createdAt", "marketingVisitId") VALUES ($1, $2::timestamptz AT TIME ZONE 'UTC', $3)`, ["new_user", at.toISOString(), original.id]);
+      await expect(db.query('UPDATE users SET "marketingVisitId" = NULL WHERE id = $1', ["new_user"])).rejects.toThrow();
+      const f = fixture(); f.charge.created = Math.ceil(Date.now() / 1000) + 1;
+      const attempt = await capture.beginMarketingPayment("org_fixture", "same-operation", cookie);
+      expect(attempt).not.toBeNull();
+      expect(await capture.beginMarketingPayment("org_fixture", "same-operation", null)).toBe(attempt);
+      await capture.bindMarketingPayment(attempt, "pi_fixture", { lastResponse: { headers: {} } });
+      await capture.bindMarketingPayment(attempt, "pi_different", { lastResponse: { headers: {} } });
+      expect((await prisma.marketingPaymentAttribution.findUniqueOrThrow({ where: { id: attempt! } })).paymentReference).toBe("pi_fixture");
+      await capture.captureMarketingContexts(tracking, f.reader);
+      await capture.captureMarketingContexts(tracking, f.reader);
+      const contexts = await prisma.marketingConversion.findMany({ where: { kind: "conversion_context" } });
+      expect(contexts).toHaveLength(2);
+      const parsed = contexts.map(row => JSON.parse(row.payload!));
+      expect(parsed.find(d => d.conversionType === "registration")).toMatchObject({ conversionId: conversionId("user", "new_user"), occurredAt: at.toISOString(), visitorId: original.visit.visitorId });
+      expect(parsed.find(d => d.conversionType === "purchase")).toMatchObject({ conversionId: conversionId("payment", "pi_fixture"), occurredAt: new Date(f.charge.created * 1000).toISOString(), visitorId: original.visit.visitorId });
+      const unconsented = await capture.beginMarketingPayment("org_fixture", "no-consent-first", null);
+      await capture.beginMarketingPayment("org_fixture", "no-consent-first", cookie);
+      expect((await prisma.marketingPaymentAttribution.findUniqueOrThrow({ where: { id: unconsented! } })).visitorId).toBeNull();
+      const replay = await capture.beginMarketingPayment("org_fixture", "ambiguous-response", cookie);
+      await capture.bindMarketingPayment(replay, "pi_replay", { lastResponse: { headers: { "idempotent-replayed": "true" } } });
+      expect((await prisma.marketingPaymentAttribution.findUniqueOrThrow({ where: { id: replay! } })).paymentReference).toBeNull();
+      await expect(Promise.resolve(prisma.marketingPaymentAttribution.update({ where: { id: attempt! }, data: { visitorId: null } }))).rejects.toThrow();
+      const before = await prisma.marketingConversion.count();
+      await expect(capture.captureMarketingVisit(tracking, { ...data, campaignId: "browser-forged" }, cookie)).rejects.toThrow();
+      await expect(capture.captureMarketingVisit(tracking, { ...data, attributionConsent: false, campaignLinkId: randomUUID() }, cookie)).rejects.toThrow();
+      expect(await prisma.marketingConversion.count()).toBe(before);
+      const rateLimit = await import("../rate-limit");
+      const admission = spyOn(rateLimit, "fixedWindowLimit").mockResolvedValue({ ok: false, remaining: 0, retryAfterSeconds: 60 });
+      try {
+        const route = await import("../../app/api/marketing/visit/route");
+        const request = (body: unknown, origin = tracking.origin) => new Request(`${tracking.origin}/api/marketing/visit`, {
+          method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body),
+        });
+        expect((await route.POST(request(data))).status).toBe(429);
+        admission.mockResolvedValue({ ok: true, remaining: 1, retryAfterSeconds: 0 });
+        expect((await route.POST(request(data, "https://foreign.invalid"))).status).toBe(403);
+        expect((await route.POST(request({ ...data, extra: "x".repeat(600) }))).status).toBe(400);
+        expect((await route.POST(request({ analyticsConsent: false, attributionConsent: false }))).status).toBe(204);
+        const stalled = new Request(`${tracking.origin}/api/marketing/visit`, { method: "POST", headers: { Origin: tracking.origin, "Content-Type": "application/json" }, body: new ReadableStream() });
+        expect((await route.POST(stalled)).status).toBe(400);
+        expect(await prisma.marketingConversion.count()).toBe(before);
+      } finally { admission.mockRestore(); }
+      const stripeModule = await import("../stripe");
+      const previousStripeKey = process.env.STRIPE_SECRET_KEY;
+      process.env.STRIPE_SECRET_KEY = "sk_test_synthetic_local_fixture";
+      const sdk = stripeModule.getStripe();
+      await db.query('INSERT INTO organizations (id, "stripeCustomerId", name, slug) VALUES ($1,$2,$3,$4)', ["org_fixture", "cus_fixture", "Synthetic test organization", "synthetic-fixture"]);
+      const customer = spyOn(sdk.customers, "retrieve").mockResolvedValue({ id: "cus_fixture", deleted: false } as never);
+      const checkout = spyOn(sdk.checkout.sessions, "create").mockImplementation(async params => {
+        expect(params.metadata?.orgId).toBe("org_fixture");
+        expect(params.metadata).not.toHaveProperty("visitorId");
+        expect(await prisma.marketingPaymentAttribution.count({ where: { organizationId: "org_fixture", paymentReference: null, visitorId: original.visit.visitorId } })).toBeGreaterThan(0);
+        return { id: "cs_hosted_proof", url: "https://checkout.stripe.com/synthetic", lastResponse: { headers: {} } } as never;
+      });
+      try {
+        expect(await stripeModule.createCheckoutSession("org_fixture", 10, "https://octopus-review.ai/settings/billing", cookie)).toBe("https://checkout.stripe.com/synthetic");
+        const hosted = await prisma.marketingPaymentAttribution.findFirstOrThrow({ where: { paymentReference: "cs_hosted_proof" } });
+        expect(hosted.visitorId).toBe(original.visit.visitorId);
+        expect(checkout).toHaveBeenCalledTimes(1);
+      } finally { checkout.mockRestore(); customer.mockRestore(); if (previousStripeKey === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = previousStripeKey; }
+    } finally {
+      for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    }
   });
 
   it("persists tracking bytes in the same outbox, recovers a lost response, and fences foreign bindings", async () => {

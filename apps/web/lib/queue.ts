@@ -173,6 +173,7 @@ export async function startQueue(): Promise<PgBoss> {
 
   // Conversion delivery has its own durable leases and backoff. The next cron
   // recovers sweep-level failures without involving billing or review jobs.
+  await boss.createQueue("marketing-contexts", { retryLimit: 0, expireInSeconds: 300 });
   await boss.createQueue("marketing-conversions", {
     retryLimit: 0,
     expireInSeconds: 300,

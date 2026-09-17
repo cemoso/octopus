@@ -115,6 +115,12 @@ export async function register() {
         await boss.unschedule("marketing-conversions");
       }
 
+      if (!isSelfHosted() && process.env.UNIFIED_ADS_ENABLED === "true" && process.env.UNIFIED_ADS_TRACKING_ENABLED === "true") {
+        await boss.schedule("marketing-contexts", "* * * * *");
+      } else {
+        await boss.unschedule("marketing-contexts");
+      }
+
       // Daily subscription renewals (06:00 UTC — offset from the jobs above).
       // Cloud-only: self-hosted installs have no billing path. Charges due
       // orgs' saved cards and grants the period's credits; failures retry

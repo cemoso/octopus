@@ -32,6 +32,7 @@ model User {
   // Signup abuse signals. signupIp is captured at the first session and drives
   // Sybil velocity scoring; welcomeGrantedAt stamps the one-time welcome bonus
   // so it can't be re-farmed (leak-proof — survives org soft- OR hard-delete).
+  marketingVisitId String? // Server-stamped at creation; never client-writable.
   signupIp         String?
   welcomeGrantedAt DateTime?
 
@@ -1620,4 +1621,22 @@ model CommunityReviewJob {
   @@index([status, createdAt])
   @@index([expiresAt])
   @@map("community_review_jobs")
+}
+
+// A nullable snapshot is deliberate: a later retry must not upgrade absent consent.
+model MarketingPaymentAttribution {
+  id               String   @id
+  sourceId         String
+  environment      String
+  trackingId       String
+  organizationId   String
+  visitorId        String?
+  createdAt        DateTime @default(now())
+  paymentReference String?
+  completedAt      DateTime?
+  nextAttemptAt    DateTime @default(now())
+
+  @@unique([sourceId, paymentReference])
+  @@index([sourceId, trackingId, completedAt, nextAttemptAt], map: "marketing_payment_attributions_pending_idx")
+  @@map("marketing_payment_attributions")
 }

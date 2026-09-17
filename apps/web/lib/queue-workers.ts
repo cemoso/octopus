@@ -30,6 +30,18 @@ export interface ProcessReviewJob {
 }
 
 export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promise<void> {
+  await boss.work("marketing-contexts", { localConcurrency: 1 }, async () => {
+    try {
+      const { activeTrackingConfig, captureMarketingContexts } = await import("./marketing-capture");
+      const tracking = activeTrackingConfig();
+      if (!tracking) return;
+      const { getStripe } = await import("./stripe");
+      const { marketingStripeReader } = await import("./marketing-stripe");
+      await captureMarketingContexts(tracking, marketingStripeReader(getStripe()));
+    } catch {
+      throw new Error("Marketing context reconciliation failed; no billing state was changed");
+    }
+  });
   await boss.work("marketing-conversions", { localConcurrency: 1 }, async () => {
     try {
       await syncMarketingConversions();

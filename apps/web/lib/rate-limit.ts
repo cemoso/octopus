@@ -19,7 +19,7 @@ export type RateLimitResult = {
 /**
  * Fixed-window rate limiter backed by Redis (INCR + EX).
  *
- * Fails open: if Redis is unavailable or errors, the request is allowed. This
+ * Fails open by default; failClosed callers reject when Redis is unavailable. This
  * keeps a Redis outage from blocking legitimate traffic; the limiter is an
  * abuse guard, not a correctness dependency.
  */
@@ -27,10 +27,11 @@ export async function fixedWindowLimit(
   key: string,
   limit: number,
   windowSeconds: number,
+  failClosed = false,
 ): Promise<RateLimitResult> {
   const redis = getRedis();
   if (!redis) {
-    return { ok: true, remaining: limit, retryAfterSeconds: 0 };
+    return { ok: !failClosed, remaining: failClosed ? 0 : limit, retryAfterSeconds: failClosed ? windowSeconds : 0 };
   }
 
   const redisKey = `rl:${key}`;
@@ -56,7 +57,7 @@ export async function fixedWindowLimit(
     return { ok: true, remaining: Math.max(0, limit - count), retryAfterSeconds: 0 };
   } catch (err) {
     console.error("[rate-limit] redis error:", (err as Error).message);
-    return { ok: true, remaining: limit, retryAfterSeconds: 0 };
+    return { ok: !failClosed, remaining: failClosed ? 0 : limit, retryAfterSeconds: failClosed ? windowSeconds : 0 };
   }
 }
 
