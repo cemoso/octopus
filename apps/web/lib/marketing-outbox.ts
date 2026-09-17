@@ -75,7 +75,7 @@ export async function claimMarketingConversion(config: MarketingConfig, now = ne
       WHERE "sourceId" = ${config.sourceId} AND environment = ${config.environment}
         AND (${trackingEnabled} OR kind NOT IN ('visit', 'conversion_context'))
         AND ((status = 'pending' AND "nextAttemptAt" <= ${now}) OR (status = 'processing' AND "leaseUntil" <= ${now}))
-      ORDER BY "nextAttemptAt", id FOR UPDATE SKIP LOCKED LIMIT 1
+      ORDER BY (kind IN ('visit', 'conversion_context')), "nextAttemptAt", id FOR UPDATE SKIP LOCKED LIMIT 1
     )
     UPDATE marketing_conversions o
     SET status = 'processing', "leaseId" = ${leaseId}, "leaseUntil" = ${leaseUntil},

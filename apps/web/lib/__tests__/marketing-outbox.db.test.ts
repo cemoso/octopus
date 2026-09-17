@@ -153,6 +153,70 @@ async function due(id: string) {
     });
   }
 
+  it("delivers a later purchase before an older backlog with a valid but wrong tracking project", async () => {
+    const tracking: TrackingConfig = { ...config, trackingId: randomUUID(), projectId: randomUUID(), origin: "https://octopus-review.ai", trackingFrom: config.from };
+    for (let index = 0; index < 25; index++) {
+      const body = JSON.stringify({ schemaVersion: 1, recordType: "visit", eventId: randomUUID(), trackingId: tracking.trackingId,
+        occurredAt: new Date().toISOString(), visitorId: trackingIdentity("visitor", config.sourceId, randomUUID()),
+        sessionId: trackingIdentity("session", config.sourceId, randomUUID()), origin: tracking.origin,
+        analyticsConsent: "granted", attributionConsent: false, campaignLinkId: null }, null, 2);
+      await due(await outbox.enqueueMarketingTracking(tracking, body));
+    }
+    const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+    await ledger("payment", "purchase", "pi_fixture");
+    await outbox.captureMarketingConversions(config);
+    const payment = (await outbox.claimMarketingConversion(config))!;
+    expect(await outbox.processMarketingConversion(payment, config, fixture().reader, withIdentity(async () => {
+      throw new Error("receipt lost");
+    }))).toBe("retry");
+    await prisma.marketingConversion.update({ where: { id: payment.id }, data: { nextAttemptAt: new Date(1000) } });
+    const persisted = (await prisma.marketingConversion.findUniqueOrThrow({ where: { id: payment.id } })).payload;
+    const env = {
+      UNIFIED_ADS_ENABLED: "true", UNIFIED_ADS_SOURCE_ID: config.sourceId,
+      UNIFIED_ADS_ENVIRONMENT: "test", UNIFIED_ADS_SERVER_KEY: `uads_${receiptId}_${"a".repeat(43)}`,
+      UNIFIED_ADS_FROM: config.from.toISOString(), NODE_ENV: "test",
+      OCTOPUS_SELF_HOSTED: "false", NEXT_PUBLIC_OCTOPUS_SELF_HOSTED: "false",
+      UNIFIED_ADS_TRACKING_ENABLED: "true", UNIFIED_ADS_TRACKING_ID: tracking.trackingId,
+      UNIFIED_ADS_PROJECT_ID: randomUUID(), UNIFIED_ADS_TRACKING_ORIGIN: tracking.origin,
+      UNIFIED_ADS_TRACKING_FROM: tracking.trackingFrom.toISOString(),
+    };
+    const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]));
+    const bodies: string[] = [];
+    let trackingAttempts = 0;
+    const businessSend = withIdentity(async request => {
+      bodies.push(await request.text());
+      return received(true);
+    });
+    const send = spyOn(globalThis, "fetch").mockImplementation((async (request: Request) => {
+      if (!new URL(request.url).pathname.startsWith("/api/conversion-tracking")) return businessSend(request);
+      expect(request.method).toBe("GET");
+      expect(bodies).toEqual([persisted]);
+      expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id: payment.id } })).toMatchObject({ status: "delivered" });
+      trackingAttempts++;
+      return Response.json({ schemaVersion: 1, sourceId: config.sourceId, environment: config.environment, keyId: receiptId,
+        trackingId: tracking.trackingId, projectId: tracking.projectId, origin: tracking.origin,
+        model: TRACKING_MODEL, recordTypes: ["visit", "conversion_context"] });
+    }) as typeof fetch);
+    try {
+      Object.assign(process.env, env);
+      await outbox.syncMarketingConversions();
+      expect(bodies).toEqual([persisted]);
+      expect(JSON.parse(bodies[0]!).eventType).toBe("purchase");
+      expect(trackingAttempts).toBe(19);
+      const after = await prisma.marketingConversion.findMany({ where: { kind: "visit" }, orderBy: { id: "asc" } });
+      expect(after.map(row => ({ id: row.id, payload: row.payload, status: row.status })))
+        .toEqual(before.map(row => ({ id: row.id, payload: row.payload, status: row.status })));
+      expect(after.filter(row => row.attempts === 1)).toHaveLength(19);
+      expect(after.filter(row => row.attempts === 0)).toHaveLength(6);
+    } finally {
+      send.mockRestore();
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("captures actual registrations and Stripe-linked cash facts, including usage-typed refunds", async () => {
     await user();
     await user("pre_cutoff", new Date("2026-09-08T00:00:00Z"));
