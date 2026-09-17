@@ -8,6 +8,7 @@ Receiver contract: `docs/conversion-tracking.md` in Unified Ads. This producer
 uses its separate `/api/conversion-tracking/identity` and
 `/api/conversion-tracking` endpoints. It does not forward conversions to ad
 networks or report profit. Net cash/ROAS does not deduct AI costs or payment fees.
+Profit reporting requires agreed cost semantics and receiver support.
 
 ## Delivery foundation
 
@@ -29,7 +30,8 @@ as the subsequent POST. A mismatch produces zero POST. Tracking receipts must
 match that source/environment/enrollment. Business events retain their separate
 preflight and receipt validation. Both use the existing bounded HTTP transport.
 
-Tracking configuration is additional to the existing business-event configuration:
+Tracking configuration is additional to the existing
+[business-event configuration](unified-ads-conversions.md#configuration-and-activation):
 
 - `UNIFIED_ADS_TRACKING_ENABLED`: defaults to off.
 - `UNIFIED_ADS_TRACKING_ID`: receiver-provisioned enrollment UUID.
@@ -39,10 +41,13 @@ Tracking configuration is additional to the existing business-event configuratio
   the business-event cutoff. Do not advance it to discard pending records.
 
 Wrong or disabled tracking configuration leaves tracking rows unsent. It does
-not disable the business-event worker. Self-hosted collection remains refused.
+not disable the business-event worker; the shared
+[claim priority and budgets](unified-ads-conversions.md#durable-delivery) protect
+business delivery from a tracking backlog. Self-hosted collection remains refused.
 Keep the additive migration when rolling back code; disable tracking and drain
 or hold tracking rows before running an older worker that does not recognize
-these kinds. No migration or activation is performed by tests.
+these kinds. Tests apply migrations only in a disposable test database and do
+not activate production tracking.
 
 ## Remaining capture and acceptance gates
 
@@ -78,5 +83,7 @@ RUN_MARKETING_DB_TESTS=1 bun test apps/web/lib/__tests__/marketing-outbox.db.tes
 The database test requires a disposable local test database as described in
 [the business-event integration](unified-ads-conversions.md#validation). It
 applies both real migrations and proves tracking immutability, retry recovery,
-source/enrollment fencing and continuing business delivery with tracking off.
+source/enrollment fencing and continuing business delivery ahead of an older
+tracking backlog with tracking disabled, invalid configuration or a valid but
+incorrect project UUID.
 No normal test calls the external receiver.

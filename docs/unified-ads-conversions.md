@@ -47,6 +47,13 @@ between rows. Each Stripe read has a 10-second timeout; receiver identity checks
 event delivery and response-body reading share one 10-second deadline per
 attempt. Expired workers cannot acknowledge a successor's lease.
 
+At each claim, eligible business events take priority over tracking records,
+even older tracking retries. Tracking uses only the remaining shared batch and
+time budget, so a sustained business backlog can delay tracking. Tracking that
+is disabled or fails local configuration validation is excluded from claims
+without changing saved bytes or attempts. See the [tracking foundation](unified-ads-tracking.md)
+for its separate configuration and capture gates.
+
 The serialized body is committed before the first receiver HTTP request. Database
 constraints preserve source identity and those exact bytes across retries,
 worker restarts and key rotation. Before every event POST, the producer calls
