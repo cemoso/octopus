@@ -159,6 +159,31 @@ async function due(id: string) {
         const hosted = await prisma.marketingPaymentAttribution.findFirstOrThrow({ where: { paymentReference: "cs_hosted_proof" } });
         expect(hosted.visitorId).toBe(original.visit.visitorId);
         expect(checkout).toHaveBeenCalledTimes(1);
+        const hostedPayment = fixture();
+        hostedPayment.payment.id = "pi_hosted_proof";
+        hostedPayment.payment.metadata = {};
+        hostedPayment.checkout.id = "cs_hosted_proof";
+        hostedPayment.checkout.status = "open";
+        hostedPayment.checkout.payment_status = "unpaid";
+        hostedPayment.checkout.payment_intent = null;
+        hostedPayment.charge.payment_intent = hostedPayment.payment.id;
+        hostedPayment.charge.created = Math.ceil(Date.now() / 1000) + 1;
+        await capture.captureMarketingContexts(tracking, hostedPayment.reader);
+        const pending = await prisma.marketingPaymentAttribution.findUniqueOrThrow({ where: { id: hosted.id } });
+        expect(pending.completedAt).toBeNull();
+        expect(pending.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+        expect(await prisma.marketingConversion.count({ where: { kind: "conversion_context" } })).toBe(2);
+        hostedPayment.checkout.status = "complete";
+        hostedPayment.checkout.payment_status = "paid";
+        hostedPayment.checkout.payment_intent = hostedPayment.payment.id;
+        await prisma.marketingPaymentAttribution.update({ where: { id: hosted.id }, data: { nextAttemptAt: new Date(0) } });
+        await capture.captureMarketingContexts(tracking, hostedPayment.reader);
+        await capture.captureMarketingContexts(tracking, hostedPayment.reader);
+        expect((await prisma.marketingPaymentAttribution.findUniqueOrThrow({ where: { id: hosted.id } })).completedAt).not.toBeNull();
+        const completedContexts = await prisma.marketingConversion.findMany({ where: { kind: "conversion_context" } });
+        expect(completedContexts).toHaveLength(3);
+        expect(completedContexts.map(row => JSON.parse(row.payload!)).find(record => record.conversionId === conversionId("payment", hostedPayment.payment.id)))
+          .toMatchObject({ conversionType: "purchase", visitorId: original.visit.visitorId, occurredAt: new Date(hostedPayment.charge.created * 1000).toISOString() });
       } finally { checkout.mockRestore(); customer.mockRestore(); if (previousStripeKey === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = previousStripeKey; }
     } finally {
       for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }

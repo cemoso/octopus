@@ -6,7 +6,7 @@ export function fixture() {
     metadata: { orgId: "org_fixture", type: "subscription" }, latest_charge: "ch_fixture", livemode: false, capture_method: "automatic",
   };
   const checkout: Awaited<ReturnType<MarketingStripeReader["checkout"]>> = {
-    id: "cs_fixture", mode: "payment", payment_status: "paid", payment_intent: payment.id, customer: "cus_fixture",
+    id: "cs_fixture", status: "complete", mode: "payment", payment_status: "paid", payment_intent: payment.id, customer: "cus_fixture",
     metadata: { orgId: "org_fixture", type: "subscription_start" }, livemode: false,
   };
   const charge: Awaited<ReturnType<MarketingStripeReader["charge"]>> = {
