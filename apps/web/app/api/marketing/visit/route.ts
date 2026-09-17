@@ -13,7 +13,8 @@ export async function GET(): Promise<Response> {
 export async function POST(request: Request): Promise<Response> {
   const config = activeTrackingConfig();
   if (!config) return new Response(null, { status: 204 });
-  if (request.headers.get("origin") !== config.origin || new URL(request.url).origin !== config.origin || new URL(request.url).search) {
+  // Behind the HTTPS proxy, Next's request URL uses its internal listen address.
+  if (request.headers.get("origin") !== config.origin || request.headers.get("host") !== new URL(config.origin).host || new URL(request.url).search) {
     return new Response(null, { status: 403 });
   }
   if (request.headers.get("content-type")?.split(";")[0] !== "application/json") return new Response(null, { status: 415 });

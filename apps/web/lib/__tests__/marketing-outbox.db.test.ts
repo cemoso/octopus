@@ -130,17 +130,35 @@ async function due(id: string) {
       const admission = spyOn(rateLimit, "fixedWindowLimit").mockResolvedValue({ ok: false, remaining: 0, retryAfterSeconds: 60 });
       try {
         const route = await import("../../app/api/marketing/visit/route");
-        const request = (body: unknown, origin = tracking.origin) => new Request(`${tracking.origin}/api/marketing/visit`, {
-          method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body),
+        const request = (body: unknown, origin = tracking.origin) => new Request("http://0.0.0.0:3000/api/marketing/visit", {
+          method: "POST", headers: { Host: new URL(tracking.origin).host, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify(body),
         });
         expect((await route.POST(request(data))).status).toBe(429);
         admission.mockResolvedValue({ ok: true, remaining: 1, retryAfterSeconds: 0 });
         expect((await route.POST(request(data, "https://foreign.invalid"))).status).toBe(403);
         expect((await route.POST(request({ ...data, extra: "x".repeat(600) }))).status).toBe(400);
         expect((await route.POST(request({ analyticsConsent: false, attributionConsent: false }))).status).toBe(204);
-        const stalled = new Request(`${tracking.origin}/api/marketing/visit`, { method: "POST", headers: { Origin: tracking.origin, "Content-Type": "application/json" }, body: new ReadableStream() });
+        const stalled = new Request(`${tracking.origin}/api/marketing/visit`, { method: "POST", headers: { Host: new URL(tracking.origin).host, Origin: tracking.origin, "Content-Type": "application/json" }, body: new ReadableStream() });
         expect((await route.POST(stalled)).status).toBe(400);
+        for (const [header, value] of [["origin", null], ["host", null], ["host", "foreign.invalid"], ["host", "octopus-review.ai:3000"]] as const) {
+          const invalid = request(data);
+          if (value === null) invalid.headers.delete(header);
+          else invalid.headers.set(header, value);
+          invalid.headers.set("x-forwarded-host", new URL(tracking.origin).host);
+          invalid.headers.set("x-forwarded-proto", "https");
+          expect((await route.POST(invalid)).status).toBe(403);
+        }
+        const query = new Request(`${request(data).url}?source=other`, request(data));
+        expect((await route.POST(query)).status).toBe(403);
         expect(await prisma.marketingConversion.count()).toBe(before);
+        const proxied = request(data);
+        // The public Host is authoritative; forwarded metadata may describe an internal hop.
+        proxied.headers.set("x-forwarded-host", "internal.invalid");
+        proxied.headers.set("x-forwarded-proto", "http");
+        const accepted = await route.POST(proxied);
+        expect(accepted.status).toBe(204);
+        expect(accepted.headers.get("set-cookie")).toContain(`${VISIT_COOKIE}=`);
+        expect(await prisma.marketingConversion.count()).toBe(before + 1);
       } finally { admission.mockRestore(); }
       const stripeModule = await import("../stripe");
       const previousStripeKey = process.env.STRIPE_SECRET_KEY;
