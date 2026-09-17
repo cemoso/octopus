@@ -16,8 +16,10 @@ visit, attribution permission and tab identity, including across open tabs.
 
 `GET /api/marketing/visit` exposes only a current enabled boolean with no caching.
 The client creates no tracking identifier until consent and this activation
-check succeed. `POST` requires the exact configured origin in the request URL
-and Origin header, JSON no larger than 512 bytes within two seconds, and the
+check succeed. `POST` requires the exact configured public Origin header and
+its canonical Host header; the internal request URL may use the proxy's backend
+listen address. Forwarded host/protocol headers are not trusted. Query strings
+are rejected. Requests require JSON no larger than 512 bytes within two seconds and the
 existing Redis limiter in fail-closed mode. Its source-wide budget is 600 visits
 per minute; rate-limited visits are not collected. It accepts only consent,
 a random tab UUID and an optional opaque campaign-link UUID. It does not accept
@@ -66,6 +68,11 @@ created: each refund follows the original purchase. Missing association,
 processor failures and consent failures do not mutate billing or block the
 independent `marketing-conversions` delivery job.
 
+An open payment-mode Checkout in the configured environment without a
+PaymentIntent remains pending. Retryable reconciliation failures defer the next
+attempt by five minutes; successful reconciliation or a terminal source failure
+completes the snapshot.
+
 ## Durable delivery
 
 Tracking uses the existing outbox with immutable IDs and payload bytes. Every
@@ -75,9 +82,8 @@ POST. Business events keep their separate preflight. Redirects, cookies and
 Origin headers are never sent to the receiver. Lost responses retry identical
 bytes and accept only the matching duplicate receipt.
 
-Due business events are claimed ahead of tracking. Disabled or invalid tracking
-configuration excludes tracking from the claim budget. A valid but incorrect
-binding therefore cannot put an older tracking backlog ahead of sales.
+See [business-event delivery](unified-ads-conversions.md#durable-delivery) for
+the shared claim priority, batch limits and disabled-tracking behavior.
 
 ## Configuration and release
 

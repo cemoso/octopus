@@ -2,8 +2,10 @@
 
 The hosted Octopus backend can send registrations, successful cash payments and
 successful individual refunds to `https://ads.weezboo.com/api/conversion-events`.
-Delivery is disabled by default and refused on self-hosted installations. No
-browser key, pixel, checkout mutation or ad-network call is added.
+Delivery is disabled by default and refused on self-hosted installations.
+Business-event delivery uses only a backend key and does not alter Stripe charge
+parameters or forward sales to ad networks. Optional visitor collection and
+checkout associations are described in [visitor and sales attribution](unified-ads-tracking.md).
 
 ## Source facts and money
 
@@ -51,7 +53,7 @@ At each claim, eligible business events take priority over tracking records,
 even older tracking retries. Tracking uses only the remaining shared batch and
 time budget, so a sustained business backlog can delay tracking. Tracking that
 is disabled or fails local configuration validation is excluded from claims
-without changing saved bytes or attempts. See the [tracking foundation](unified-ads-tracking.md)
+without changing saved bytes or attempts. See [visitor and sales attribution](unified-ads-tracking.md)
 for its separate configuration and capture gates.
 
 The serialized body is committed before the first receiver HTTP request. Database
@@ -132,11 +134,12 @@ records it. The outbox is not a complete independent Stripe accounting ledger or
 a producer completeness checkpoint. Periodic source-to-receiver reconciliation
 and alerts are follow-ups before making completeness claims.
 
-Unified Ads reports observed registrations, gross payments and individual
-refunds. Its current receiver does not forward these events to Google, Reddit,
-Meta or X, and does not establish campaign attribution, signup-to-paid cohorts,
-ROI, completed onboarding or credit balances. Those require separate supported
-contracts. Keep this distinction visible when evaluating advertising return.
+Business events report observed registrations, gross payments and individual
+refunds; they are not forwarded to Google, Reddit, Meta or X. Business events
+alone do not establish campaign attribution. The separate
+[visitor and sales attribution integration](unified-ads-tracking.md) supplies
+consented context. Signup-to-paid cohorts, ROI, completed onboarding and credit
+balances are not established by this business-event contract.
 
 ## Validation
 
