@@ -92,22 +92,27 @@ function retryAfter(value: string | null): number {
   return Number.isFinite(date) ? Math.max(0, Math.min(date - Date.now(), 24 * 60 * 60_000)) : 0;
 }
 
-async function readReceipt(response: Response): Promise<unknown> {
+export async function readMarketingJson(response: { body: ReadableStream<Uint8Array> | null }, maxBytes = MAX_BODY_BYTES, timeoutMs?: number): Promise<unknown> {
   if (!response.body) throw new Error("Missing receipt");
   const reader = response.body.getReader();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    if (timeoutMs) timer = setTimeout(() => reject(new Error("JSON read timeout")), timeoutMs);
+  });
   const chunks: Uint8Array[] = [];
   let bytes = 0;
   try {
     for (;;) {
-      const { value, done } = await reader.read();
+      const { value, done } = await Promise.race([reader.read(), deadline]);
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > MAX_BODY_BYTES) throw new Error("Receipt exceeds limit");
+      if (bytes > maxBytes) throw new Error("Receipt exceeds limit");
       chunks.push(value);
     }
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } finally {
-    await reader.cancel().catch(() => {});
+    if (timer) clearTimeout(timer);
+    void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -119,8 +124,33 @@ export async function deliverConversion(
   send: (request: Request) => Promise<Response> = (request) => fetch(request),
   timeoutMs = 10_000,
 ): Promise<DeliveryResult> {
-  if (Buffer.byteLength(body) > MAX_BODY_BYTES) return { kind: "blocked", code: "payload_too_large" };
-  const { sourceId, environment, serverKey } = config;
+  const { sourceId, environment } = config;
+  return deliverMarketingRecord(config, body, {
+    path: "conversion-events", maxBytes: MAX_BODY_BYTES,
+    identity: value => value.schemaVersion === 1 && value.sourceId === sourceId &&
+      value.environment === environment && typeof value.keyId === "string" && UUID.test(value.keyId) &&
+      Array.isArray(value.capabilities) && value.capabilities.every(item => typeof item === "string") &&
+      ["purchases", "refunds", "registrations"].every(item => (value.capabilities as unknown[]).includes(item)),
+    receipt: value => value.attribution === "not_established",
+  }, send, timeoutMs);
+}
+
+/** Shared bounded transport; each protocol keeps its own identity and receipt contract. */
+export async function deliverMarketingRecord(
+  config: MarketingConfig,
+  body: string,
+  contract: {
+    path: "conversion-events" | "conversion-tracking";
+    maxBytes: number;
+    identity: (value: Record<string, unknown>) => boolean;
+    receipt: (value: Record<string, unknown>) => boolean;
+  },
+  send: (request: Request) => Promise<Response> = request => fetch(request),
+  timeoutMs = 10_000,
+): Promise<DeliveryResult> {
+  if (Buffer.byteLength(body) > contract.maxBytes) return { kind: "blocked", code: "payload_too_large" };
+  const { serverKey } = config;
+  const endpoint = `https://ads.weezboo.com/api/${contract.path}`;
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -128,7 +158,7 @@ export async function deliverConversion(
   });
   try {
     return await Promise.race([timeout, (async (): Promise<DeliveryResult> => {
-      const identityResponse = await send(new Request(`${MARKETING_RECEIVER}/identity`, {
+      const identityResponse = await send(new Request(`${endpoint}/identity`, {
         method: "GET",
         headers: { Authorization: `Bearer ${serverKey}` },
         redirect: "error",
@@ -146,11 +176,8 @@ export async function deliverConversion(
         };
       }
       try {
-        const identity = await readReceipt(identityResponse) as Record<string, unknown> | null;
-        if (!identity || identity.schemaVersion !== 1 || identity.sourceId !== sourceId ||
-          identity.environment !== environment || typeof identity.keyId !== "string" || !UUID.test(identity.keyId) ||
-          !Array.isArray(identity.capabilities) || !identity.capabilities.every(value => typeof value === "string") ||
-          !["purchases", "refunds", "registrations"].every(value => (identity.capabilities as unknown[]).includes(value))) {
+        const identity = await readMarketingJson(identityResponse, contract.maxBytes) as Record<string, unknown> | null;
+        if (!identity || Array.isArray(identity) || !contract.identity(identity)) {
           return { kind: "retry", code: "receiver_identity_invalid", status: 200 };
         }
       } catch {
@@ -158,7 +185,7 @@ export async function deliverConversion(
       }
       // A timed-out preflight must never resume into an event POST.
       controller.signal.throwIfAborted();
-      const response = await send(new Request(MARKETING_RECEIVER, {
+      const response = await send(new Request(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${serverKey}` },
         body,
@@ -177,8 +204,8 @@ export async function deliverConversion(
         };
       }
       try {
-        const value = await readReceipt(response) as Record<string, unknown> | null;
-        if (!value || value.status !== "stored" || value.attribution !== "not_established" || value.duplicate !== (status === 200) || typeof value.receiptId !== "string" || !UUID.test(value.receiptId)) {
+        const value = await readMarketingJson(response, contract.maxBytes) as Record<string, unknown> | null;
+        if (!value || value.status !== "stored" || !contract.receipt(value) || value.duplicate !== (status === 200) || typeof value.receiptId !== "string" || !UUID.test(value.receiptId)) {
           throw new Error("Invalid receipt");
         }
         return { kind: "delivered", status, receiptId: value.receiptId };

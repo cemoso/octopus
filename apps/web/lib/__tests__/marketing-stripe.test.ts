@@ -23,6 +23,39 @@ describe("Stripe-backed cash conversion normalization", () => {
     expect(a.event).toMatchObject({ purchaseKind: "subscription_initial", transactionId: conversionId("payment", f.payment.id) });
   });
 
+  it("retries an open Checkout without a PaymentIntent and resolves its eventual payment", async () => {
+    const f = fixture();
+    f.payment.metadata = {};
+    f.checkout.status = "open";
+    f.checkout.payment_status = "unpaid";
+    f.checkout.payment_intent = null;
+    await expect(resolveStripeConversion(f.reader, "purchase", f.checkout.id, "org_fixture", "test"))
+      .rejects.toMatchObject({ code: "checkout_payment_unavailable", retryable: true });
+    f.checkout.status = "complete";
+    f.checkout.payment_status = "paid";
+    f.checkout.payment_intent = f.payment.id;
+    const result = await resolveStripeConversion(f.reader, "purchase", f.checkout.id, "org_fixture", "test");
+    expect(result.event).toMatchObject({ eventType: "purchase", transactionId: conversionId("payment", f.payment.id),
+      occurredAt: new Date(f.charge.created * 1000).toISOString(), amountMinor: "14800", currency: "USD" });
+  });
+
+  it("does not retry terminal or unsupported Checkout sessions without a payment", async () => {
+    const f = fixture();
+    f.checkout.payment_intent = null;
+    for (const status of ["expired", "complete"] as const) {
+      f.checkout.status = status;
+      await expect(resolveStripeConversion(f.reader, "purchase", f.checkout.id, "org_fixture", "test"))
+        .rejects.toMatchObject({ retryable: false });
+    }
+    f.checkout.status = "open";
+    f.checkout.mode = "setup";
+    await expect(resolveStripeConversion(f.reader, "purchase", f.checkout.id, "org_fixture", "test"))
+      .rejects.toMatchObject({ retryable: false });
+    f.checkout.mode = "payment";
+    await expect(resolveStripeConversion(f.reader, "purchase", f.checkout.id, "org_fixture", "live"))
+      .rejects.toMatchObject({ retryable: false });
+  });
+
   it.each(["credit_purchase", "auto_reload"])("maps %s without changing money", async (type) => {
     const f = fixture(); f.payment.metadata.type = type;
     const result = await resolveStripeConversion(f.reader, "purchase", f.payment.id, "org_fixture", "test");

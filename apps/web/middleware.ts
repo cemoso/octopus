@@ -40,7 +40,7 @@ const publicPrefixes = [
   "/api/health",
   "/api/ready",
 ];
-const publicExact = ["/"];
+const publicExact = ["/", "/api/marketing/visit"];
 
 // Public content/marketing + feed paths. Anonymous visitors and crawlers must
 // never be bounced to /login here; paths that aren't built yet then fall

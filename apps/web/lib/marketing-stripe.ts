@@ -2,7 +2,7 @@ import type Stripe from "stripe";
 import { conversionId, type ConversionEvent, type MarketingConfig, type PurchaseEvent, type PurchaseKind } from "./marketing-conversions";
 
 type Payment = Pick<Stripe.PaymentIntent, "id" | "status" | "amount_received" | "currency" | "customer" | "metadata" | "latest_charge" | "livemode" | "capture_method">;
-type Checkout = Pick<Stripe.Checkout.Session, "id" | "mode" | "payment_status" | "payment_intent" | "customer" | "metadata" | "livemode">;
+type Checkout = Pick<Stripe.Checkout.Session, "id" | "status" | "mode" | "payment_status" | "payment_intent" | "customer" | "metadata" | "livemode">;
 type Charge = Pick<Stripe.Charge, "id" | "created" | "status" | "paid" | "captured" | "amount_captured" | "currency" | "payment_intent" | "livemode">;
 type Refund = Pick<Stripe.Refund, "id" | "created" | "status" | "amount" | "currency" | "payment_intent" | "charge">;
 
@@ -81,6 +81,8 @@ async function paymentEvent(
     checkout = await reader.checkout(reference);
     if (checkout.id !== reference) throw new MarketingSourceError("checkout_identity_mismatch");
     paymentIntentId = objectId(checkout.payment_intent) ?? "";
+    if (!paymentIntentId) throw new MarketingSourceError("checkout_payment_unavailable",
+      checkout.status === "open" && checkout.mode === "payment" && checkout.livemode === (environment === "live"));
   }
   if (!paymentIntentId.startsWith("pi_")) throw new MarketingSourceError("unsupported_payment_reference");
   const payment = await reader.payment(paymentIntentId);
