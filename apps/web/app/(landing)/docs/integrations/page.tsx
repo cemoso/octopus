@@ -164,7 +164,7 @@ export default function IntegrationsPage() {
           "Open Settings → Integrations → Forgejo in Octopus. Enter your instance URL and token, then connect. Octopus encrypts the token and syncs repositories where that account has admin access.",
           "In each Forgejo repository, add a Forgejo webhook using the URL and secret shown in Octopus. Enable pull request events. Octopus verifies the webhook signature before queuing a review.",
           "To request reviews with /octopus or @octopus comments on pull requests, also enable issue comment events on that webhook.",
-          "Open or update a pull request to start a review. You can also request another review from Octopus.",
+          "Enable automatic reviews for the repository. Open, reopen or push commits to a non-draft pull request to request a review; see the event rules below.",
         ]}
       >
         <FeatureGrid>
@@ -179,6 +179,22 @@ export default function IntegrationsPage() {
             description="Keep hosting repositories on Forgejo. Octopus reads code and diffs for indexing and sends review context to your configured AI provider."
           />
         </FeatureGrid>
+        <P>
+          With automatic reviews enabled, Octopus accepts pull_request events with
+          action opened, reopened or synchronized, plus edited events containing
+          changes.title.from. The title-change event lets a draft become ready
+          when its draft title prefix is removed. Octopus checks the current PR
+          on Forgejo: only open, non-draft PRs qualify. Body-only edits do not
+          trigger reviews. Automatic events skip a head with a prior review
+          attempt or completed review, and cannot admit a second request while
+          that head is pending, queued or reviewing.
+        </P>
+        <P>
+          For an explicit re-review of a completed head, post a new comment with
+          the complete @octopus or /octopus command, or request it from Octopus.
+          Longer aliases such as @octopus-review are not accepted. Replaying the
+          same signed webhook payload does not create another review request.
+        </P>
         <P>
           Hosting Forgejo yourself does not keep review processing on that server.
           With Octopus Cloud, code is processed by Octopus and the configured AI

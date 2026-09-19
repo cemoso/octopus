@@ -6,9 +6,7 @@ This audit covers current website copy, onboarding emails, help content and mach
 
 ## Supported connection described in the copy
 
-Connect an HTTPS Forgejo instance with a personal access token. A dedicated bot account is recommended, with `read:user`, `write:repository` and `write:issue` scopes. Octopus encrypts the personal access token and syncs repositories where the account has admin access. An administrator adds a signed pull-request webhook to each Forgejo repository using the URL and secret shown in Octopus. Reviews produce comments and commit statuses; users can request another review in Octopus. Enable issue comment webhook events for `/octopus` or `@octopus` requests on pull requests.
-
-Octopus Cloud connects to public HTTPS instances. Private LAN/VPN Forgejo instances require self-hosted Octopus within the network, using the official self-host image (`NEXT_PUBLIC_OCTOPUS_SELF_HOSTED=true` baked in at build time) or the alternative `OCTOPUS_SELF_HOSTED=true` runtime server flag for custom/prebuilt images. Either mode is sufficient; the public build flag is not a runtime enable switch. Set `FORGEJO_ALLOWED_PRIVATE_ORIGINS` to comma-separated exact HTTPS origins. Web and review workers need matching allowlists, DNS and routes. An internal CA uses a mounted trusted PEM file through `NODE_EXTRA_CA_CERTS`; TLS verification stays enabled. Loopback, link-local and metadata destinations remain blocked. Forgejo hosts the repositories, while Octopus and configured AI services process code for indexing and reviews. Hosting Forgejo yourself does not make Octopus Cloud processing local. Native CLI agent onboarding remains explicitly GitHub-only.
+The [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo) owns connection, webhook and review-event instructions. The [private-network setup guide](https://octopus-review.ai/docs/self-hosting#forgejo) owns operator configuration and network requirements. Native CLI agent onboarding remains GitHub-only.
 
 ## Essential launch content updated
 
@@ -76,19 +74,10 @@ Paths and line references below point to this branch; later code edits may move 
 
 ## Automatic review events
 
-Forgejo emits `pull_request` / `edited` with `changes.title.from` when a PR title
-changes ([upstream notifier](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/services/webhook/notifier.go)).
-Draft status comes from configurable title prefixes
-([upstream draft detection](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/models/issues/pull.go)),
-so Octopus accepts this title-change event and fetches authoritative PR metadata.
-Only open, non-draft PRs are eligible. Body and other edits do not trigger reviews;
-automatic events skip heads with an existing review attempt. An unreviewed ready
-PR can therefore receive its first automatic review on a title change. Manual
-requests use only complete `@octopus` and `/octopus` commands.
+See the [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo) for automatic and manual review rules. The event mapping is implemented in `apps/web/app/api/forgejo/webhook/[integrationId]/route.ts`; admission and replay regressions live in `apps/web/lib/__tests__/forgejo-webhook.test.ts` and `forgejo-delivery.test.ts`. Upstream references: [title-change notifier](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/services/webhook/notifier.go) and [draft detection](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/models/issues/pull.go).
 
 Forgejo webhook acceptance, review admission, and the pg-boss job commit in one
 PostgreSQL transaction. A crash before commit leaves none of them committed;
 retry admits the same request version. A crash after commit leaves the signed
 payload identity durable, so replay cannot enqueue another review even after
-the first completes. Forgejo acceptance records are excluded from the telemetry
-retention sweep. The review worker publishes the initial comment after commit.
+the first completes. See the [data-retention policy](https://octopus-review.ai/docs/data-retention) for acceptance-record retention. The review worker publishes the initial comment after commit.

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Connect self-hosted Forgejo repositories with a personal access token and signed webhooks. Octopus can sync repositories, review pull requests, post comments and publish commit statuses.
-- Self-hosted Octopus can reach private LAN or VPN Forgejo instances through an explicit HTTPS-origin allowlist, with verified TLS and support for trusted internal certificate authorities. See the [Forgejo setup guide](/docs/integrations#forgejo).
+- Self-hosted Octopus can reach private LAN or VPN Forgejo instances through an explicit HTTPS-origin allowlist, with verified TLS and support for trusted internal certificate authorities. See the [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo).
 - Forgejo setup is included in the dashboard, marketing pages, help content and onboarding emails.
 
 ### Upgrade notes

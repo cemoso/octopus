@@ -38,11 +38,11 @@ async function postSkippedCheckRun(
 
 /**
  * Shared flow: admit the current head -> post placeholder comment -> notify dashboard -> start review.
- * Works for GitHub, Bitbucket, GitLab, and Forgejo.
+ * Forgejo queues within the admission transaction; its worker posts the placeholder.
  */
 /**
- * Outcome of startReviewFlow. Webhooks ignore it; user-facing triggers
- * (CLI / MCP) use it to say why nothing ran instead of "Review started".
+ * Forgejo webhooks use the outcome to retry transient admission failures.
+ * User-facing triggers (CLI / MCP) use it to explain why nothing ran.
  */
 export type StartReviewResult =
   | { started: true; pullRequestId: string }
@@ -53,7 +53,7 @@ type StartReviewParams = {
   provider: "github" | "bitbucket" | "gitlab" | "forgejo";
   // GitHub-specific
   installationId?: number;
-  // Bitbucket / GitLab-specific
+  // Bitbucket / GitLab / Forgejo-specific
   organizationId?: string;
   // Common
   repoFullName: string;

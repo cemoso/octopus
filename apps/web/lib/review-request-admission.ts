@@ -103,7 +103,7 @@ async function admitReviewRequestInternal(params: ReviewRequestParams, client: P
     }
 
     // UPDATE ... RETURNING keeps the accepted snapshot and its version
-    // together without holding a transaction open across a provider request.
+    // together. Forgejo callers also wrap admission and enqueue in a transaction.
     const [pullRequest] = await client.pullRequest.updateManyAndReturn({
       where: {
         id: existing.id, headSha: existing.headSha, reviewRequestVersion: existing.reviewRequestVersion,

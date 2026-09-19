@@ -246,7 +246,7 @@ class GitlabProviderClient implements ProviderClient {
 
 /**
  * Create a provider client for a given repository.
- * Resolves the connected code host and returns a unified interface.
+ * Supports GitHub, Bitbucket and GitLab; Forgejo callers use forgejo.ts directly.
  */
 export async function getProviderClient(repoId: string): Promise<ProviderClient> {
   const repo = await prisma.repository.findUniqueOrThrow({
