@@ -372,14 +372,14 @@ DATABASE_URL=postgresql://octopus:octopus@localhost:43332/octopus bunx prisma mi
           Both need routes and DNS access to Forgejo; Forgejo must also be able to
           deliver webhooks to Octopus. If the webhook target is private, add its
           exact hostname or IP to Forgejo&apos;s <Mono>[webhook] ALLOWED_HOST_LIST</Mono>,
-          preserving existing entries. Forgejo&apos;s default <Mono>external</Mono>
+          preserving existing entries. Forgejo&apos;s default <Mono>external</Mono>{" "}
           setting blocks private destinations. Restart those processes after changing the
           environment. Private network access alone does not authorize a host;
           its origin must be listed explicitly.
         </Paragraph>
         <Paragraph>
           For an internal certificate authority, mount its trusted PEM certificate
-          file and set <Mono>NODE_EXTRA_CA_CERTS</Mono> to that file&apos;s path in
+          file and set <Mono>NODE_EXTRA_CA_CERTS</Mono>{" "}to that file&apos;s path in
           each process. HTTPS verification stays enabled. HTTP, redirects, loopback,
           link-local addresses and cloud metadata endpoints remain blocked, even
           for an allowed origin.

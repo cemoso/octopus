@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Upgrade notes
 - Apply the additive connector schema and guarded email-template migrations before updating the web application and review workers. Customized email bodies and delivery settings remain unchanged. Refresh indexed help content after deployment.
 
+## [1.1.1] - 2026-09-19
+
+### Fixed
+- Recognize Stripe `pyr_` refunds when delivering cash conversions to Unified Ads, preserving individual refund IDs and original-payment validation. Previously blocked deliveries still require deliberate recovery.
+- Add an authenticated preview and guarded retry for refunds blocked before transport by reference validation; reuse the delivered original purchase without replaying it or changing credits.
+
 ## [1.1.0] - 2026-09-19
 
 ### Added

@@ -284,7 +284,7 @@ docker run -d --name octopus-forgejo-connector \
             Webhook → Forgejo. Use POST, <code>application/json</code>, and the
             target URL and secret shown in Octopus. Select Pull Request events
             and keep the webhook active. Select Issue Comment events too if you
-            want to request reviews with <code>@octopus</code> or <code>/octopus</code>
+            want to request reviews with <code>@octopus</code> or <code>/octopus</code>{" "}
             in PR comments. A successful Test Delivery checks transport; a real
             pull request checks the complete review flow.
           </P>
