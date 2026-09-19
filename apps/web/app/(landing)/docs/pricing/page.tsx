@@ -178,7 +178,7 @@ export default function PricingPage() {
           <FeatureCard
             icon={<IconRefresh className="size-4" />}
             title="Auto-Reload"
-            description="Configure automatic credit reload when your balance drops below a threshold."
+            description="Configure automatic credit reload when your balance drops below a threshold. Saving with auto-reload enabled opens Add card if no saved card is found. Your draft is kept if you cancel, card setup fails, or the card is saved. After adding a card, review your settings and select Save Auto-Reload to apply them."
           />
           <FeatureCard
             icon={<IconShieldCheck className="size-4" />}

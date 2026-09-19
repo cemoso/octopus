@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.161] - 2026-09-19
+
+### Fixed
+- Saving with auto-reload enabled and no saved payment method now opens Add card. See [Credits & Billing](/docs/pricing) for the card setup and settings save flow.
+
 ## [1.0.160] - 2026-09-19
 
 ### Fixed
