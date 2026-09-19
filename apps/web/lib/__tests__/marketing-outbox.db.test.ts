@@ -710,6 +710,43 @@ async function due(id: string) {
     expect(await prisma.marketingConversion.count()).toBe(2);
   });
 
+  it("rejects ineligible or ambiguous recovery rows before provider reads without writes", async () => {
+    const { f, refund, retry } = await blockedRefund();
+    const blocked = await prisma.marketingConversion.findUniqueOrThrow({ where: { id: refund.id } });
+    const read = mock(f.reader.refund);
+    f.reader.refund = read;
+    const cases = [
+      { sourceId: randomUUID() }, { environment: "live" }, { kind: "purchase" },
+      { organizationId: null }, { originKey: "payment:ineligible" },
+      { sourceCreatedAt: new Date(config.from.getTime() - 1) },
+      { status: "pending" }, { errorCode: "different_failure" }, { attempts: 0 },
+      { payload: "{}" }, { receiptId }, { httpStatus: 503 }, { deliveredAt: new Date() },
+      { status: "processing", leaseId: randomUUID(), leaseUntil: new Date(Date.now() + 60_000) },
+    ];
+    const ledgerBefore = (await db.query('SELECT * FROM credit_transactions ORDER BY id')).rows;
+    for (const [index, changed] of cases.entries()) {
+      const candidate = await prisma.marketingConversion.create({ data: {
+        ...blocked, id: `ineligible_${index}`, originKey: `ledger:ineligible_${index}`, ...changed,
+      } });
+      const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+      await expect(retry.previewMarketingRefundRetry(candidate.id, config, f.reader)).rejects.toThrow("refund_retry_ineligible");
+      await expect(retry.retryMarketingRefund(candidate.id, "0".repeat(64), config, f.reader)).rejects.toThrow("refund_retry_ineligible");
+      expect(await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } })).toEqual(before);
+      await prisma.marketingConversion.delete({ where: { id: candidate.id } });
+    }
+    const duplicate = await prisma.marketingConversion.create({ data: {
+      ...blocked, id: "ambiguous_refund", originKey: "ledger:ambiguous_refund",
+    } });
+    const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+    for (const id of [blocked.id, duplicate.id]) {
+      await expect(retry.previewMarketingRefundRetry(id, config, f.reader)).rejects.toThrow("refund_retry_ambiguous");
+      await expect(retry.retryMarketingRefund(id, "0".repeat(64), config, f.reader)).rejects.toThrow("refund_retry_ambiguous");
+    }
+    expect(read).not.toHaveBeenCalled();
+    expect(await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } })).toEqual(before);
+    expect((await db.query('SELECT * FROM credit_transactions ORDER BY id')).rows).toEqual(ledgerBefore);
+  });
+
   it("protects the operator route with existing auth and bounded strict input", async () => {
     const { NextRequest } = await import("next/server");
     const route = await import("../../app/api/admin/marketing/refunds/[id]/retry/route");

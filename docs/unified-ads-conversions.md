@@ -137,11 +137,18 @@ use `GET /api/admin/marketing/refunds/{outboxId}/retry` with the existing
 `ADMIN_API_SECRET` bearer. This read-only preview revalidates the Stripe refund
 and original payment, requires a delivered canonical purchase with matching
 payload/organization/environment and receipt, and returns sanitized event facts
-plus a `previewHash`. It rejects other failure states, leases, persisted payloads,
-prior HTTP results, foreign sources and ambiguous duplicate refund rows.
+plus a `previewHash`. Eligible rows must have a ledger origin, at least one prior
+attempt and a source timestamp within the configured capture window. The preview
+rejects other failure states, leases, persisted payloads, prior receipts or HTTP
+results, foreign sources and ambiguous duplicate refund rows. Its hash binds the
+row and cash facts, selected original purchase and receipt, and runtime source,
+environment, server key and capture cutoff without exposing the key.
 
-After independently checking the exact target and receiver baseline, send
-`POST` to the same route with **only** `{"previewHash":"<value from GET>"}`.
+Production recovery remains **held** until the exact candidate has been reviewed,
+tested and deployed. Send a sanitized GET preview to the receiver owner for a
+refreshed zero-duplicate baseline and coordinated approval of that single row.
+Only after that approval, send `POST` to the same route with **only**
+`{"previewHash":"<value from GET>"}`.
 The handler repeats the read-only validation and rejects changed facts, runtime
 binding or row state. A serializable compare-and-set saves the verified refund
 bytes and marks only that blocked row pending, retaining its identity and attempt
@@ -151,9 +158,15 @@ again. If a response is lost, inspect the existing row and receiver receipt;
 do not initiate another financial refund or edit the database.
 
 Refund processing reuses and verifies an already delivered canonical original
-purchase even when its origin is a ledger row. It does not enqueue that purchase
-again. Recovery requires this existing delivery; it never manufactures a missing
-purchase dependency. A pending status is not delivery acceptance.
+purchase even when its origin is a ledger row. Equivalent ledger and payment
+aliases are accepted only when every candidate has the exact canonical payload,
+matching organization and environment, the same valid receipt ID, a delivery
+timestamp and HTTP status `200` or `201`. The first row in ascending ID order
+binds the preview. Any conflicting candidate or overflow of the bounded alias
+lookup rejects processing with `original_payment_conflict`.
+The verified purchase is not enqueued again. Recovery requires this existing
+delivery; it never manufactures a missing purchase dependency. A pending status
+is not delivery acceptance; synthetic tests do not establish LIVE acceptance.
 
 Capture depends on retained users and the billing ledger. Deletion before the
 next capture can remove a source fact; a successful processor payment missing
