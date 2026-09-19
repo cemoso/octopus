@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { prisma, type MarketingConversion } from "@octopus/db";
+import { prisma, type MarketingConversion, type Prisma } from "@octopus/db";
 import { deliverTracking, parseTrackingPayload, resolveTrackingConfig, type TrackingConfig } from "./marketing-tracking";
 import { getStripe } from "./stripe";
 import {
@@ -96,6 +96,26 @@ export async function finishMarketingConversion(row: MarketingConversion, result
   return updated.count === 1;
 }
 
+/** Reuse the already delivered canonical purchase, irrespective of its ledger/PI origin. */
+export async function deliveredMarketingPurchase(
+  db: Pick<Prisma.TransactionClient, "marketingConversion">,
+  row: MarketingConversion,
+  original: NonNullable<Awaited<ReturnType<typeof resolveStripeConversion>>["originalPurchase"]>,
+): Promise<MarketingConversion | null> {
+  const matches = await db.marketingConversion.findMany({
+    where: { sourceId: row.sourceId, kind: "purchase", status: "delivered", payload: { contains: original.event.transactionId } },
+    take: 2,
+  });
+  if (!matches.length) return null;
+  const purchase = matches[0]!;
+  if (matches.length !== 1 || purchase.environment !== row.environment || purchase.organizationId !== row.organizationId ||
+      purchase.payload !== serializeConversion(original.event) || !purchase.receiptId || !purchase.deliveredAt ||
+      (purchase.httpStatus !== 200 && purchase.httpStatus !== 201)) {
+    throw new MarketingSourceError("original_payment_conflict");
+  }
+  return purchase;
+}
+
 async function persistedBody(row: MarketingConversion, config: MarketingConfig, reader?: MarketingStripeReader): Promise<string | null> {
   if (row.payload !== null) return row.payload;
   let body: string;
@@ -115,7 +135,7 @@ async function persistedBody(row: MarketingConversion, config: MarketingConfig, 
       data: { payload: body },
     });
     if (updated.count !== 1) return null;
-    if (original) {
+    if (original && !await deliveredMarketingPurchase(tx, row, original)) {
       // A refund may be inside the collection window while its payment is
       // outside it. Preserve the real original, never invent a zero purchase.
       const originalBody = serializeConversion(original.event);

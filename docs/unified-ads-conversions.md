@@ -132,9 +132,28 @@ read-only Refund retrieval and exact object, original-payment, ownership,
 currency, amount, timestamp and succeeded-status validation. The full original
 refund ID determines the canonical event ID; never rename a `pyr_` reference.
 A previously blocked row does not automatically retry after a resolver fix.
-There is currently no operator retry endpoint or command for blocked conversions;
-recovery requires a separately reviewed supported retry path and coordination
-with receiver evidence, not direct database edits or another Stripe refund.
+For the pre-transport `unsupported_refund_reference` failure only, operators can
+use `GET /api/admin/marketing/refunds/{outboxId}/retry` with the existing
+`ADMIN_API_SECRET` bearer. This read-only preview revalidates the Stripe refund
+and original payment, requires a delivered canonical purchase with matching
+payload/organization/environment and receipt, and returns sanitized event facts
+plus a `previewHash`. It rejects other failure states, leases, persisted payloads,
+prior HTTP results, foreign sources and ambiguous duplicate refund rows.
+
+After independently checking the exact target and receiver baseline, send
+`POST` to the same route with **only** `{"previewHash":"<value from GET>"}`.
+The handler repeats the read-only validation and rejects changed facts, runtime
+binding or row state. A serializable compare-and-set saves the verified refund
+bytes and marks only that blocked row pending, retaining its identity and attempt
+count. The normal worker delivers it; the operator route sends no event and
+performs no billing action. A repeated or concurrent retry cannot requeue it
+again. If a response is lost, inspect the existing row and receiver receipt;
+do not initiate another financial refund or edit the database.
+
+Refund processing reuses and verifies an already delivered canonical original
+purchase even when its origin is a ledger row. It does not enqueue that purchase
+again. Recovery requires this existing delivery; it never manufactures a missing
+purchase dependency. A pending status is not delivery acceptance.
 
 Capture depends on retained users and the billing ledger. Deletion before the
 next capture can remove a source fact; a successful processor payment missing
