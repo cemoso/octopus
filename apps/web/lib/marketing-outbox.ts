@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { prisma, type MarketingConversion } from "@octopus/db";
+import { prisma, type MarketingConversion, type Prisma } from "@octopus/db";
 import { deliverTracking, parseTrackingPayload, resolveTrackingConfig, type TrackingConfig } from "./marketing-tracking";
 import { getStripe } from "./stripe";
 import {
@@ -18,6 +18,7 @@ const CAPTURE_BATCH = 100;
 const LEASE_MS = 120_000;
 const TICK_MS = 90_000;
 const DELIVERY_BATCH = 20;
+const MAX_PURCHASE_ALIASES = 100;
 
 /** Internal server interface only. Capture must verify consent and campaign membership first. */
 export async function enqueueMarketingTracking(config: TrackingConfig, payload: string): Promise<string> {
@@ -96,6 +97,31 @@ export async function finishMarketingConversion(row: MarketingConversion, result
   return updated.count === 1;
 }
 
+/** Reuse the already delivered canonical purchase, irrespective of its ledger/PI origin. */
+export async function deliveredMarketingPurchase(
+  db: Pick<Prisma.TransactionClient, "marketingConversion">,
+  row: MarketingConversion,
+  original: NonNullable<Awaited<ReturnType<typeof resolveStripeConversion>>["originalPurchase"]>,
+): Promise<MarketingConversion | null> {
+  const matches = await db.marketingConversion.findMany({
+    where: { sourceId: row.sourceId, kind: "purchase", status: "delivered", payload: { contains: original.event.transactionId } },
+    orderBy: { id: "asc" },
+    take: MAX_PURCHASE_ALIASES + 1,
+  });
+  if (!matches.length) return null;
+  const purchase = matches[0]!;
+  const payload = serializeConversion(original.event);
+  if (matches.length > MAX_PURCHASE_ALIASES || matches.some(candidate =>
+    candidate.environment !== row.environment || candidate.organizationId !== row.organizationId ||
+    candidate.payload !== payload || !candidate.receiptId ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.receiptId) ||
+    candidate.receiptId !== purchase.receiptId || !candidate.deliveredAt ||
+    (candidate.httpStatus !== 200 && candidate.httpStatus !== 201))) {
+    throw new MarketingSourceError("original_payment_conflict");
+  }
+  return purchase;
+}
+
 async function persistedBody(row: MarketingConversion, config: MarketingConfig, reader?: MarketingStripeReader): Promise<string | null> {
   if (row.payload !== null) return row.payload;
   let body: string;
@@ -115,7 +141,7 @@ async function persistedBody(row: MarketingConversion, config: MarketingConfig, 
       data: { payload: body },
     });
     if (updated.count !== 1) return null;
-    if (original) {
+    if (original && !await deliveredMarketingPurchase(tx, row, original)) {
       // A refund may be inside the collection window while its payment is
       // outside it. Preserve the real original, never invent a zero purchase.
       const originalBody = serializeConversion(original.event);

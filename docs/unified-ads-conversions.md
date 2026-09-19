@@ -127,6 +127,47 @@ its source fact/configuration diagnosed before any deliberate retry; never edit
 its payload or create a fresh identity to bypass a conflict. Outbox records are
 retained for retry deduplication, without automatic deletion in this release.
 
+Stripe refund references support both `re_` and `pyr_`. Both use the same
+read-only Refund retrieval and exact object, original-payment, ownership,
+currency, amount, timestamp and succeeded-status validation. The full original
+refund ID determines the canonical event ID; never rename a `pyr_` reference.
+A previously blocked row does not automatically retry after a resolver fix.
+For the pre-transport `unsupported_refund_reference` failure only, operators can
+use `GET /api/admin/marketing/refunds/{outboxId}/retry` with the existing
+`ADMIN_API_SECRET` bearer. This read-only preview revalidates the Stripe refund
+and original payment, requires a delivered canonical purchase with matching
+payload/organization/environment and receipt, and returns sanitized event facts
+plus a `previewHash`. Eligible rows must have a ledger origin, at least one prior
+attempt and a source timestamp within the configured capture window. The preview
+rejects other failure states, leases, persisted payloads, prior receipts or HTTP
+results, foreign sources and ambiguous duplicate refund rows. Its hash binds the
+row and cash facts, selected original purchase and receipt, and runtime source,
+environment, server key and capture cutoff without exposing the key.
+
+Production recovery remains **held** until the exact candidate has been reviewed,
+tested and deployed. Send a sanitized GET preview to the receiver owner for a
+refreshed zero-duplicate baseline and coordinated approval of that single row.
+Only after that approval, send `POST` to the same route with **only**
+`{"previewHash":"<value from GET>"}`.
+The handler repeats the read-only validation and rejects changed facts, runtime
+binding or row state. A serializable compare-and-set saves the verified refund
+bytes and marks only that blocked row pending, retaining its identity and attempt
+count. The normal worker delivers it; the operator route sends no event and
+performs no billing action. A repeated or concurrent retry cannot requeue it
+again. If a response is lost, inspect the existing row and receiver receipt;
+do not initiate another financial refund or edit the database.
+
+Refund processing reuses and verifies an already delivered canonical original
+purchase even when its origin is a ledger row. Equivalent ledger and payment
+aliases are accepted only when every candidate has the exact canonical payload,
+matching organization and environment, the same valid receipt ID, a delivery
+timestamp and HTTP status `200` or `201`. The first row in ascending ID order
+binds the preview. Any conflicting candidate or overflow of the bounded alias
+lookup rejects processing with `original_payment_conflict`.
+The verified purchase is not enqueued again. Recovery requires this existing
+delivery; it never manufactures a missing purchase dependency. A pending status
+is not delivery acceptance; synthetic tests do not establish LIVE acceptance.
+
 Capture depends on retained users and the billing ledger. Deletion before the
 next capture can remove a source fact; a successful processor payment missing
 its billing ledger remains unobserved until normal billing reconciliation

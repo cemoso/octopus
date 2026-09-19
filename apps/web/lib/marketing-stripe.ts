@@ -137,7 +137,7 @@ export async function resolveStripeConversion(
   environment: MarketingConfig["environment"],
 ): Promise<{ event: ConversionEvent; originalPurchase?: { event: PurchaseEvent; paymentIntentId: string } }> {
   if (kind === "purchase") return { event: (await paymentEvent(reader, reference, organizationId, environment)).event };
-  if (!reference.startsWith("re_")) throw new MarketingSourceError("unsupported_refund_reference");
+  if (!reference.startsWith("re_") && !reference.startsWith("pyr_")) throw new MarketingSourceError("unsupported_refund_reference");
   const refund = await reader.refund(reference);
   if (refund.id !== reference) throw new MarketingSourceError("refund_identity_mismatch");
   if (refund.status !== "succeeded") throw new MarketingSourceError("refund_not_succeeded", refund.status !== "failed" && refund.status !== "canceled");
