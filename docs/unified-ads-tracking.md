@@ -25,6 +25,12 @@ per minute; rate-limited visits are not collected. It accepts only consent,
 a random tab UUID and an optional opaque campaign-link UUID. It does not accept
 account, campaign, customer or payment identities, full URLs, emails or IPs.
 
+The shared limiter waits up to two seconds for a connecting Redis client before
+issuing commands. Concurrent requests share that wait. A readiness timeout or
+Redis error still rejects capture with HTTP 429 and `Retry-After: 60`; this
+response can indicate Redis unavailability as well as an exhausted budget.
+No request is collected or replayed by the limiter after rejection.
+
 The server creates a random visitor identity and hashes visitor/session IDs with
 the source namespace. It persists a visit before setting the 30-day
 `__Host-octopus_visit` cookie, which contains only an unguessable event reference.

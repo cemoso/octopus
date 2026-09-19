@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.160] - 2026-09-19
+
+### Fixed
+- Consented visit collection now waits briefly for Redis to connect after startup, avoiding temporary rejections while preserving rate limits and outage protection.
+
 ## [1.0.159] - 2026-09-17
 
 ### Added
