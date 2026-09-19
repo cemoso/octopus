@@ -1,4 +1,7 @@
+import { once } from "node:events";
 import { getRedis } from "./redis";
+
+let readyWait: Promise<unknown> | null = null;
 
 // Shared invitation limits, imported by both the create and resend routes so
 // the two endpoints enforce the same budgets against the same Redis counters.
@@ -36,6 +39,13 @@ export async function fixedWindowLimit(
 
   const redisKey = `rl:${key}`;
   try {
+    // The shared client connects asynchronously and disables offline commands.
+    // Share a bounded wait so concurrent cold requests do not stack listeners.
+    if (redis.status !== "ready") {
+      readyWait ??= once(redis, "ready", { signal: AbortSignal.timeout(2000) })
+        .finally(() => { readyWait = null; });
+      await readyWait;
+    }
     const count = await redis.incr(redisKey);
 
     // Set the window TTL on first hit. Also re-arm it if a prior EXPIRE was
