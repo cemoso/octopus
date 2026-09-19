@@ -177,8 +177,8 @@ await api.updatePullRequestComment("org-fixture", "team/repo", 7, 12, "updated")
 assert.equal(requests.at(-1)!.options.method, "PATCH");
 assert.equal(requests.at(-1)!.url.pathname, "/api/v1/repos/team/repo/issues/comments/12");
 replies = [{ body: pr }, { body: { id: 33 } }];
-await api.createPullRequestReview("org-fixture", "team/repo", 7, "review", "APPROVE", [{ path: "a.ts", line: 3, side: "RIGHT", body: "finding" }]);
-assert.deepEqual(JSON.parse(requests.at(-1)!.body!), { body: "review", event: "APPROVED", commit_id: head, comments: [{ path: "a.ts", body: "finding", new_position: 3, old_position: 0 }] });
+await api.createPullRequestReview("org-fixture", "team/repo", 7, "review", [{ path: "a.ts", line: 3, side: "RIGHT", body: "finding" }]);
+assert.deepEqual(JSON.parse(requests.at(-1)!.body!), { body: "review", event: "COMMENT", commit_id: head, comments: [{ path: "a.ts", body: "finding", new_position: 3, old_position: 0 }] });
 replies = [{ body: { ...pr, head: { sha: target } } }];
 const beforeStalePublication = requests.length;
 await api.runWithForgejoRepository("repo-fixture", async () => {

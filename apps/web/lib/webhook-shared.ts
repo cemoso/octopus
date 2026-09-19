@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@octopus/db";
+import { prisma, type Prisma } from "@octopus/db";
 import { admitReviewRequest, type ReviewRequestRejection } from "@/lib/review-request-admission";
 import { createReviewAttemptComment } from "@/lib/review-attempt";
 import { publishReviewSummary } from "@/lib/review-summary-comment";
@@ -68,13 +68,14 @@ type StartReviewParams = {
   triggerCommentBody: string;
 };
 
-export async function startReviewFlow(params: StartReviewParams): Promise<StartReviewResult> {
+export async function startReviewFlow(params: StartReviewParams, forgejoTransaction?: Prisma.TransactionClient): Promise<StartReviewResult> {
+  if (forgejoTransaction && params.provider !== "forgejo") throw new Error("Transactional webhook admission requires Forgejo");
   return params.provider === "forgejo"
-    ? forgejo.runWithForgejoRepository(params.repoId, () => startReviewFlowInternal(params))
-    : startReviewFlowInternal(params);
+    ? forgejo.runWithForgejoRepository(params.repoId, () => startReviewFlowInternal(params, forgejoTransaction))
+    : startReviewFlowInternal(params, forgejoTransaction);
 }
 
-async function startReviewFlowInternal(params: StartReviewParams): Promise<StartReviewResult> {
+async function startReviewFlowInternal(params: StartReviewParams, forgejoTransaction?: Prisma.TransactionClient): Promise<StartReviewResult> {
   const {
     provider,
     installationId,
@@ -123,10 +124,18 @@ async function startReviewFlowInternal(params: StartReviewParams): Promise<Start
     }
   }
 
-  const admission = await admitReviewRequest(params);
+  const admission = await admitReviewRequest(params, forgejoTransaction);
   if (!admission.started) return admission;
   const pr = admission.pullRequest;
   console.log(`[webhook] PullRequest admitted — id: ${pr.id}, number: ${pr.number}`);
+
+  if (forgejoTransaction) {
+    const jobId = await enqueue("process-review", { pullRequestId: pr.id }, {
+      db: { executeSql: async (sql, values) => ({ rows: await forgejoTransaction.$queryRawUnsafe<unknown[]>(sql, ...(values ?? [])) }) },
+    });
+    if (!jobId) throw new Error("Forgejo review could not be queued");
+    return { started: true, pullRequestId: pr.id };
+  }
 
   const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${pr.headSha || "unknown"}\`. This summary will update when the review finishes.`;
   try {

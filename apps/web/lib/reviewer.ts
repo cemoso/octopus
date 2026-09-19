@@ -2579,7 +2579,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
     } else if (reviewCommentId) {
       await providerUpdateComment(
         reviewCommentId,
-        failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
+        failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`${isForgejo ? "@octopus" : "@octopus-review"}\` on this PR.`,
         failureAttemptId,
       ).catch((e) => console.error("[reviewer] Failed to update placeholder with error:", e));
     }

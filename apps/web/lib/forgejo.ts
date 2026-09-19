@@ -194,14 +194,14 @@ export async function updatePullRequestComment(organizationId: string, fullName:
 }
 
 export async function createPullRequestReview(organizationId: string, fullName: string, prNumber: number, body: string,
-  event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE", comments: ReviewComment[], executionWindow?: ReviewExecutionWindow): Promise<number> {
+  comments: ReviewComment[], executionWindow?: ReviewExecutionWindow): Promise<number> {
   const auth = await credentials(organizationId);
   const signal = reviewPublicationSignal(executionWindow);
   const details = await getPullRequestDetails(organizationId, fullName, prNumber, signal);
   const expectedHead = repositoryContext.getStore()?.expectedHead;
   if (expectedHead && details.headSha !== expectedHead) throw new Error("Forgejo PR revision changed before review publication");
   const result = await read<{ id: number }>(auth, `${repositoryPath(fullName)}/pulls/${positiveId(prNumber)}/reviews`, {
-    method: "POST", signal, body: { body, event: event === "APPROVE" ? "APPROVED" : event, commit_id: expectedHead ?? details.headSha,
+    method: "POST", signal, body: { body, event: "COMMENT", commit_id: expectedHead ?? details.headSha,
       comments: comments.map(comment => ({ path: comment.path, body: comment.body,
         new_position: comment.line, old_position: 0 })) },
   });
@@ -209,7 +209,7 @@ export async function createPullRequestReview(organizationId: string, fullName: 
 }
 
 export async function createInlineComment(organizationId: string, fullName: string, prNumber: number, path: string, line: number, body: string, executionWindow?: ReviewExecutionWindow): Promise<number> {
-  return createPullRequestReview(organizationId, fullName, prNumber, "", "COMMENT", [{ path, line, body, side: "RIGHT" }], executionWindow);
+  return createPullRequestReview(organizationId, fullName, prNumber, "", [{ path, line, body, side: "RIGHT" }], executionWindow);
 }
 
 export async function setCommitStatus(organizationId: string, fullName: string, sha: string,

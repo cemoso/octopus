@@ -85,3 +85,10 @@ Only open, non-draft PRs are eligible. Body and other edits do not trigger revie
 automatic events skip heads with an existing review attempt. An unreviewed ready
 PR can therefore receive its first automatic review on a title change. Manual
 requests use only complete `@octopus` and `/octopus` commands.
+
+Forgejo webhook acceptance, review admission, and the pg-boss job commit in one
+PostgreSQL transaction. A crash before commit leaves none of them committed;
+retry admits the same request version. A crash after commit leaves the signed
+payload identity durable, so replay cannot enqueue another review even after
+the first completes. Forgejo acceptance records are excluded from the telemetry
+retention sweep. The review worker publishes the initial comment after commit.

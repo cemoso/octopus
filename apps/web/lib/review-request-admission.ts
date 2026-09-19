@@ -46,18 +46,18 @@ async function currentProviderHead(params: ReviewRequestParams): Promise<string 
 }
 
 /** Validate provider head before atomically replacing the current request. */
-export async function admitReviewRequest(params: ReviewRequestParams): Promise<AdmissionResult> {
+export async function admitReviewRequest(params: ReviewRequestParams, client: Prisma.TransactionClient = prisma): Promise<AdmissionResult> {
   return params.provider === "forgejo"
-    ? forgejo.runWithForgejoRepository(params.repoId, () => admitReviewRequestInternal(params))
-    : admitReviewRequestInternal(params);
+    ? forgejo.runWithForgejoRepository(params.repoId, () => admitReviewRequestInternal(params, client))
+    : admitReviewRequestInternal(params, client);
 }
 
-async function admitReviewRequestInternal(params: ReviewRequestParams): Promise<AdmissionResult> {
+async function admitReviewRequestInternal(params: ReviewRequestParams, client: Prisma.TransactionClient): Promise<AdmissionResult> {
   const where = { repositoryId_number: { repositoryId: params.repoId, number: params.prNumber } };
   for (let attempt = 0; attempt < 3; attempt++) {
     // Capture the DB state before the remote read. A competing request that
     // wins while that read is in flight must force a fresh provider read.
-    const existing = await prisma.pullRequest.findUnique({
+    const existing = await client.pullRequest.findUnique({
       where,
       select: { id: true, status: true, headSha: true, reviewRequestVersion: true, updatedAt: true },
     });
@@ -85,7 +85,7 @@ async function admitReviewRequestInternal(params: ReviewRequestParams): Promise<
     };
     if (!existing) {
       try {
-        const pullRequest = await prisma.pullRequest.create({ data: {
+        const pullRequest = await client.pullRequest.create({ data: {
           ...data, repositoryId: params.repoId, number: params.prNumber, reviewRequestVersion: 1,
         } });
         return { started: true, pullRequest };
@@ -98,7 +98,7 @@ async function admitReviewRequestInternal(params: ReviewRequestParams): Promise<
 
     // UPDATE ... RETURNING keeps the accepted snapshot and its version
     // together without holding a transaction open across a provider request.
-    const [pullRequest] = await prisma.pullRequest.updateManyAndReturn({
+    const [pullRequest] = await client.pullRequest.updateManyAndReturn({
       where: {
         id: existing.id, headSha: existing.headSha, reviewRequestVersion: existing.reviewRequestVersion,
         status: existing.status, updatedAt: existing.updatedAt,

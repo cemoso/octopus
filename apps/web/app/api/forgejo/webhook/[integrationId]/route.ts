@@ -120,7 +120,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ int
         headSha: automatic ? payload.pull_request!.head.sha : details.headSha,
         triggerCommentId: mention ? payload.comment!.id : 0,
         triggerCommentBody: mention ? payload.comment!.body : "",
-      });
+      }, tx);
       if (!outcome.started && ["already_in_progress", "head_unavailable", "request_contended"].includes(outcome.reason)) {
         // Another delivery may still be enqueueing, or a restart may have left a
         // pending admission with no durable job. Never permanently acknowledge it.
