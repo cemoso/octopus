@@ -4,7 +4,7 @@
 
 # Octopus
 
-AI code review for your pull requests. Get a review summary, severity-ranked findings and suggested fixes in GitHub, GitLab or Bitbucket.
+AI code review for your pull requests. Get a review summary, severity-ranked findings and suggested fixes in GitHub, GitLab, Bitbucket or Forgejo.
 
 **[Try Octopus Cloud](https://octopus-review.ai/login)** · **[Self-host Octopus](https://octopus-review.ai/docs/self-hosting)** · [Documentation](https://octopus-review.ai/docs)
 
@@ -36,8 +36,10 @@ For GitHub projects, give your coding AI the [homepage setup prompt](https://oct
 To set up through the dashboard instead:
 
 1. [Sign in](https://octopus-review.ai/login) with Google, GitHub, Microsoft or an email magic link.
-2. Create your organization, connect GitHub, GitLab or Bitbucket, and choose the repositories to review.
+2. Create your organization, connect GitHub, GitLab, Bitbucket or Forgejo, and choose the repositories to review.
 3. Open a pull request or merge request. Read the review in your code host and address the findings there.
+
+For Forgejo, connect an HTTPS instance with a personal access token and configure signed repository webhooks. Public instances work with Octopus Cloud. For private LAN/VPN instances, run self-hosted Octopus on the network and configure the explicit allowed origins. Follow the [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo). Octopus and your configured AI services process code for reviews; hosting Forgejo yourself does not keep that processing on the Forgejo server.
 
 <p align="center">
   <a href="https://octopus-review.ai/login"><img src="docs/screenshots/cloud-sign-in.png" width="440" alt="The live Octopus Cloud sign-in screen, with Google, GitHub, Microsoft and email options" /></a>
@@ -53,7 +55,7 @@ Deploy Octopus on infrastructure you manage, with control over configuration and
 
 ## Features
 
-- **Review where you work:** summaries, inline findings and suggested fixes in GitHub, GitLab and Bitbucket; [CLI reviews](https://octopus-review.ai/docs/cli) for terminal workflows.
+- **Review where you work:** summaries, inline findings and suggested fixes in GitHub, GitLab, Bitbucket and Forgejo; [CLI reviews](https://octopus-review.ai/docs/cli) for terminal workflows.
 - **Use your team's context:** indexed repository context, knowledge documents, and repo rules in `.octopus.md`, `AGENTS.md` or `CLAUDE.md`.
 - **Choose your AI provider:** organization-level model settings and support for your own API keys.
 - **Understand the result:** severity levels, category scores and explicit [review coverage](docs/review-coverage.md), including incomplete results.

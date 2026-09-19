@@ -1,3 +1,4 @@
+import "server-only";
 import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -207,13 +208,17 @@ export default async function DashboardPage({
     select: { namespaceName: true },
   });
   const gitlabConnected = !!gitlabIntegration;
+  const forgejoConnected = !!(await prisma.forgejoIntegration.findUnique({
+    where: { organizationId: org.id },
+    select: { id: true },
+  }));
   const bannerDismissed = cookieStore.get("providers_banner_dismissed")?.value === "1";
 
   // Connect-first empty state: an org with no provider and no repos gets one
   // clear action instead of an all-zero analytics grid. Not dismissible —
   // there is nothing else to show until code is connected. Also skips the
   // chart queries below, which would all be empty for this cohort.
-  if (!githubConnected && !bitbucketConnected && !gitlabConnected && totalRepos === 0) {
+  if (!githubConnected && !bitbucketConnected && !gitlabConnected && !forgejoConnected && totalRepos === 0) {
     return (
       <div className="mx-auto max-w-6xl p-6 md:p-10">
         <div>
@@ -227,6 +232,7 @@ export default async function DashboardPage({
           githubConnected={githubConnected}
           bitbucketConnected={bitbucketConnected}
           gitlabConnected={gitlabConnected}
+          forgejoConnected={forgejoConnected}
           githubAppSlug={githubAppSlug}
           gitlabRedirectUri={process.env.GITLAB_REDIRECT_URI ?? null}
         />
@@ -567,11 +573,12 @@ export default async function DashboardPage({
         </div>
       )}
 
-      {!githubReconnectNeeded && (!githubConnected || !bitbucketConnected || !gitlabConnected) && !bannerDismissed && (
+      {!githubReconnectNeeded && (!githubConnected || !bitbucketConnected || !gitlabConnected || !forgejoConnected) && !bannerDismissed && (
         <ProvidersBanner
           githubConnected={githubConnected}
           bitbucketConnected={bitbucketConnected}
           gitlabConnected={gitlabConnected}
+          forgejoConnected={forgejoConnected}
           githubAppSlug={githubAppSlug}
           gitlabRedirectUri={process.env.GITLAB_REDIRECT_URI ?? null}
         />

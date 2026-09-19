@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import {
   IconBrandGithub,
+  IconGitFork,
   IconGitBranch,
   IconExternalLink,
   IconSearch,
@@ -111,6 +112,7 @@ type Repo = {
   name: string;
   fullName: string;
   provider: string;
+  repoUrl?: string;
   defaultBranch: string;
   isActive: boolean;
   autoReview: boolean;
@@ -148,6 +150,10 @@ const providerConfig: Record<
   gitlab: {
     icon: IconBrandGitlab,
     repoUrl: (fullName) => `https://gitlab.com/${fullName}`,
+  },
+  forgejo: {
+    icon: IconGitFork,
+    repoUrl: () => "",
   },
 };
 
@@ -913,7 +919,7 @@ function RepoDetail({
 }) {
   const { openWithRepoContext } = useChat();
   const provider = providerConfig[repo.provider];
-  const repoUrl = provider?.repoUrl(repo.fullName);
+  const repoUrl = repo.repoUrl ?? provider?.repoUrl(repo.fullName);
   const [indexPending, startIndexTransition] = useTransition();
   const [cancelPending, startCancelTransition] = useTransition();
   const [autoReviewPending, startAutoReviewTransition] = useTransition();
@@ -1423,7 +1429,7 @@ function RepoDetail({
       </Dialog>
 
       {/* Transfer Repository */}
-      {otherOrgs.length > 0 && (
+      {otherOrgs.length > 0 && repo.provider !== "forgejo" && (
         <>
           <div className="rounded-md border border-orange-500/30 bg-orange-500/5 px-4 py-3">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -2054,7 +2060,7 @@ export function RepositoriesContent({
               className="pl-9"
             />
           </div>
-          <div className="mt-2 flex items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <Select value={currentOwner || "all"} onValueChange={handleOwnerChange}>
               <SelectTrigger className="h-8 text-xs">
                 <SelectValue />
@@ -2104,6 +2110,9 @@ export function RepositoriesContent({
                 </a>
               </Button>
             )}
+            <Button size="sm" variant="outline" className="h-8 shrink-0 text-xs" asChild>
+              <a href="/settings/integrations#forgejo"><IconGitFork className="mr-1 size-3" />Forgejo</a>
+            </Button>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto scrollbar-auto-hide">
@@ -2115,7 +2124,7 @@ export function RepositoriesContent({
               </p>
               {!currentSearch && welcomePending && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Connect a repository to unlock your welcome credits.
+                  Connect GitHub, GitLab or Bitbucket to unlock your welcome credits.
                 </p>
               )}
               {!currentSearch && (
@@ -2132,7 +2141,7 @@ export function RepositoriesContent({
                     href="/settings/integrations"
                     className="text-xs text-muted-foreground underline hover:text-foreground transition-colors"
                   >
-                    Connect GitLab or Bitbucket
+                    Connect GitLab, Bitbucket or Forgejo
                   </a>
                 </div>
               )}

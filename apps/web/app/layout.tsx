@@ -31,7 +31,7 @@ export const metadata: Metadata = {
     template: "%s | Octopus",
   },
   description:
-    "Octopus reviews every pull request in minutes with AI. Works with GitHub, GitLab, and Bitbucket. Indexes your codebase, analyzes diffs, and posts severity-rated findings to catch bugs before they merge.",
+    "Octopus reviews every pull request in minutes with AI. Works with GitHub, GitLab, Bitbucket, and Forgejo. Indexes your codebase, analyzes diffs, and posts severity-rated findings to catch bugs before they merge.",
   keywords: [
     "code review",
     "AI code review",
@@ -40,6 +40,7 @@ export const metadata: Metadata = {
     "GitHub code review",
     "GitLab code review",
     "Bitbucket code review",
+    "Forgejo code review",
     "codebase indexing",
     "severity-rated findings",
     "Claude",
@@ -55,7 +56,7 @@ export const metadata: Metadata = {
     siteName: "Octopus",
     title: "AI Code Review | Octopus | Every PR, Reviewed in Minutes",
     description:
-      "Octopus reviews every pull request in minutes with AI. Works with GitHub, GitLab, and Bitbucket. Indexes your codebase, analyzes diffs, and posts severity-rated findings to catch bugs before they merge.",
+      "Octopus reviews every pull request in minutes with AI. Works with GitHub, GitLab, Bitbucket, and Forgejo. Indexes your codebase, analyzes diffs, and posts severity-rated findings to catch bugs before they merge.",
     images: [
       {
         url: "/og-image.png",
@@ -69,7 +70,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "AI Code Review | Octopus | Every PR, Reviewed in Minutes",
     description:
-      "Octopus reviews every pull request in minutes with AI. Works with GitHub, GitLab, and Bitbucket. Catch bugs before they merge.",
+      "Octopus reviews every pull request in minutes with AI. Works with GitHub, GitLab, Bitbucket, and Forgejo. Catch bugs before they merge.",
     images: ["/og-image.png"],
   },
   robots: {

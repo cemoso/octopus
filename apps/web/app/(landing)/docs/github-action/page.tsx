@@ -525,7 +525,7 @@ export default function GitHubActionPage() {
           <RelatedLink
             href="/docs/integrations"
             title="Integrations"
-            description="GitHub, GitLab, Bitbucket, Slack, Linear."
+            description="GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear."
           />
           <RelatedLink
             href="/docs/cli"

@@ -17,7 +17,7 @@ import { docsPageJsonLd, jsonLd } from "@/lib/structured-data";
 export const metadata = {
   title: "Integrations — Octopus Docs",
   description:
-    "Connect Octopus to GitHub, GitLab (including self-hosted), Bitbucket, Linear, Jira, and Slack. Automate AI code review across your team's pull request workflow in a few minutes.",
+    "Connect Octopus to GitHub, GitLab (including self-hosted), Bitbucket, Forgejo, Linear, Jira, and Slack. Automate AI code review across your team's pull request workflow in a few minutes.",
   alternates: {
     canonical: "https://octopus-review.ai/docs/integrations",
   },
@@ -154,6 +154,44 @@ export default function IntegrationsPage() {
         </FeatureGrid>
       </IntegrationSection>
 
+      <IntegrationSection
+        icon={<IconServer className="size-5" />}
+        name="Forgejo"
+        description="Connect your Forgejo instance over HTTPS. Use Octopus Cloud for public instances, or self-host Octopus inside your LAN or VPN for private instances."
+        setup={[
+          "Create a dedicated Forgejo account with access to the repositories you want reviewed. A bot account keeps reviews separate from your personal account.",
+          "Generate a personal access token with read:user, write:repository, and write:issue scopes. The account also needs repository admin access to configure webhooks.",
+          "Open Settings → Integrations → Forgejo in Octopus. Enter your instance URL and token, then connect. Octopus encrypts the token and syncs repositories where that account has admin access.",
+          "In each Forgejo repository, add a Forgejo webhook using the URL and secret shown in Octopus. Enable pull request events. Octopus verifies the webhook signature before queuing a review.",
+          "To request reviews with /octopus or @octopus comments on pull requests, also enable issue comment events on that webhook.",
+          "Open or update a pull request to start a review. You can also request another review from Octopus.",
+        ]}
+      >
+        <FeatureGrid>
+          <Feature
+            icon={<IconGitPullRequest className="size-4" />}
+            title="Pull request reviews"
+            description="Reviews appear as pull request comments, with commit statuses to show progress and results."
+          />
+          <Feature
+            icon={<IconServer className="size-4" />}
+            title="Your Forgejo instance"
+            description="Keep hosting repositories on Forgejo. Octopus reads code and diffs for indexing and sends review context to your configured AI provider."
+          />
+        </FeatureGrid>
+        <P>
+          Hosting Forgejo yourself does not keep review processing on that server.
+          With Octopus Cloud, code is processed by Octopus and the configured AI
+          services. Octopus Cloud cannot reach your private LAN or VPN. To review
+          a private instance, run Octopus on that network and explicitly allow
+          its HTTPS origin. Both the web application and review workers need
+          matching network access, DNS and configuration. See{" "}
+          <a href="/docs/self-hosting#forgejo" className="text-cyan-400 underline">
+            private Forgejo setup
+          </a>.
+        </P>
+      </IntegrationSection>
+
       {/* Linear */}
       <IntegrationSection
         icon={
@@ -276,7 +314,7 @@ function IntegrationSection({
   children: React.ReactNode;
 }) {
   return (
-    <section className="mb-12">
+    <section id={name.toLowerCase()} className="mb-12 scroll-mt-24">
       <div className="mb-4 flex items-center gap-3">
         <div className="flex size-10 items-center justify-center rounded-lg bg-white/[0.06] text-[#888]">
           {icon}

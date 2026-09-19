@@ -1,4 +1,7 @@
+import "server-only";
 import { headers, cookies } from "next/headers";
+import { ForgejoIntegrationCard } from "./forgejo-integration-card";
+import { hasOrgPermission } from "@/lib/org-permissions";
 import { GITHUB_INSTALL_ERROR_CODES, type GitHubInstallErrorCode } from "@/lib/github-install-errors";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -45,12 +48,13 @@ export default async function IntegrationsPage({
       ...(currentOrgId ? { organizationId: currentOrgId } : {}),
       deletedAt: null,
     },
-    select: { organizationId: true },
+    select: { organizationId: true, role: true },
   });
 
   if (!member) redirect("/dashboard");
 
   const orgId = member.organizationId;
+  const canManage = hasOrgPermission(member, "integrations:manage");
 
   const [
     slackIntegration,
@@ -60,6 +64,7 @@ export default async function IntegrationsPage({
     ,
     linearIntegration,
     jiraIntegration,
+    forgejoIntegration,
   ] = await Promise.all([
     prisma.slackIntegration.findUnique({
       where: { organizationId: orgId },
@@ -113,6 +118,10 @@ export default async function IntegrationsPage({
     prisma.jiraIntegration
       .findUnique({ where: { organizationId: orgId }, select: { siteName: true } })
       .catch(() => null),
+    prisma.forgejoIntegration.findUnique({
+      where: { organizationId: orgId },
+      select: { id: true, forgejoHost: true, username: true, ...(canManage ? { webhookSecret: true } : {}) },
+    }),
   ]);
 
   // DB-first so the card flips to "Install" after a manifest-created app whose
@@ -136,6 +145,7 @@ export default async function IntegrationsPage({
         data={gitlabIntegration}
         redirectUri={process.env.GITLAB_REDIRECT_URI ?? null}
       />
+      <ForgejoIntegrationCard data={forgejoIntegration} canManage={canManage} appUrl={process.env.BETTER_AUTH_URL ?? null} />
       <SlackIntegrationCard data={slackIntegration} />
       <LinearIntegrationCard data={linearIntegration} />
       <JiraIntegrationCard data={jiraIntegration} />

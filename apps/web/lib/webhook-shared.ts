@@ -9,13 +9,14 @@ import { eventBus } from "@/lib/events";
 import * as github from "@/lib/github";
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
+import * as forgejo from "@/lib/forgejo";
 
 /**
  * Post a neutral "skipped" check run so the PR isn't blocked forever.
  * GitHub only — Bitbucket and GitLab have no equivalent checks API in this integration.
  */
 async function postSkippedCheckRun(
-  provider: "github" | "bitbucket" | "gitlab",
+  provider: "github" | "bitbucket" | "gitlab" | "forgejo",
   installationId: number | undefined,
   repoFullName: string,
   headSha: string,
@@ -37,7 +38,7 @@ async function postSkippedCheckRun(
 
 /**
  * Shared flow: admit the current head -> post placeholder comment -> notify dashboard -> start review.
- * Works for GitHub, Bitbucket, and GitLab.
+ * Works for GitHub, Bitbucket, GitLab, and Forgejo.
  */
 /**
  * Outcome of startReviewFlow. Webhooks ignore it; user-facing triggers
@@ -48,8 +49,8 @@ export type StartReviewResult =
   | ReviewRequestRejection
   | { started: false; reason: "org_paused" | "author_blocked"; message: string };
 
-export async function startReviewFlow(params: {
-  provider: "github" | "bitbucket" | "gitlab";
+type StartReviewParams = {
+  provider: "github" | "bitbucket" | "gitlab" | "forgejo";
   // GitHub-specific
   installationId?: number;
   // Bitbucket / GitLab-specific
@@ -65,7 +66,15 @@ export async function startReviewFlow(params: {
   headSha: string | null;
   triggerCommentId: number;
   triggerCommentBody: string;
-}): Promise<StartReviewResult> {
+};
+
+export async function startReviewFlow(params: StartReviewParams): Promise<StartReviewResult> {
+  return params.provider === "forgejo"
+    ? forgejo.runWithForgejoRepository(params.repoId, () => startReviewFlowInternal(params))
+    : startReviewFlowInternal(params);
+}
+
+async function startReviewFlowInternal(params: StartReviewParams): Promise<StartReviewResult> {
   const {
     provider,
     installationId,
@@ -131,6 +140,9 @@ export async function startReviewFlow(params: {
       if (provider === "gitlab" && organizationId) {
         return gitlab.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
       }
+      if (provider === "forgejo" && organizationId) {
+        return forgejo.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
+      }
       throw new Error("Invalid provider configuration");
     });
   } catch (err) {
@@ -166,6 +178,16 @@ export async function startReviewFlow(params: {
   });
 
   // Enqueue review job — pg-boss persists it in DB, survives container restarts
-  await enqueue("process-review", { pullRequestId: pr.id });
+  try {
+    await enqueue("process-review", { pullRequestId: pr.id });
+  } catch (error) {
+    // Release only this admission. A provider retry must not be suppressed as
+    // already in progress when the durable queue never accepted the job.
+    await prisma.pullRequest.updateMany({
+      where: { id: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion, status: "pending" },
+      data: { status: "failed", errorMessage: "Review could not be queued. Retry the request." },
+    });
+    throw error;
+  }
   return { started: true, pullRequestId: pr.id };
 }

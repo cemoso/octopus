@@ -3,6 +3,7 @@ import { authenticateApiToken } from "@/lib/api-auth";
 import { prisma } from "@octopus/db";
 import * as github from "@/lib/github";
 import * as gitlab from "@/lib/gitlab";
+import * as forgejo from "@/lib/forgejo";
 import * as bitbucket from "@/lib/bitbucket";
 import { startReviewFlow } from "@/lib/webhook-shared";
 import { NextRequest } from "next/server";
@@ -50,6 +51,8 @@ export async function POST(
       details = await github.getPullRequestDetails(installationId, owner, repoName, prNumber);
     } else if (repo.provider === "gitlab") {
       details = await gitlab.getPullRequestDetails(result.org.id, repo.fullName, prNumber);
+    } else if (repo.provider === "forgejo") {
+      details = await forgejo.runWithForgejoRepository(repo.id, () => forgejo.getPullRequestDetails(result.org.id, repo.fullName, prNumber));
     } else if (repo.provider === "bitbucket") {
       details = await bitbucket.getPullRequestDetails(result.org.id, owner, repoName, prNumber);
     } else {
@@ -57,7 +60,7 @@ export async function POST(
     }
 
     const outcome = await startReviewFlow({
-      provider: repo.provider as "github" | "gitlab" | "bitbucket",
+      provider: repo.provider as "github" | "gitlab" | "bitbucket" | "forgejo",
       installationId: installationId ?? undefined,
       organizationId: result.org.id,
       repoFullName: repo.fullName,

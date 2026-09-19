@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
 
 const scenarios = {
+  enqueue_retry: "allows retry after a failed durable enqueue without suppressing the request",
   retry_org_installation: "uses the organization GitHub installation for a legacy administrative retry",
   cli_org_installation: "uses the organization GitHub installation for a legacy CLI review",
   delayed: "rejects a delayed A request after B completed without clearing its report",
@@ -24,7 +25,7 @@ const scenarios = {
   retry: "rejects a stale administrative retry through the actual HTTP handler",
   cli_existing: "admits an existing CLI PR with a fresh request version through the HTTP handler",
 };
-for (const provider of ["github", "bitbucket", "gitlab"]) {
+for (const provider of ["github", "bitbucket", "gitlab", "forgejo"]) {
   describe(`${provider} review request admission`, () => {
     for (const [scenario, description] of Object.entries(scenarios)) {
       if (provider !== "github" && scenario.endsWith("_org_installation")) continue;

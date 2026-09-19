@@ -2,6 +2,7 @@ import { mock } from "bun:test";
 import assert from "node:assert/strict";
 
 mock.module("server-only", () => ({}));
+const { ForgejoResponseTooLargeError } = await import("@/lib/forgejo-http");
 let details: { default_branch: string } | null = { default_branch: "main" };
 const deleted: string[] = [];
 const embedded: string[][] = [];
@@ -12,6 +13,24 @@ mock.module("@/lib/github", () => ({
 }));
 mock.module("@/lib/bitbucket", () => ({}));
 mock.module("@/lib/gitlab", () => ({}));
+let forgejoFailure = false;
+const forgejoSha = "f".repeat(40);
+mock.module("@/lib/forgejo", () => ({
+  runWithForgejoRepository: async (_id: string, callback: () => Promise<unknown>) => callback(),
+  getBranchHead: async () => forgejoSha,
+  getRepositoryTree: async (_org: string, _name: string, ref: string) => {
+    assert.equal(ref, forgejoSha);
+    return [".octopusignore", "index.ts", "ignored.ts", "oversized.ts"];
+  },
+  getFileContent: async (_org: string, _name: string, ref: string, file: string) => {
+    assert.equal(ref, forgejoSha);
+    if (forgejoFailure) throw new Error("Forgejo unavailable");
+    if (file === ".octopusignore") return "ignored.ts";
+    if (file === "oversized.ts") throw new ForgejoResponseTooLargeError();
+    assert.equal(file, "index.ts");
+    return "export const greeting = 'hello';\n";
+  },
+}));
 mock.module("@/lib/qdrant", () => ({
   ensureCollection: async () => {},
   deleteRepoChunks: async (id: string) => { deleted.push(id); },
@@ -114,3 +133,12 @@ assert.equal(populated.indexedFiles, 1);
 assert.ok(populated.totalVectors > 0);
 assert.equal(embedded.length, 1);
 console.log("14 indexing regressions passed");
+
+reset();
+const forgejoResult = await indexRepository("repo-1", "acme/new", "main", 0, undefined, undefined, "forgejo", "org-1");
+assert.equal(forgejoResult.indexedFiles, 1);
+assert.equal(forgejoResult.totalFiles, 4, "inventory includes files skipped by indexing limits and ignore rules");
+assert.equal(requests.length, 0, "Forgejo must use its validated transport instead of GitHub or git clone");
+reset(); forgejoFailure = true;
+await assert.rejects(indexRepository("repo-1", "acme/new", "main", 0, undefined, undefined, "forgejo", "org-1"), /Forgejo unavailable/);
+assert.equal(deleted.length, 0, "failed fetch must preserve the prior index");

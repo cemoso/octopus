@@ -13,11 +13,18 @@ let repoInstallations: Array<{ installationId: number | null }> = [];
 let existingRows: Record<string, ExistingRow[]> = { github: [], bitbucket: [], gitlab: [] };
 let bitbucket: { workspaceSlug: string } | null = null;
 let gitlab: { namespacePath: string; webhookSecret: string | null } | null = null;
+let forgejo: { id: string; forgejoHost: string; accessTokenEnc: string } | null = null;
+let forgejoRepos: Array<Loose> = [];
+let forgejoListingError: Error | null = null;
+let forgejoDisconnectDuringListing = false;
 let updateManyCount = 0;
 const upserts: Array<Loose> = [];
 const updateManys: Array<Loose> = [];
 
+const transaction = mock(async (callback: (tx: unknown) => Promise<unknown>): Promise<unknown> => callback(prisma));
 const prisma = {
+  $transaction: transaction,
+  $queryRaw: mock(async () => []),
   organization: { findUnique: mock(async () => orgRow) },
   repository: {
     findMany: mock(async (args: Loose) =>
@@ -42,6 +49,7 @@ const prisma = {
   },
   bitbucketIntegration: { findUnique: mock(async () => bitbucket) },
   gitlabIntegration: { findUnique: mock(async () => gitlab) },
+  forgejoIntegration: { findUnique: mock(async () => forgejo) },
 };
 mock.module("@octopus/db", () => ({ prisma }));
 
@@ -73,6 +81,16 @@ mock.module("@/lib/gitlab", () => ({
   ...actualGitlab,
   listNamespaceProjects: mock(async () => glProjects),
   createProjectWebhook,
+}));
+
+const actualForgejo = await import("@/lib/forgejo");
+mock.module("@/lib/forgejo", () => ({
+  ...actualForgejo,
+  listUserRepos: mock(async () => {
+    if (forgejoListingError) throw forgejoListingError;
+    if (forgejoDisconnectDuringListing) forgejo = null;
+    return forgejoRepos;
+  }),
 }));
 
 const grantDeferredWelcomeCredit = mock(async () => {});
@@ -108,6 +126,10 @@ describe("syncOrgRepos", () => {
     existingRows = { github: [], bitbucket: [], gitlab: [] };
     bitbucket = null;
     gitlab = null;
+    forgejo = null;
+    forgejoRepos = [];
+    forgejoListingError = null;
+    forgejoDisconnectDuringListing = false;
     ghRepos = {};
     bbRepos = [];
     glProjects = [];
@@ -134,6 +156,40 @@ describe("syncOrgRepos", () => {
     expect(upserts[1].create).toMatchObject({ externalId: "2", installationId: 111, isActive: true, organizationId: "org_1" });
     expect(grantDeferredWelcomeCredit).toHaveBeenCalledWith("org_1");
     expect(enqueuePendingRepositoryIndexes).toHaveBeenCalledWith("org_1");
+  });
+
+  it("scopes Forgejo identities by host, respects dismissal and admin access, and grants no welcome credit", async () => {
+    orgRow = { githubInstallationId: null };
+    forgejo = { id: "forge_1", forgejoHost: "https://forge.example.com", accessTokenEnc: "encrypted" };
+    existingRows.forgejo = [{ externalId: "https://forge.example.com:2", dismissedAt: new Date() }];
+    forgejoRepos = [
+      { ...gh(1, "active"), permissions: { admin: true } },
+      { ...gh(2, "dismissed"), permissions: { admin: true } },
+      { ...gh(3, "reader"), permissions: { admin: false } },
+      { ...gh(4, "archived"), permissions: { admin: true }, archived: true },
+    ];
+    const result = await syncOrgRepos("org_1", { source: "manual" });
+    expect(result.providers).toEqual(["forgejo"]);
+    expect(result.synced).toBe(1);
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].create).toMatchObject({ provider: "forgejo", externalId: "https://forge.example.com:1", organizationId: "org_1" });
+    expect(updateManys[0].where).toMatchObject({ provider: "forgejo", externalId: { notIn: ["https://forge.example.com:1", "https://forge.example.com:2"] } });
+    expect(grantDeferredWelcomeCredit).not.toHaveBeenCalled();
+  });
+
+  it("leaves Forgejo rows untouched on listing failure or a concurrent disconnect", async () => {
+    orgRow = { githubInstallationId: null };
+    forgejo = { id: "forge_1", forgejoHost: "https://forge.example.com", accessTokenEnc: "encrypted" };
+    forgejoListingError = new Error("instance unavailable");
+    await syncOrgRepos("org_1", { source: "manual" });
+    expect(upserts).toHaveLength(0);
+    expect(updateManys).toHaveLength(0);
+    forgejoListingError = null;
+    forgejoDisconnectDuringListing = true;
+    forgejoRepos = [{ ...gh(1, "active"), permissions: { admin: true } }];
+    await syncOrgRepos("org_1", { source: "manual" });
+    expect(upserts).toHaveLength(0);
+    expect(updateManys).toHaveLength(0);
   });
 
   it("never resurrects a repository the user removed, and never deactivates dismissed rows", async () => {

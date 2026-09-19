@@ -1,8 +1,8 @@
 # Octopus
 
-> AI code review for pull requests. Octopus reviews every PR on GitHub, GitLab and Bitbucket with full-repository context and posts severity-rated findings inline. Cloud service at octopus-review.ai; self-hosting is optional.
+> AI code review for pull requests. Octopus reviews every PR on GitHub, GitLab, Bitbucket and Forgejo with full-repository context and posts severity-rated findings inline. Cloud service at octopus-review.ai; self-hosting is optional.
 
-Octopus is a source-available (Modified MIT) AI code review platform. It connects to your repositories, indexes the codebase with vector search, and reviews each pull request as it is opened or updated. Findings are posted as inline review comments with a severity (Critical, Major, Minor, Suggestion, Tip), a short explanation and, where useful, a suggested patch, plus a per-PR score table. Reviews re-run when the PR changes, and replies to review comments are understood and acted on.
+Octopus is a source-available (Modified MIT) AI code review platform. It connects to your repositories, indexes the codebase with vector search, and reviews each pull request as it is opened or updated. Findings are posted as inline review comments with a severity (Critical, Major, Minor, Suggestion, Tip), a short explanation and, where useful, a suggested patch, plus a per-PR score table. Reviews re-run when the PR changes. GitHub review-comment replies can trigger follow-up responses.
 
 ## Core features
 
@@ -17,12 +17,15 @@ Octopus is a source-available (Modified MIT) AI code review platform. It connect
 
 - GitHub App (recommended on cloud): automatic reviews on every pull request
 - GitLab and Bitbucket integrations
+- Forgejo: connect an HTTPS instance using a personal access token, then configure signed pull request webhooks: https://octopus-review.ai/docs/integrations#forgejo
 - GitHub Action for CI-triggered reviews: https://octopus-review.ai/docs/github-action
 - CLI `octp` for local and terminal workflows: https://octopus-review.ai/docs/cli
 - Claude Code integration (review from the agent): https://octopus-review.ai/docs/cli/claude-code-integration
 - MCP plugin for Claude Code and Cursor: https://github.com/octopusreview/octopus-plugin
 - Slack (ask questions about your codebase), Linear and Jira (create issues from findings): https://octopus-review.ai/docs/integrations
 - Self-hosting with Docker Compose: https://octopus-review.ai/docs/self-hosting
+
+Forgejo repositories remain on your instance, but Octopus and your configured AI services process code for reviews. Self-hosting Forgejo does not keep Octopus Cloud processing on your network. Octopus Cloud connects to public HTTPS instances. Private LAN/VPN instances require self-hosted Octopus with network access and an explicit FORGEJO_ALLOWED_PRIVATE_ORIGINS allowlist. Native CLI agent setup remains GitHub-only. Private setup: https://octopus-review.ai/docs/self-hosting#forgejo
 
 ## Pricing
 

@@ -170,6 +170,14 @@ export default function SubprocessorsPage() {
       </P>
 
       <P>
+        Forgejo is software run by the operator of the instance you connect.
+        Forgejo&apos;s project does not receive your repository data through this
+        integration. Check your instance operator&apos;s terms if someone else
+        hosts it. Octopus and the configured AI services still process code for
+        reviews, even when you host Forgejo yourself.
+      </P>
+
+      <P>
         Required status:
       </P>
       <UL>

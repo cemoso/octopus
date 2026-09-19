@@ -28,7 +28,7 @@ export default function SecurityOverviewPage() {
           customer&apos;s own infrastructure (self-hosted Octopus).
         </P>
         <UL>
-          <li><strong>Webhook</strong> — GitHub, GitLab, or Bitbucket POSTs a PR/MR event; we verify GitHub and Bitbucket HMAC signatures or GitLab&apos;s per-organisation hook token before processing.</li>
+          <li><strong>Webhook</strong> — GitHub, GitLab, Bitbucket, or Forgejo POSTs a PR/MR event; we verify GitHub, Bitbucket, and Forgejo HMAC signatures or GitLab&apos;s per-organisation hook token before processing.</li>
           <li><strong>Clone</strong> — we clone the repository into a per-job temporary directory; never persisted beyond the job.</li>
           <li><strong>Index</strong> — file contents are chunked and embedded into Qdrant for vector search. Source files are not stored as plaintext outside the indexing window.</li>
           <li><strong>Review</strong> — relevant chunks plus the diff are sent to the configured LLM provider. Provider choice and BYOK key live on the organisation.</li>
@@ -49,6 +49,7 @@ export default function SecurityOverviewPage() {
           <li>Qdrant vector store — full-disk encryption on the underlying volume.</li>
           <li>Object storage (S3 / R2) for org avatars and large review payloads — server-side encryption with provider-managed keys.</li>
           <li>OAuth tokens for third-party integrations (Slack, Linear, Jira, GitLab) are stored encrypted at the row level using an AES-256 key derived from the application secret. See <code>apps/web/lib/crypto.ts</code>.</li>
+          <li>Forgejo personal access tokens are encrypted at rest. Each integration has a separate webhook secret for verifying signed events. Use a dedicated account and revoke its token in Forgejo when access is no longer needed.</li>
         </UL>
       </Section>
 
@@ -76,7 +77,7 @@ export default function SecurityOverviewPage() {
           <li><strong>Session management</strong> — short-lived bearer tokens with refresh; sessions revocable from <code>/settings/sessions</code>.</li>
           <li><strong>Role-based access</strong> — per-organisation roles (owner / admin / member); the audit log records role transitions.</li>
           <li><strong>CLI tokens</strong> — see the <a href="https://github.com/octopusreview/octopus/blob/master/apps/cli/README.md#set-up-a-repository-with-your-ai" className="underline">CLI authentication contract</a> for user sessions, organisation-scoped credentials, and revocation.</li>
-          <li><strong>Webhook secrets</strong> — set per-organisation; every inbound payload is verified via HMAC signature (GitHub, Bitbucket) or per-organisation hook-token comparison (GitLab).</li>
+          <li><strong>Webhook secrets</strong> — every inbound payload is verified via HMAC signature (GitHub, Bitbucket, Forgejo) or per-organisation hook-token comparison (GitLab).</li>
         </UL>
       </Section>
 
@@ -103,7 +104,7 @@ export default function SecurityOverviewPage() {
         </P>
         <UL>
           <li>The configured LLM provider for each org (Anthropic / OpenAI / Google / etc.)</li>
-          <li>The git platform API (GitHub / GitLab / Bitbucket) for clone, comment, and webhook acknowledgement</li>
+          <li>The git platform API (GitHub / GitLab / Bitbucket / Forgejo) for clone, comment, and webhook acknowledgement</li>
           <li>Integration webhooks if configured (Slack / Linear / Jira)</li>
           <li>Email provider (Resend) for notifications</li>
           <li>OAuth providers during sign-in (GitHub / Google / Microsoft) — Microsoft Graph is contacted during Microsoft sign-in when configured</li>

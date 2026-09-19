@@ -65,7 +65,7 @@ export async function POST(
   }
 
   const provider = pr.repository.provider;
-  if (provider !== "github" && provider !== "bitbucket" && provider !== "gitlab") {
+  if (provider !== "github" && provider !== "bitbucket" && provider !== "gitlab" && provider !== "forgejo") {
     return NextResponse.json({ error: "Unsupported review provider" }, { status: 422 });
   }
   const admission = await admitReviewRequest({

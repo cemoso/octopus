@@ -9,7 +9,7 @@ import { syncOrgRepos } from "@/lib/repo-sync";
  * synced organizations so repositories created since the last sync appear
  * without anyone clicking Sync. GitHub also gets an instant path through the
  * `repository` webhook; this sweep is the safety net and the only path for
- * GitLab and Bitbucket.
+ * GitLab, Bitbucket and Forgejo.
  *
  * Fairness comes from the Organization.reposSyncedAt cursor: every org is
  * stamped after its attempt (success, failure, or rate limit) so a broken org
@@ -35,6 +35,7 @@ export async function discoverRepositories(now: Date = new Date()): Promise<{
         { githubInstallationId: { not: null } },
         { bitbucketIntegration: { isNot: null } },
         { gitlabIntegration: { isNot: null } },
+        { forgejoIntegration: { isNot: null } },
       ],
     },
     orderBy: { reposSyncedAt: { sort: "asc", nulls: "first" } },
@@ -54,7 +55,7 @@ export async function discoverRepositories(now: Date = new Date()): Promise<{
       await prisma.repository.updateMany({
         where: {
           organizationId: org.id,
-          provider: "github",
+          provider: { in: ["github", "forgejo"] },
           isActive: true,
           dismissedAt: null,
           indexStatus: "indexing",

@@ -31,7 +31,7 @@ export const ORGANIZATION_ENTITY = {
     url: `${SITE_URL}/logo.svg`,
   },
   description:
-    "Octopus is an AI code review service that reviews every pull request on GitHub, GitLab and Bitbucket with full-repository context and posts severity-rated findings inline.",
+    "Octopus is an AI code review service that reviews every pull request on GitHub, GitLab, Bitbucket and Forgejo with full-repository context and posts severity-rated findings inline.",
   sameAs: [...SOCIAL_PROFILES],
 } as const;
 
@@ -89,7 +89,7 @@ export function pricingProductJsonLd() {
     "@id": `${SITE_URL}/#product`,
     name: "Octopus AI Code Review",
     description:
-      "AI code review for pull requests on GitHub, GitLab and Bitbucket. Usage-based: free credits on signup, then AI usage billed at 2x the provider's list price. No per-seat fee. Bring your own API keys to pay providers directly.",
+      "AI code review for pull requests on GitHub, GitLab, Bitbucket and Forgejo. Usage-based: free credits on signup, then AI usage billed at 2x the provider's list price. No per-seat fee. Bring your own API keys to pay providers directly.",
     brand: { "@id": ORGANIZATION_ID },
     url,
     category: "Developer Tools",

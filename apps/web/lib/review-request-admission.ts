@@ -3,9 +3,10 @@ import { prisma, Prisma, type PullRequest } from "@octopus/db";
 import * as github from "@/lib/github";
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
+import * as forgejo from "@/lib/forgejo";
 
 export type ReviewRequestParams = {
-  provider: "github" | "bitbucket" | "gitlab";
+  provider: "github" | "bitbucket" | "gitlab" | "forgejo";
   installationId?: number;
   organizationId?: string;
   repoFullName: string;
@@ -36,6 +37,8 @@ async function currentProviderHead(params: ReviewRequestParams): Promise<string 
     details = await bitbucket.getPullRequestDetails(params.organizationId, owner, repo, params.prNumber);
   } else if (params.provider === "gitlab" && params.organizationId) {
     details = await gitlab.getPullRequestDetails(params.organizationId, params.repoFullName, params.prNumber);
+  } else if (params.provider === "forgejo" && params.organizationId) {
+    details = await forgejo.getPullRequestDetails(params.organizationId, params.repoFullName, params.prNumber);
   } else {
     throw new Error("Invalid provider configuration");
   }
@@ -44,6 +47,12 @@ async function currentProviderHead(params: ReviewRequestParams): Promise<string 
 
 /** Validate provider head before atomically replacing the current request. */
 export async function admitReviewRequest(params: ReviewRequestParams): Promise<AdmissionResult> {
+  return params.provider === "forgejo"
+    ? forgejo.runWithForgejoRepository(params.repoId, () => admitReviewRequestInternal(params))
+    : admitReviewRequestInternal(params);
+}
+
+async function admitReviewRequestInternal(params: ReviewRequestParams): Promise<AdmissionResult> {
   const where = { repositoryId_number: { repositoryId: params.repoId, number: params.prNumber } };
   for (let attempt = 0; attempt < 3; attempt++) {
     // Capture the DB state before the remote read. A competing request that

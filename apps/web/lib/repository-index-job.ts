@@ -25,7 +25,7 @@ export async function enqueuePendingRepositoryIndexes(organizationId: string, re
     where: {
       organizationId,
       ...(repositoryId ? { id: repositoryId } : {}),
-      provider: "github",
+      provider: { in: ["github", "forgejo"] },
       isActive: true,
       dismissedAt: null,
       organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
@@ -54,7 +54,7 @@ export async function processRepositoryIndex(job: RepositoryIndexJob) {
     where: {
       id: job.repositoryId,
       organizationId: job.organizationId,
-      provider: "github",
+      provider: { in: ["github", "forgejo"] },
       isActive: true,
       dismissedAt: null,
       organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
@@ -62,7 +62,7 @@ export async function processRepositoryIndex(job: RepositoryIndexJob) {
     include: { organization: { select: { githubInstallationId: true } } },
   });
   const installationId = repo?.organization.githubInstallationId;
-  if (!repo || !installationId || (repo.installationId && repo.installationId !== installationId)) return;
+  if (!repo || (repo.provider === "github" && (!installationId || (repo.installationId && repo.installationId !== installationId)))) return;
 
   // Share the reviewer's claim so a first PR and discovery cannot both index.
   const claim = await prisma.repository.updateMany({
@@ -86,8 +86,8 @@ export async function processRepositoryIndex(job: RepositoryIndexJob) {
     await deleteSyncLogs(job.organizationId, repo.id);
     await notify("indexing");
     const stats = await indexRepository(
-      repo.id, repo.fullName, repo.defaultBranch, installationId, log,
-      controller.signal, "github", job.organizationId,
+      repo.id, repo.fullName, repo.defaultBranch, installationId ?? 0, log,
+      controller.signal, repo.provider, job.organizationId,
     );
     await prisma.repository.update({
       where: { id: repo.id },

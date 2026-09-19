@@ -57,9 +57,9 @@ const docsPages = [
   {
     href: "/docs/integrations",
     label: "Integrations",
-    description: "GitHub, Bitbucket, Slack, Linear connections and webhooks.",
+    description: "GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear and Jira connections.",
     icon: IconPlugConnected,
-    keywords: ["github", "bitbucket", "slack", "linear", "webhook", "oauth"],
+    keywords: ["github", "gitlab", "bitbucket", "forgejo", "self-hosted", "token", "slack", "linear", "jira", "webhook", "oauth"],
   },
   {
     href: "/docs/cli",

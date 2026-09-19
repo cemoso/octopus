@@ -33,7 +33,7 @@ import {
 const landingFaqs = [
   {
     q: "What is Octopus?",
-    a: "Octopus is an AI-powered code review tool that connects to GitHub, GitLab, and Bitbucket, indexes your codebase for deep context, and automatically reviews every pull request — posting findings as inline comments with severity levels.",
+    a: "Octopus is an AI-powered code review tool that connects to GitHub, GitLab, Bitbucket, and Forgejo, indexes your codebase for deep context, and automatically reviews every pull request — posting findings as inline comments with severity levels.",
   },
   {
     q: "How does the automated review work?",
@@ -45,7 +45,7 @@ const landingFaqs = [
   },
   {
     q: "Is my source code safe?",
-    a: "Yes. Your code is processed in-memory and never stored permanently. Only vector embeddings are persisted for search. You can also self-host Octopus on your own infrastructure so your code never leaves your servers.",
+    a: "Octopus reads repository content to index and review your code. Your configured AI services process code and review context. Self-hosting Forgejo does not change that: use self-hosted Octopus with local AI services if you need processing to stay on your infrastructure. See our security and data-retention documentation for details.",
   },
   {
     q: "Does Octopus replace human reviewers?",
@@ -64,7 +64,7 @@ const productJsonLd = {
   url: "https://octopus-review.ai",
   logo: "https://octopus-review.ai/logo.svg",
   description:
-    "AI-powered code review tool that connects to GitHub, GitLab, and Bitbucket, indexes your codebase, and automatically reviews pull requests with severity-rated findings.",
+    "AI-powered code review tool that connects to GitHub, GitLab, Bitbucket, and Forgejo, indexes your codebase, and automatically reviews pull requests with severity-rated findings.",
   applicationCategory: "DeveloperApplication",
   operatingSystem: "Web",
   offers: {
@@ -77,7 +77,7 @@ const productJsonLd = {
     "Automated pull request review",
     "Codebase indexing with vector search",
     "Severity-rated findings (Critical, Major, Minor, Suggestion, Tip)",
-    "GitHub, GitLab, and Bitbucket integration",
+    "GitHub, GitLab, Bitbucket, and Forgejo integration",
     "Slack and Linear integration",
     "Self-hostable with Docker",
     "Bring Your Own API keys",
@@ -242,8 +242,15 @@ export default async function LandingPage() {
                 Two ways to run Octopus
               </h2>
               <p className="mt-4 text-[#666] sm:text-lg">
-                Start reviewing in two minutes on our managed cloud, or run the
-                entire platform on your own infrastructure.
+                Use our managed cloud, or run the entire platform on your own
+                infrastructure.
+              </p>
+              <p className="mt-4 text-sm text-[#888]">
+                Hosting your code on Forgejo?{" "}
+                <Link href="/docs/integrations#forgejo" className="text-[#10D8BE] underline underline-offset-4">
+                  Connect your Forgejo instance
+                </Link>{" "}
+                with a personal access token and repository webhooks.
               </p>
             </div>
 
@@ -260,10 +267,10 @@ export default async function LandingPage() {
                 <p className="mt-1.5 text-sm text-[#888]">Hosted for you. Nothing to run or maintain.</p>
                 <ul className="mt-6 space-y-3 text-sm text-[#bbb]">
                   {[
-                    "Auto-reviews every PR via the GitHub App",
+                    "Reviews for GitHub, GitLab, Bitbucket and Forgejo",
                     "Free credits to start — usage-based after, no card",
                     "Managed updates, backups and scaling",
-                    "Private: your code is never stored long-term or trained on",
+                    "Retention follows your deployment and configuration",
                   ].map((t) => (
                     <li key={t} className="flex items-start gap-2.5">
                       <IconCheck className="mt-0.5 size-4 shrink-0 text-[#10D8BE]" />
@@ -271,6 +278,12 @@ export default async function LandingPage() {
                     </li>
                   ))}
                 </ul>
+                <p className="mt-4 text-sm text-[#888]">
+                  Octopus stores review and indexing data.{" "}
+                  <Link href="/docs/data-retention" className="underline underline-offset-4">
+                    Read about data retention
+                  </Link>.
+                </p>
                 <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:items-center">
                   <TrackedLink
                     href="/login"
@@ -302,8 +315,8 @@ export default async function LandingPage() {
                 <ul className="mt-6 space-y-3 text-sm text-[#bbb]">
                   {[
                     "Free & source-available (Modified MIT License)",
-                    "One Docker Compose file — up in minutes",
-                    "Your code never leaves your network",
+                    "Deploy with Docker Compose",
+                    "Choose where code is processed and which AI services run",
                     "Bring your own AI keys or run local models",
                   ].map((t) => (
                     <li key={t} className="flex items-start gap-2.5">

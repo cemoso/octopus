@@ -9,7 +9,7 @@ export function renderLlmsFull(): string {
   const parts: string[] = [
     "# Octopus — full documentation text",
     "",
-    "> AI code review for pull requests on GitHub, GitLab and Bitbucket, with full-repository context. Cloud service at https://octopus-review.ai; self-hosting optional. Short index: https://octopus-review.ai/llms.txt",
+    "> AI code review for pull requests on GitHub, GitLab, Bitbucket and Forgejo, with full-repository context. Cloud service at https://octopus-review.ai; self-hosting optional. Short index: https://octopus-review.ai/llms.txt",
     "",
   ];
   for (const doc of docsContent) {

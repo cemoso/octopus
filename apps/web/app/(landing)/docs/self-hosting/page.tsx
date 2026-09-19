@@ -1,4 +1,5 @@
 import { IconServer } from "@tabler/icons-react";
+import Link from "@/components/link";
 import { CodeBlock } from "./code-block";
 import { EnvGenerator } from "./env-generator";
 import { Tabs } from "./tabs";
@@ -157,7 +158,7 @@ DATABASE_URL=postgresql://octopus:octopus@localhost:43332/octopus bunx prisma mi
             <Paragraph>
               Visit <Mono>http://localhost:43300</Mono> to access your
               self-hosted Octopus instance. Create your first account and
-              connect a GitHub repository to get started.
+              connect a GitHub, GitLab, Bitbucket or Forgejo repository to get started.
             </Paragraph>
           </Step>
         </>
@@ -263,8 +264,9 @@ docker compose exec ollama ollama pull nomic-embed-text`}</CodeBlock>
           Generate a default <Mono>.env</Mono> file with pre-filled defaults for
           database, Qdrant, and auth. A unique{" "}
           <Mono>BETTER_AUTH_SECRET</Mono> is generated automatically.
-          Fill in the remaining values (API keys, GitHub App, etc.) before
-          starting.
+          Configure your AI services before starting. GitHub App credentials
+          are needed only if you connect GitHub repositories. Forgejo credentials
+          are entered in Settings → Integrations after sign-in.
         </Paragraph>
 
         <EnvGenerator />
@@ -272,11 +274,14 @@ docker compose exec ollama ollama pull nomic-embed-text`}</CodeBlock>
         <EnvGroup title="Required — fill these in">
           <EnvVar name="OPENAI_API_KEY" example="sk-..." required description="Used for embeddings" />
           <EnvVar name="ANTHROPIC_API_KEY" example="sk-ant-..." description="Claude for reviews" />
-          <EnvVar name="GITHUB_APP_ID" example="123456" required />
-          <EnvVar name="GITHUB_APP_PRIVATE_KEY" example="-----BEGIN RSA..." required />
-          <EnvVar name="GITHUB_WEBHOOK_SECRET" example="whsec_..." required />
-          <EnvVar name="GITHUB_APP_CLIENT_ID" example="Iv1.app-client-id" required description="GitHub App user authorization" />
-          <EnvVar name="GITHUB_APP_CLIENT_SECRET" example="secret" required description="GitHub App user authorization" />
+        </EnvGroup>
+
+        <EnvGroup title="GitHub integration only">
+          <EnvVar name="GITHUB_APP_ID" example="123456" />
+          <EnvVar name="GITHUB_APP_PRIVATE_KEY" example="-----BEGIN RSA..." />
+          <EnvVar name="GITHUB_WEBHOOK_SECRET" example="whsec_..." />
+          <EnvVar name="GITHUB_APP_CLIENT_ID" example="Iv1.app-client-id" description="GitHub App user authorization" />
+          <EnvVar name="GITHUB_APP_CLIENT_SECRET" example="secret" description="GitHub App user authorization" />
           <EnvVar name="GITHUB_CLIENT_ID" example="Iv1.abc123" />
           <EnvVar name="GITHUB_CLIENT_SECRET" example="secret" />
         </EnvGroup>
@@ -298,6 +303,8 @@ docker compose exec ollama ollama pull nomic-embed-text`}</CodeBlock>
           <EnvVar name="ACP_BASE_URL" example="https://acpx.example.com" description="ACPX gateway (acp: model ids); set together with ACP_API_KEY" />
           <EnvVar name="OPENCODE_BASE_URL" example="https://opencode.example.com" description="OpenCode gateway (opencode: model ids); set together with OPENCODE_API_KEY" />
           <EnvVar name="QDRANT_API_KEY" example="your-qdrant-api-key" description="If Qdrant auth is enabled" />
+          <EnvVar name="FORGEJO_ALLOWED_PRIVATE_ORIGINS" example="" description="Comma-separated exact HTTPS origins for private Forgejo instances. Self-hosted only: use the official self-host image or OCTOPUS_SELF_HOSTED=true at runtime. Configure on web and review workers." />
+          <EnvVar name="NODE_EXTRA_CA_CERTS" example="" description="Path to a mounted PEM CA certificate file if your Forgejo instance uses an internal CA. Keep TLS verification enabled." />
           <EnvVar name="COHERE_API_KEY" example="..." description="For reranking search results" />
           <EnvVar name="STRIPE_SECRET_KEY" example="sk_..." description="For billing" />
         </EnvGroup>
@@ -317,7 +324,7 @@ DATABASE_URL=postgresql://octopus:octopus@localhost:43332/octopus bunx prisma mi
       {/* GitHub App */}
       <Section title="GitHub App Setup">
         <Paragraph>
-          To receive webhook events, you need to create a GitHub App:
+          If you use GitHub repositories, create a GitHub App to receive events:
         </Paragraph>
         <ol className="mb-4 list-inside list-decimal space-y-2 text-sm text-[#888]">
           <li>
@@ -331,6 +338,49 @@ DATABASE_URL=postgresql://octopus:octopus@localhost:43332/octopus bunx prisma mi
           <li>Subscribe to events: <Mono>Pull request</Mono>, <Mono>Pull request review</Mono></li>
           <li>Generate a private key and add it to your environment</li>
         </ol>
+      </Section>
+
+      <Section id="forgejo" title="Forgejo setup, including private LAN and VPN">
+        <Paragraph>
+          In Settings → Integrations, connect your HTTPS Forgejo instance
+          with a personal access token. Configure a signed pull request webhook
+          for each repository using the URL and secret shown in Octopus. See{" "}
+          <Link href="/docs/integrations#forgejo" className="text-cyan-400 underline">
+            the Forgejo setup guide
+          </Link>{" "}
+          for token permissions and webhook setup.
+        </Paragraph>
+        <Paragraph>
+          To connect a private LAN or VPN-only instance, run self-hosted Octopus
+          within that network. The official self-host image has{" "}
+          <Mono>NEXT_PUBLIC_OCTOPUS_SELF_HOSTED=true</Mono> baked in at build time.
+          For a custom or other prebuilt image, enable server-side self-hosting
+          with <Mono>OCTOPUS_SELF_HOSTED=true</Mono> at runtime. Either enables
+          self-hosted access; both flags are not required. Then set{" "}
+          <Mono>FORGEJO_ALLOWED_PRIVATE_ORIGINS</Mono> to a comma-separated
+          list of the exact HTTPS origins you operate, including a port if it is
+          not 443. An origin contains the scheme and host, with no path or wildcard.
+          The allowlist is ignored on Octopus Cloud.
+        </Paragraph>
+        <Paragraph>
+          Configure the same allowlist on the web application and review workers.
+          Both need routes and DNS access to Forgejo; Forgejo must also be able to
+          deliver webhooks to Octopus. Restart those processes after changing the
+          environment. Private network access alone does not authorize a host;
+          its origin must be listed explicitly.
+        </Paragraph>
+        <Paragraph>
+          For an internal certificate authority, mount its trusted PEM certificate
+          file and set <Mono>NODE_EXTRA_CA_CERTS</Mono> to that file&apos;s path in
+          each process. HTTPS verification stays enabled. HTTP, redirects, loopback,
+          link-local addresses and cloud metadata endpoints remain blocked, even
+          for an allowed origin.
+        </Paragraph>
+        <Paragraph>
+          Self-hosting Forgejo controls where repositories live. Your Octopus
+          deployment and configured AI services determine where code is processed
+          for reviews. Use local AI services if processing must stay on your network.
+        </Paragraph>
       </Section>
 
       {/* Production tips */}
