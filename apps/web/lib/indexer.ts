@@ -608,8 +608,6 @@ async function loadIncrementalIgnore(
       content = await bitbucketLib.getFileContent(organizationId, workspace, repoSlug, defaultBranch, ".octopusignore");
     } else if (provider === "gitlab" && organizationId) {
       content = await gitlabLib.getFileContent(organizationId, fullName, defaultBranch, ".octopusignore");
-    } else if (provider === "forgejo" && organizationId) {
-      content = await forgejoLib.getFileContent(organizationId, fullName, defaultBranch, ".octopusignore");
     }
     return content ? parseOctopusIgnore(content) : undefined;
   } catch {
@@ -693,11 +691,10 @@ export async function incrementalIndex(
         console.warn(`[indexer:incremental] Failed to fetch ${filePath}, skipping`);
       }
     }
-  } else if ((provider === "gitlab" || provider === "forgejo") && organizationId) {
-    const api = provider === "forgejo" ? forgejoLib : gitlabLib;
+  } else if (provider === "gitlab" && organizationId) {
     for (const filePath of addedOrModified) {
       try {
-        const content = await api.getFileContent(organizationId, fullName, defaultBranch, filePath);
+        const content = await gitlabLib.getFileContent(organizationId, fullName, defaultBranch, filePath);
         if (!content || content.includes("\0")) continue;
         if (exceedsMaxFileSize(content)) {
           console.warn(`[indexer:incremental] Skipping ${filePath}: exceeds ${MAX_FILE_SIZE} bytes`);

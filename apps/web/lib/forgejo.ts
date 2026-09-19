@@ -142,6 +142,7 @@ export async function getPullRequestReviewInput(organizationId: string, fullName
     const response = await forgejoRequest(auth.host, auth.token, `/api/v1${path}/files?limit=50&page=${page}`);
     let entries: ChangedFile[];
     try { entries = JSON.parse(response.body); } catch { throw new Error("Invalid Forgejo changed-file response"); }
+    if (entries === null && expectedFiles === 0 && files.length === 0) entries = [];
     if (!Array.isArray(entries)) throw new Error("Invalid Forgejo changed-file response");
     for (const file of entries) {
       if (typeof file.filename !== "string" || !file.filename || seen.has(file.filename) || typeof file.status !== "string") {
@@ -177,10 +178,6 @@ export async function getPullRequestReviewInput(organizationId: string, fullName
   ];
   return { rawDiff, input: { provider: "forgejo", headSha, baseSha, expectedFiles, inventoryComplete,
     files: attachReviewPatches(files, rawDiff), limitations } };
-}
-
-export async function getPullRequestDiff(organizationId: string, fullName: string, prNumber: number): Promise<string> {
-  return (await getPullRequestReviewInput(organizationId, fullName, prNumber, null)).rawDiff;
 }
 
 export async function createPullRequestComment(organizationId: string, fullName: string, prNumber: number, body: string, executionWindow?: ReviewExecutionWindow): Promise<number> {

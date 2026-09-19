@@ -73,3 +73,15 @@ Paths and line references below point to this branch; later code edits may move 
 - Real local Next.js pages were checked against the disposable database at `http://localhost:3117`: homepage, `/docs/integrations#forgejo` and `/docs/self-hosting#forgejo` at 1440px and 390px. The homepage link and private-setup link navigated to the right anchors. Allowed-origin, self-host flag, worker/DNS and trusted-CA instructions rendered. A pre-existing mobile header overflow was fixed; all three pages then fit both widths. Screenshots are under `/tmp/octopus-forgejo-ui-evidence/` (`homepage.png`, `homepage-mobile.png`, `docs-forgejo.png`, `docs-forgejo-mobile.png`, `docs-private-forgejo-mobile.png`). This remains local preview evidence, not production or authenticated Forgejo execution.
 - Full integration checks and real Forgejo end-to-end evidence are tracked by the implementation task; this content audit makes no production deployment claim.
 - A real authenticated Forgejo pull request and an actual private VPN deployment remain unverified. Fixture tests and local UI checks do not establish those outcomes.
+
+## Automatic review events
+
+Forgejo emits `pull_request` / `edited` with `changes.title.from` when a PR title
+changes ([upstream notifier](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/services/webhook/notifier.go)).
+Draft status comes from configurable title prefixes
+([upstream draft detection](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/models/issues/pull.go)),
+so Octopus accepts this title-change event and fetches authoritative PR metadata.
+Only open, non-draft PRs are eligible. Body and other edits do not trigger reviews;
+automatic events skip heads with an existing review attempt. An unreviewed ready
+PR can therefore receive its first automatic review on a title change. Manual
+requests use only complete `@octopus` and `/octopus` commands.

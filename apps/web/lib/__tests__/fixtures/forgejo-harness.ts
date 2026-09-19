@@ -140,6 +140,17 @@ assert.equal(result.input.files[0].change, "modified");
 assert.match(result.input.files[1].patch!, /\+after/);
 assert.ok(requests.some(request => request.url.search === "?limit=50&page=2"));
 
+const emptyPr = { ...pr, changed_files: 0 };
+replies = [{ body: emptyPr }, { body: null }, { body: "" }, { body: emptyPr }];
+const empty = await api.getPullRequestReviewInput("org-fixture", "team/repo", 7, head);
+assert.equal(empty.input.inventoryComplete, true);
+assert.deepEqual(empty.input.files, []);
+assert.equal(empty.rawDiff, "");
+replies = [{ body: pr }, { body: null }];
+await assert.rejects(api.getPullRequestReviewInput("org-fixture", "team/repo", 7, head), /Invalid Forgejo changed-file response/);
+replies = [{ body: emptyPr }, { body: null }, { body: "" }, { body: { ...emptyPr, head: { sha: target } } }];
+await assert.rejects(api.getPullRequestReviewInput("org-fixture", "team/repo", 7, head), /revision changed/);
+
 replies = [{ body: pr }, page("a.ts", false), { body: diff }, { body: pr }];
 assert.equal((await api.getPullRequestReviewInput("org-fixture", "team/repo", 7, head)).input.inventoryComplete, false);
 replies = [{ body: pr }, page("a.ts", true), page("a.ts", false)];

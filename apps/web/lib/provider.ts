@@ -3,7 +3,6 @@ import { prisma } from "@octopus/db";
 import * as github from "@/lib/github";
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
-import * as forgejo from "@/lib/forgejo";
 import type { ReviewComment } from "@/lib/github";
 
 export interface ProviderClient {
@@ -245,39 +244,6 @@ class GitlabProviderClient implements ProviderClient {
   }
 }
 
-class ForgejoProviderClient implements ProviderClient {
-  constructor(private repoId: string, private organizationId: string, private fullName: string) {}
-
-  private run<T>(work: () => Promise<T>) { return forgejo.runWithForgejoRepository(this.repoId, work); }
-
-  getPullRequestDiff(prNumber: number) {
-    return this.run(() => forgejo.getPullRequestDiff(this.organizationId, this.fullName, prNumber));
-  }
-
-  createPullRequestComment(prNumber: number, body: string) {
-    return this.run(() => forgejo.createPullRequestComment(this.organizationId, this.fullName, prNumber, body));
-  }
-
-  updatePullRequestComment(commentId: number, body: string, prNumber?: number) {
-    return this.run(() => forgejo.updatePullRequestComment(this.organizationId, this.fullName, prNumber ?? 0, commentId, body));
-  }
-
-  createPullRequestReview(prNumber: number, body: string, event: "COMMENT" | "REQUEST_CHANGES" | "APPROVE", comments: ReviewComment[]) {
-    return this.run(() => forgejo.createPullRequestReview(this.organizationId, this.fullName, prNumber, body, event, comments));
-  }
-
-  async createCheckRun(): Promise<null> { return null; }
-  async updateCheckRun(): Promise<void> { /* Forgejo uses commit statuses in the reviewer. */ }
-
-  getRepositoryTree(branch: string) {
-    return this.run(() => forgejo.getRepositoryTree(this.organizationId, this.fullName, branch));
-  }
-
-  getFileContent(branch: string, filePath: string) {
-    return this.run(() => forgejo.getFileContent(this.organizationId, this.fullName, branch, filePath));
-  }
-}
-
 /**
  * Create a provider client for a given repository.
  * Resolves the connected code host and returns a unified interface.
@@ -303,10 +269,6 @@ export async function getProviderClient(repoId: string): Promise<ProviderClient>
 
   if (repo.provider === "gitlab") {
     return new GitlabProviderClient(repo.organizationId, repo.fullName);
-  }
-
-  if (repo.provider === "forgejo") {
-    return new ForgejoProviderClient(repoId, repo.organizationId, repo.fullName);
   }
 
   if (repo.provider !== "github") throw new Error(`Unsupported repository provider: ${repo.provider}`);

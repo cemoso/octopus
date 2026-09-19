@@ -2,6 +2,17 @@ import { expect, it } from "bun:test";
 import { SQL } from "bun";
 import { readFileSync } from "node:fs";
 
+async function seededTemplates(): Promise<{ slug: string; body: string }[]> {
+  const child = Bun.spawn([process.execPath, new URL("./fixtures/forgejo-email-seed-harness.ts", import.meta.url).pathname], { stdout: "pipe", stderr: "pipe" });
+  const [code, out, err] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect(code, err).toBe(0);
+  return JSON.parse(out);
+}
+
+it("seeds missing email templates and preserves customized records", async () => {
+  expect((await seededTemplates()).length).toBeGreaterThan(0);
+});
+
 const databaseUrl = process.env.FORGEJO_EMAIL_TEST_DATABASE_URL;
 
 // Run against a disposable PostgreSQL database; a temporary table shadows any
@@ -10,7 +21,7 @@ it.skipIf(!databaseUrl)("updates default Forgejo emails without changing custom 
   expect(new URL(databaseUrl!).pathname).toMatch(/test/i);
   const sql = new SQL(databaseUrl!);
   const migration = readFileSync(new URL("../../../../packages/db/prisma/migrations/20260919153000_forgejo_email_templates/migration.sql", import.meta.url), "utf8");
-  const seeds = readFileSync(new URL("../email-template-seeds.ts", import.meta.url), "utf8");
+  const seeds = await seededTemplates();
   const updates = [...migration.matchAll(/SET "body" = \$forgejo_template\$([\s\S]*?)\$forgejo_template\$,[\s\S]*?WHERE "slug" = '([^']+)'[\s\S]*?"body" = \$forgejo_template\$([\s\S]*?)\$forgejo_template\$/g)];
   expect(updates).toHaveLength(3);
 
@@ -22,7 +33,7 @@ it.skipIf(!databaseUrl)("updates default Forgejo emails without changing custom 
         "updatedAt" timestamp DEFAULT CURRENT_TIMESTAMP
       ) ON COMMIT DROP`;
       for (const [, nextBody, slug, oldBody] of updates) {
-        expect(seeds).toContain(`body: \`${nextBody}\``);
+        expect(seeds.find(template => template.slug === slug)?.body).toBe(nextBody);
         for (const variant of ["default", "custom", "non-system", "disabled"]) {
           const body = variant === "custom" ? `${oldBody}\nPersonal note` : oldBody;
           await tx`INSERT INTO email_templates (id, slug, body, system, enabled)
