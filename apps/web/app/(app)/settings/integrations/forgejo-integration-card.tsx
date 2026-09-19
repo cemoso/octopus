@@ -30,7 +30,7 @@ export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: 
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const busy = useRef(false);
-  const [mode, setMode] = useState<"direct" | "connector">(data?.connectionMode ?? "direct");
+  const [mode, setMode] = useState<"direct" | "connector">(selfHosted ? "direct" : data?.connectionMode ?? "direct");
   const [host, setHost] = useState(data?.forgejoHost ?? "");
   const [token, setToken] = useState("");
   const [connectorToken, setConnectorToken] = useState("");
@@ -82,14 +82,14 @@ export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: 
       <CardContent className="min-w-0 space-y-4">
         <p className="text-muted-foreground text-sm">
           {selfHosted
-            ? "Self-hosted Octopus can connect directly over HTTPS to public instances or operator-approved LAN/VPN instances. A local connector is also available."
+            ? "Self-hosted Octopus can connect directly over HTTPS to public instances or operator-approved LAN/VPN instances."
             : "Connect a public HTTPS instance directly, or run a local connector for a private LAN/VPN instance."}
         </p>
         <a className="text-primary text-sm underline underline-offset-4" href="/docs/integrations#forgejo">Compare the three Forgejo connection options</a>
         {data && <p className="break-all text-sm">{data.username ? `${data.username} · ` : ""}{data.forgejoHost} · {connector ? "Local connector" : "Direct HTTPS"}</p>}
         {!canManage ? <p className="text-muted-foreground text-sm">An organization owner or admin can manage this connection.</p> : (
           <>
-            {!data && <fieldset className="space-y-2" disabled={pending}>
+            {!data && !selfHosted && <fieldset className="space-y-2" disabled={pending}>
               <legend className="mb-2 text-sm font-medium">How should Octopus connect?</legend>
               <label className="flex cursor-pointer items-start gap-2 rounded-md border p-3 text-sm">
                 <input type="radio" name="forgejo-mode" value="direct" checked={mode === "direct"} onChange={() => setMode("direct")} className="mt-1" />

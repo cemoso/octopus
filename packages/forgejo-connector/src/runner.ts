@@ -104,6 +104,8 @@ async function complete(config: ReturnType<typeof configuration>, command: Forge
   console.warn("A command expired before Cloud acknowledged its result; check its review status before retrying.");
 }
 
+export const connectorPollDelay = (previous: number, busy: boolean): number => busy ? 50 : Math.min(1000, previous * 2);
+
 export async function runConnector(env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const config = configuration(env);
   const pollController = new AbortController();
@@ -119,6 +121,7 @@ export async function runConnector(env: NodeJS.ProcessEnv = process.env): Promis
   let username: string | undefined;
   let previouslyConnected = false;
   let connectionWarning = false;
+  let pollDelay = 1000;
   try {
     while (!stopped) {
       try {
@@ -161,6 +164,7 @@ export async function runConnector(env: NodeJS.ProcessEnv = process.env): Promis
         if (!previouslyConnected) console.info("Forgejo connector connected. API access is ready; configure Forgejo webhooks in Octopus settings.");
         previouslyConnected = true;
         connectionWarning = false;
+        pollDelay = connectorPollDelay(pollDelay, commands.length > 0 || active.size > 0);
       } catch (error) {
         if (stopped) break;
         if (error instanceof CloudHttpError && [400, 401, 403].includes(error.status)) {
@@ -172,8 +176,9 @@ export async function runConnector(env: NodeJS.ProcessEnv = process.env): Promis
           connectionWarning = true;
         }
         previouslyConnected = false;
+        pollDelay = 1000;
       }
-      if (!stopped) await delay(1000, undefined, { signal: pollController.signal }).catch(() => {});
+      if (!stopped) await delay(pollDelay, undefined, { signal: pollController.signal }).catch(() => {});
     }
   } finally {
     stop();

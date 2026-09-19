@@ -34,11 +34,12 @@ function keys(value: Record<string, unknown>, allowed: string[]): void {
 function string(value: unknown, max = FORGEJO_MAX_REQUEST_BYTES): value is string {
   return typeof value === "string" && Buffer.byteLength(value) <= max;
 }
+const encodedControl = /%(?:25|2e|2f|5c|0[0-9a-f]|1[0-9a-f]|7f)/i;
 function segment(value: string): boolean {
   try {
     const decoded = decodeURIComponent(value);
     return decoded.length > 0 && decoded.length <= 255 && decoded !== "." && decoded !== ".."
-      && !/[\\/%\x00-\x1f\x7f]/.test(decoded);
+      && !/[\\/\x00-\x1f\x7f]/.test(decoded) && !encodedControl.test(decoded);
   } catch { return false; }
 }
 function filePath(value: unknown): value is string {
@@ -46,7 +47,7 @@ function filePath(value: unknown): value is string {
     part.length > 0 && part !== "." && part !== ".." && !/[\\\x00-\x1f\x7f]/.test(part));
 }
 function ref(value: string): boolean {
-  return filePath(value) && !value.includes("%");
+  return filePath(value) && !encodedControl.test(value);
 }
 function positive(value: string, max = Number.MAX_SAFE_INTEGER): boolean {
   return /^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) <= max;

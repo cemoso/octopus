@@ -113,7 +113,7 @@ export async function rotateForgejoConnector(integrationId: string): Promise<{ e
     await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integrationId} AND "organizationId" = ${ctx.orgId} FOR UPDATE`;
     const integration = await tx.forgejoIntegration.findFirst({ where: { id: integrationId, organizationId: ctx.orgId, connectorTokenHash: { not: null } } });
     if (!integration) return { error: "This connector is no longer connected." };
-    const pendingWrite = await tx.forgejoConnectorRequest.findFirst({ where: { integrationId, method: { not: "GET" }, OR: [{ status: { in: ["leased", "completed"] } }, { status: "uncertain", leaseExpiresAt: { gt: new Date() } }] }, select: { id: true } });
+    const pendingWrite = await tx.forgejoConnectorRequest.findFirst({ where: { integrationId, method: { not: "GET" }, OR: [{ status: { in: ["leased", "completed", "delivered"] } }, { status: "uncertain", leaseExpiresAt: { gt: new Date() } }] }, select: { id: true } });
     if (pendingWrite) return { error: "A Forgejo write is still awaiting a result. Wait for it to finish, or check Forgejo and resume the paused connector before rotating." };
     await tx.forgejoConnectorRequest.deleteMany({ where: { integrationId } });
     await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorTokenHash: hashConnectorToken(connectorToken), connectorLastSeenAt: null } });
@@ -131,7 +131,10 @@ export async function resumeForgejoConnector(integrationId: string): Promise<{ e
     const integration = await tx.forgejoIntegration.findFirst({ where: { id: integrationId, organizationId: ctx.orgId, connectorTokenHash: { not: null } } });
     if (!integration) return { error: "This connector is no longer connected." };
     if (!integration.connectorError) return { error: "This connector is not paused." };
-    const active = await tx.forgejoConnectorRequest.findFirst({ where: { integrationId, status: { in: ["leased", "uncertain"] }, leaseExpiresAt: { gt: new Date() } }, select: { id: true } });
+    const active = await tx.forgejoConnectorRequest.findFirst({ where: { integrationId, OR: [
+      { status: { in: ["leased", "uncertain"] }, leaseExpiresAt: { gt: new Date() } },
+      { status: "delivered", expiresAt: { gt: new Date() } },
+    ] }, select: { id: true } });
     if (active) return { error: "A connector request is still running. Wait 30 seconds, then check Forgejo again before resuming." };
     await tx.forgejoConnectorRequest.deleteMany({ where: { integrationId } });
     await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorError: null } });

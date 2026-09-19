@@ -50,6 +50,7 @@ import {
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
 import * as forgejo from "@/lib/forgejo";
+import { withForgejoPublication } from "@/lib/forgejo-connector";
 import { getGithubAppConfig } from "@/lib/github-app-config";
 import { parseOctopusIgnore, detectBadCommits } from "@/lib/octopus-ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
@@ -632,7 +633,14 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     where: { id: pullRequestId }, select: { headSha: true, repository: { select: { id: true, provider: true } } },
   });
   if (pr?.repository.provider === "forgejo") {
-    return forgejo.runWithForgejoRepository(pr.repository.id, () => processReviewInternal(pullRequestId, executionWindow), pr.headSha);
+    return forgejo.runWithForgejoRepository(pr.repository.id, () => withForgejoPublication(
+      () => processReviewInternal(pullRequestId, executionWindow), {
+        signal: executionWindow?.signal,
+        acknowledged: async () => (await prisma.pullRequest.count({ where: {
+          id: pullRequestId, status: { in: ["completed", "failed", "queued", "pending"] },
+        } })) > 0,
+      },
+    ), pr.headSha);
   }
   return processReviewInternal(pullRequestId, executionWindow);
 }

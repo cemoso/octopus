@@ -15,7 +15,7 @@ mock.module("next/cache", () => ({ revalidatePath: () => {} }));
 mock.module("@/lib/auth", () => ({ auth: { api: { getSession: async () => ({ user: { id: userId } }) } } }));
 mock.module("@/lib/repo-sync", () => ({ syncForgejoRepos: async () => ({ synced: 0 }) }));
 const { createConnectorToken, hashConnectorToken, pollForgejoConnector, completeForgejoConnector,
-  requestViaForgejoConnector, cleanupForgejoConnectorRequests, ForgejoConnectorUncertainError } = await import("@/lib/forgejo-connector");
+  requestViaForgejoConnector, cleanupForgejoConnectorRequests, ForgejoConnectorUncertainError, withForgejoPublication } = await import("@/lib/forgejo-connector");
 
 const host = "https://forgejo.private.example";
 const token = createConnectorToken();
@@ -126,6 +126,79 @@ try {
   assert.equal((await completed(readCommand, '{"login":"review-bot"}')).status, 200);
   assert.equal((await read).body, '{"login":"review-bot"}');
   assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
+
+  const { createReviewAttemptComment } = await import("@/lib/review-attempt");
+  const forgejo = await import("@/lib/forgejo");
+  const repo = await prisma.repository.create({ data: {
+    organizationId: organizations[0], name: "project", fullName: "team/project", provider: "forgejo", externalId: `${host}:1`,
+  } });
+  const pr = await prisma.pullRequest.create({ data: {
+    repositoryId: repo.id, number: 1, title: "Publication", url: `${host}/team/project/pulls/1`, author: "author",
+    headSha: "a".repeat(40), reviewRequestVersion: 1,
+  } });
+  for (const crash of [false, true]) {
+    await reset();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let delivered = false;
+    const publication = createReviewAttemptComment(pr.id, pr.headSha, 1, async () => {
+      const id = await forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Published comment");
+      delivered = true;
+      await gate;
+      if (crash) throw new Error("worker stopped before bookkeeping");
+      return id;
+    }).then(id => id, error => error);
+    await until(async () => await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }) === 1);
+    const command = (await (await poll()).json()).commands[0];
+    assert.equal((await completed(command, '{"id":42}')).status, 200);
+    await until(async () => delivered);
+    const receipt = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: command.id } });
+    assert.equal(receipt.status, "delivered");
+    assert.equal(receipt.requestEnc, "");
+    assert.equal(receipt.responseEnc?.length, 64);
+    assert.equal((await completed(command, '{"id":42}')).status, 200);
+    assert.equal((await completed(command, '{"id":43}')).status, 409);
+    if (!crash) {
+      const originalExpiry = new Date(Date.now() + 15_000);
+      await prisma.forgejoConnectorRequest.update({ where: { id: command.id }, data: {
+        expiresAt: originalExpiry, createdAt: new Date(Date.now() - 6 * 60_000),
+      } });
+      await cleanupForgejoConnectorRequests();
+      await Bun.sleep(10_500);
+      assert.ok((await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: command.id } })).expiresAt > originalExpiry);
+    }
+    release();
+    if (crash) {
+      assert.match((await publication).message, /worker stopped/);
+      await prisma.forgejoConnectorRequest.update({ where: { id: command.id }, data: { expiresAt: new Date(Date.now() - 1) } });
+      await assert.rejects(forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Retry"), ForgejoConnectorUncertainError);
+      assert.equal((await poll()).status, 409);
+    } else {
+      assert.equal(await publication, 42);
+      assert.equal((await prisma.pullRequest.findUniqueOrThrow({ where: { id: pr.id } })).reviewCommentId, 42n);
+      assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
+    }
+  }
+  const sha = "a".repeat(40);
+  for (const operation of [
+    { path: "/issues/comments/42", method: "PATCH" as const, body: { body: "updated" } },
+    { path: "/pulls/1/reviews", method: "POST" as const, body: { body: "review", event: "COMMENT", commit_id: sha, comments: [] } },
+    { path: `/statuses/${sha}`, method: "POST" as const, body: { state: "success", context: "Octopus", description: "done" } },
+  ]) {
+    await reset();
+    const publication = withForgejoPublication(async () => {
+      await requestViaForgejoConnector(integration.id, hash, `/api/v1/repos/team/project${operation.path}`, operation);
+    }, { acknowledged: async () => false }).catch(error => error);
+    await until(async () => await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }) === 1);
+    const command = (await (await poll()).json()).commands[0];
+    assert.equal((await completed(command)).status, 200);
+    assert.match((await publication).message, /bookkeeping is incomplete/);
+    await prisma.forgejoConnectorRequest.update({ where: { id: command.id }, data: { expiresAt: new Date(Date.now() - 1), createdAt: new Date(Date.now() - 6 * 60_000) } });
+    await cleanupForgejoConnectorRequests();
+    assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
+    assert.equal((await poll()).status, 409);
+  }
+  await reset();
 
   await queued();
   const expired = (await (await poll()).json()).commands[0];

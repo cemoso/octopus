@@ -2,6 +2,7 @@ import "server-only";
 import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { isDeepStrictEqual } from "node:util";
 import { prisma, type Prisma } from "@octopus/db";
+import { withForgejoPublication } from "@/lib/forgejo-connector";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 
 export async function updateCurrentReview(pullRequestId: string, headSha: string | null, reviewRequestVersion: number | undefined, data: Prisma.PullRequestUpdateManyMutationInput, expectedReviewBody?: string) {
@@ -16,9 +17,13 @@ export async function createReviewAttemptComment(
   create: () => Promise<number>,
   expectedReviewBody?: string,
 ): Promise<number> {
-  const id = await create();
-  await updateCurrentReview(pullRequestId, headSha, reviewRequestVersion, { reviewCommentId: id }, expectedReviewBody);
-  return id;
+  let saved = false;
+  return withForgejoPublication(async () => {
+    const id = await create();
+    const updated = await updateCurrentReview(pullRequestId, headSha, reviewRequestVersion, { reviewCommentId: id }, expectedReviewBody);
+    saved = updated.count > 0;
+    return id;
+  }, { acknowledged: async () => saved });
 }
 
 export async function hasReviewAttempt(attemptId: string, pullRequestId: string, coverage: ReviewCoverage, reviewBody: string, client: Pick<Prisma.TransactionClient, "reviewAttempt"> = prisma) {

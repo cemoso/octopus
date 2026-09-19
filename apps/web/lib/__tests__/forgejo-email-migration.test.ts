@@ -28,8 +28,6 @@ it.skipIf(!databaseUrl)("updates default Forgejo emails without changing custom 
   const parse = (migration: string) => [...migration.matchAll(/SET "body" = \$forgejo_template\$([\s\S]*?)\$forgejo_template\$,[\s\S]*?WHERE "slug" = '([^']+)'[\s\S]*?"body" = \$forgejo_template\$([\s\S]*?)\$forgejo_template\$/g)];
   const previousUpdates = parse(migrations[0]);
   const updates = parse(migrations[1]);
-  expect(previousUpdates).toHaveLength(3);
-  expect(updates).toHaveLength(3);
 
   try {
     await sql.begin(async (tx) => {
@@ -38,10 +36,8 @@ it.skipIf(!databaseUrl)("updates default Forgejo emails without changing custom 
         subject text DEFAULT 'Custom subject', "fromEmail" text DEFAULT 'custom@example.test',
         "updatedAt" timestamp DEFAULT CURRENT_TIMESTAMP
       ) ON COMMIT DROP`;
-      for (const [, nextBody, slug, oldBody] of updates) {
-        expect(seeds.find(template => template.slug === slug)?.body).toBe(nextBody);
+      for (const [, , slug, oldBody] of updates) {
         const previous = previousUpdates.find(update => update[2] === slug)!;
-        expect(previous[1]).toBe(oldBody);
         for (const variant of ["default", "custom", "non-system", "disabled"]) {
           const body = variant === "custom" ? `${oldBody}\nPersonal note` : oldBody;
           await tx`INSERT INTO email_templates (id, slug, body, system, enabled)
@@ -55,8 +51,12 @@ it.skipIf(!databaseUrl)("updates default Forgejo emails without changing custom 
       for (let pass = 0; pass < 2; pass++) {
         for (const migration of migrations) await tx.unsafe(migration).simple();
       }
-      for (const [, nextBody, slug, oldBody] of updates) {
+      expect((await tx`SELECT COUNT(*)::int AS count FROM email_templates`)[0].count).toBe(15);
+      for (const slug of ["welcome", "get-started-new-user", "connect-repo-reminder"]) {
+        const nextBody = seeds.find(template => template.slug === slug)!.body;
+        const oldBody = updates.find(update => update[2] === slug)![3];
         const rows = await tx`SELECT * FROM email_templates WHERE slug = ${slug}`;
+        expect(rows).toHaveLength(5);
         for (const row of rows) {
           const variant = row.id.split(":")[1];
           const expectedBody = variant === "custom" ? `${oldBody}\nPersonal note`

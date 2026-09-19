@@ -1,5 +1,6 @@
 import "server-only";
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
 import { prisma, type Prisma } from "@octopus/db";
 import { validateForgejoOperation, validateForgejoResult, FORGEJO_MAX_RESPONSE_BYTES } from "@octopus/forgejo-connector/protocol";
@@ -24,6 +25,41 @@ type Operation = { path: string; method: "GET" | "POST" | "PATCH"; body?: unknow
 type Result = { result: { body: string; headers: { "x-hasmore"?: string } } } | { error: "http" | "too_large" | "failed"; status?: number };
 type Auth = { id: string; tokenHash: string };
 
+const publications = new AsyncLocalStorage<Map<string, Auth>>();
+
+export async function withForgejoPublication<T>(publish: () => Promise<T>, options: { signal?: AbortSignal; acknowledged?: () => Promise<boolean> } = {}): Promise<T> {
+  const receipts = new Map<string, Auth>();
+  let renewal = Promise.resolve();
+  const timer = setInterval(() => {
+    if (!receipts.size || options.signal?.aborted) return;
+    renewal = renewal.then(async () => {
+      const now = new Date();
+      await prisma.forgejoConnectorRequest.updateMany({ where: {
+        id: { in: [...receipts.keys()] }, status: "delivered", expiresAt: { gt: now },
+      }, data: { expiresAt: new Date(now.getTime() + REQUEST_TTL_MS) } });
+    }).catch(() => {});
+  }, 10_000);
+  timer.unref();
+  try {
+    const result = await publications.run(receipts, publish);
+    clearInterval(timer);
+    await renewal;
+    options.signal?.throwIfAborted();
+    if (receipts.size && options.acknowledged && !await options.acknowledged()) {
+      throw new Error("Forgejo publication bookkeeping is incomplete");
+    }
+    for (const [id, auth] of receipts) await prisma.$transaction(async tx => {
+      if (!await lockIntegration(tx, auth)) return;
+      await reap(tx, auth.id, new Date());
+      await tx.forgejoConnectorRequest.deleteMany({ where: { id, integrationId: auth.id, status: "delivered" } });
+    });
+    return result;
+  } finally {
+    clearInterval(timer);
+    await renewal;
+  }
+}
+
 async function authenticate(request: Request): Promise<Auth | null> {
   const token = request.headers.get("authorization")?.match(/^Bearer (ofc_[a-f0-9]{64})$/)?.[1];
   if (!token) return null;
@@ -47,9 +83,9 @@ async function reap(tx: Tx, integrationId: string, now: Date): Promise<boolean> 
     integrationId, method: { not: "GET" },
     OR: [
       { status: "leased", OR: [{ leaseExpiresAt: { lte: now } }, { expiresAt: { lte: now } }] },
-      { status: "completed", expiresAt: { lte: now } },
+      { status: { in: ["completed", "delivered"] }, expiresAt: { lte: now } },
     ],
-  }, data: { status: "uncertain", requestEnc: "" } });
+  }, data: { status: "uncertain", requestEnc: "", responseEnc: null } });
   if (uncertain.count) await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorError: FORGEJO_CONNECTOR_UNCERTAIN_MESSAGE } });
   await tx.forgejoConnectorRequest.updateMany({ where: {
     integrationId, method: "GET", status: "leased", leaseExpiresAt: { lte: now }, expiresAt: { gt: now },
@@ -57,7 +93,7 @@ async function reap(tx: Tx, integrationId: string, now: Date): Promise<boolean> 
   await tx.forgejoConnectorRequest.deleteMany({ where: { integrationId, OR: [
     { expiresAt: { lte: now }, status: { in: ["queued", "completed"] } },
     { expiresAt: { lte: now }, method: "GET" },
-    { createdAt: { lt: new Date(now.getTime() - RETENTION_MS) } },
+    { status: { not: "delivered" }, createdAt: { lt: new Date(now.getTime() - RETENTION_MS) } },
   ] } });
   return uncertain.count > 0;
 }
@@ -142,6 +178,10 @@ export async function completeForgejoConnector(request: Request): Promise<Respon
     await reap(tx, integration.id, now);
     const task = await tx.forgejoConnectorRequest.findFirst({ where: { id: body.id, integrationId: integration.id, leaseToken: body.leaseToken } });
     if (!task) return reply("Connector command is no longer available", 404);
+    if (task.status === "delivered") {
+      return task.responseEnc === createHash("sha256").update(JSON.stringify(result)).digest("hex")
+        ? Response.json({ ok: true }) : reply("Connector result conflicts with the recorded result", 409);
+    }
     if (task.status === "completed") {
       if (!task.responseEnc || JSON.stringify(decryptJson<Result>(task.responseEnc)) !== JSON.stringify(result)) return reply("Connector result conflicts with the recorded result", 409);
       return Response.json({ ok: true });
@@ -161,9 +201,9 @@ async function cancel(auth: Auth, id: string): Promise<boolean> {
     if (!integration) return false;
     const task = await tx.forgejoConnectorRequest.findFirst({ where: { id, integrationId: auth.id } });
     if (!task) return false;
-    if (task.method !== "GET" && ["leased", "completed"].includes(task.status)) {
+    if (task.method !== "GET" && ["leased", "completed", "delivered"].includes(task.status)) {
       await tx.forgejoIntegration.update({ where: { id: auth.id }, data: { connectorError: FORGEJO_CONNECTOR_UNCERTAIN_MESSAGE } });
-      await tx.forgejoConnectorRequest.update({ where: { id }, data: { status: "uncertain", requestEnc: "" } });
+      await tx.forgejoConnectorRequest.update({ where: { id }, data: { status: "uncertain", requestEnc: "", responseEnc: null } });
       return true;
     } else await tx.forgejoConnectorRequest.delete({ where: { id } });
     return false;
@@ -203,8 +243,15 @@ export async function requestViaForgejoConnector(
         const current = await tx.forgejoConnectorRequest.findFirst({ where: { id: task.id, integrationId } });
         if (current?.status === "completed" && current.responseEnc) {
           const result = decryptJson<Result>(current.responseEnc);
-          await tx.forgejoConnectorRequest.delete({ where: { id: current.id } });
-          return { result, uncertain: uncertainWrite(current.method, result) };
+          const uncertain = uncertainWrite(current.method, result);
+          if (current.method !== "GET" && "result" in result && !uncertain) {
+            await tx.forgejoConnectorRequest.update({ where: { id: current.id }, data: {
+              status: "delivered", responseEnc: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+              expiresAt: new Date(Date.now() + REQUEST_TTL_MS),
+            } });
+            publications.getStore()?.set(current.id, auth);
+          } else if (!uncertain) await tx.forgejoConnectorRequest.delete({ where: { id: current.id } });
+          return { result, uncertain };
         }
         return { uncertain: Boolean(uncertain || integration.connectorError || current?.status === "uncertain"), missing: !current };
       });
