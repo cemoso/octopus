@@ -53,9 +53,15 @@ export default function PrivacyPage() {
         <H3>Repository Data</H3>
         <P>
           When you connect a repository, we access its contents through the
-          GitHub, GitLab, or Bitbucket API to create code embeddings and perform
+          GitHub, GitLab, Bitbucket, or Forgejo API to create code embeddings and perform
           reviews. We process pull request diffs, file contents, and
           repository metadata.
+        </P>
+        <P>
+          A self-hosted Forgejo repository follows the same review data flow:
+          Octopus reads its contents and sends relevant code to the configured
+          AI services. Hosting Forgejo yourself does not keep Octopus Cloud
+          processing on your Forgejo server.
         </P>
 
         <H3>Usage Data</H3>
@@ -84,10 +90,12 @@ export default function PrivacyPage() {
 
       <Section title="4. Code and Data Storage">
         <P>
-          Code embeddings (vector representations of your code) are stored in
-          Qdrant. These embeddings cannot be reverse-engineered back into
-          source code. We do not permanently store your raw source code. Pull
-          request diffs are processed in memory and discarded after review.
+          Octopus stores review and indexing data, including searchable code
+          chunks and embeddings in Qdrant. Retention depends on your deployment
+          and configuration. See the{" "}
+          <a href="/docs/data-retention" className="text-white underline">
+            data-retention documentation
+          </a>.
         </P>
         <P>
           Review results, findings, and AI-generated summaries are stored in
@@ -108,7 +116,7 @@ export default function PrivacyPage() {
             reviews
           </li>
           <li>
-            <strong className="text-white">GitHub / GitLab / Bitbucket</strong> for
+            <strong className="text-white">GitHub / GitLab / Bitbucket / Forgejo</strong> for
             repository access and webhook events
           </li>
           <li>

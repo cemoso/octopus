@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 mock.module("server-only", () => ({}));
 const row = {
-  id: "repo-1", organizationId: "org-1", fullName: "acme/new", defaultBranch: "main",
+  id: "repo-1", provider: "github", organizationId: "org-1", fullName: "acme/new", defaultBranch: "main",
   installationId: 123, indexStatus: "pending", totalFiles: 0,
   organization: { githubInstallationId: 123 as number | null },
 };
@@ -58,7 +58,7 @@ assert.equal(queries.length, 0, "invalid jobs must never issue an unscoped query
 await enqueuePendingRepositoryIndexes("org-1");
 assert.deepEqual(queued, [["index-repository", job, { singletonKey: "repo-1", singletonSeconds: 60 }]]);
 assert.deepEqual(queries[0].where, {
-  organizationId: "org-1", provider: "github", isActive: true, dismissedAt: null,
+  organizationId: "org-1", provider: { in: ["github", "forgejo"] }, isActive: true, dismissedAt: null,
   organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
   OR: [{ indexStatus: { in: ["pending", "failed"] } }, { indexStatus: "indexed", totalFiles: 0 }],
 });
@@ -94,6 +94,11 @@ assert.equal(claims.at(-1)?.data.indexStatus, "failed", "failures must release t
 indexFailure = null;
 await processRepositoryIndex(job);
 assert.equal(writes.length, 2, "a retry must be able to complete");
+
+currentRow = { ...row, provider: "forgejo", organization: { githubInstallationId: null } };
+await processRepositoryIndex(job);
+assert.equal(indexCalls.at(-1)?.[3], 0);
+assert.equal(indexCalls.at(-1)?.[6], "forgejo", "Forgejo jobs must not use GitHub authentication");
 
 cancelled = true;
 await processRepositoryIndex(job);

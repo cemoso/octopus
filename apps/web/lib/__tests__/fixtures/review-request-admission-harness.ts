@@ -2,7 +2,7 @@ import { mock } from "bun:test";
 import assert from "node:assert/strict";
 
 const A = "a".repeat(40), B = "b".repeat(40);
-const provider = process.argv[2] as "github" | "bitbucket" | "gitlab";
+const provider = process.argv[2] as "github" | "bitbucket" | "gitlab" | "forgejo";
 const scenario = process.argv[3];
 type Row = Record<string, unknown> & {
   id: string; headSha: string | null; reviewRequestVersion: number; status: string;
@@ -21,6 +21,7 @@ mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async
 let duringHeadRead: (() => Promise<void>) | undefined;
 let beforeWrite: (() => Promise<void>) | undefined;
 let headFailure = false;
+let queueFailure = false;
 const org = { id: "org", githubInstallationId: 456 };
 const repository = { id: "repo", organizationId: "org", organization: org, provider, fullName: "owner/repo", installationId: 123 as number | null, isActive: true };
 function matches(where: Record<string, unknown>) {
@@ -65,8 +66,9 @@ mock.module("@octopus/db", () => ({
     },
   },
 }));
-for (const name of ["github", "bitbucket", "gitlab"]) {
+for (const name of ["github", "bitbucket", "gitlab", "forgejo"]) {
   mock.module(`@/lib/${name}`, () => ({
+    runWithForgejoRepository: async (_id: string, callback: () => Promise<unknown>) => callback(),
     getPullRequestDetails: async (...args: unknown[]) => {
       assert.equal(name, provider);
       if (name === "github") assert.equal(args[0], repository.installationId ?? org.githubInstallationId);
@@ -81,7 +83,7 @@ for (const name of ["github", "bitbucket", "gitlab"]) {
 }
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: async () => { events++; } } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: () => undefined } }));
-mock.module("@/lib/queue", () => ({ enqueue: async () => { enqueued++; } }));
+mock.module("@/lib/queue", () => ({ enqueue: async () => { if (queueFailure) throw new Error("Queue unavailable"); enqueued++; } }));
 mock.module("@/lib/api-auth", () => ({ authenticateApiToken: async () => ({ org }) }));
 const { startReviewFlow } = await import("../../webhook-shared");
 const params = {
@@ -103,7 +105,24 @@ const admitBAndComplete = async () => {
   assert.equal((await startReviewFlow({ ...params, headSha: B })).started, true);
   current = { ...current!, status: "completed", reviewBody: "New B report", updatedAt: new Date() };
 };
-if (scenario === "delayed") {
+if (scenario === "enqueue_retry") {
+  queueFailure = true;
+  await assert.rejects(startReviewFlow({ ...params, headSha: B }), /Queue unavailable/);
+  assert.equal(current!.reviewRequestVersion, 3);
+  queueFailure = false;
+  if (provider === "forgejo") {
+    assert.equal(current!.status, "failed");
+    assert.equal((await startReviewFlow({ ...params, headSha: B })).started, true);
+    assert.equal(current!.reviewRequestVersion, 4);
+    assert.equal(enqueued, 1);
+  } else {
+    assert.equal(current!.status, "pending");
+    assert.equal(current!.errorMessage, null);
+    await preserve(B, "already_in_progress");
+    assert.equal(current!.reviewRequestVersion, 3);
+    assert.equal(enqueued, 0);
+  }
+} else if (scenario === "delayed") {
   await preserve(A);
   assert.equal(headReads, 1);
 } else if (scenario === "fetch_race" || scenario === "write_race" || scenario === "create_race") {

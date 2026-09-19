@@ -1,5 +1,6 @@
 "use server";
 
+import "server-only";
 import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -546,21 +547,27 @@ export async function deleteOrganization(
   redirect("/dashboard");
 }
 
-// getUser() acts as an auth guard — throws if unauthenticated.
-// The return value is intentionally discarded; org scoping uses cookie-based orgId below.
 // The sync itself lives in lib/repo-sync.ts, shared with the webhook and the
 // hourly discover-repositories sweep.
 export async function syncRepos(): Promise<{ synced: number; removed: number; error?: string }> {
-  await getUser();
+  const user = await getUser();
   const cookieStore = await cookies();
   const orgId = cookieStore.get("current_org_id")?.value;
 
   if (!orgId) return { synced: 0, removed: 0, error: "No organization selected." };
+  const member = await prisma.organizationMember.findFirst({
+    where: { userId: user.id, organizationId: orgId, deletedAt: null, organization: { deletedAt: null, bannedAt: null } },
+    select: { role: true, scopes: true },
+  });
+  if (!hasOrgPermission(member, "repos:manage")) {
+    return { synced: 0, removed: 0, error: "Insufficient permissions." };
+  }
 
   try {
     const result = await syncOrgRepos(orgId, { source: "manual" });
+    if (result.error) return { synced: result.synced, removed: result.removed, error: result.error };
     if (result.providers.length === 0) {
-      return { synced: 0, removed: 0, error: "No GitHub, Bitbucket, or GitLab integration linked." };
+      return { synced: 0, removed: 0, error: "No GitHub, Bitbucket, GitLab, or Forgejo integration linked." };
     }
     revalidatePath("/");
     return { synced: result.synced, removed: result.removed };

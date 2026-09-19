@@ -199,6 +199,7 @@ model Organization {
   collabIntegration     CollabIntegration?
   bitbucketIntegration  BitbucketIntegration?
   gitlabIntegration     GitlabIntegration?
+  forgejoIntegration    ForgejoIntegration?
   linearIntegration     LinearIntegration?
   jiraIntegration       JiraIntegration?
   aiUsages           AiUsage[]
@@ -681,6 +682,21 @@ model GitlabIntegration {
 
   @@index([webhookSecret])
   @@map("gitlab_integrations")
+}
+
+model ForgejoIntegration {
+  id             String   @id @default(cuid())
+  forgejoHost    String
+  username       String
+  accessTokenEnc String
+  webhookSecret String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("forgejo_integrations")
 }
 
 model CollabIntegration {

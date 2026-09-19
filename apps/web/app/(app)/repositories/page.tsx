@@ -1,3 +1,4 @@
+import "server-only";
 import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -82,6 +83,7 @@ export default async function RepositoriesPage({
     name: true,
     fullName: true,
     provider: true,
+    externalId: true,
     defaultBranch: true,
     isActive: true,
     autoReview: true,
@@ -221,6 +223,7 @@ export default async function RepositoriesPage({
     name: r.name,
     fullName: r.fullName,
     provider: r.provider,
+    repoUrl: r.provider === "forgejo" ? `${r.externalId.slice(0, r.externalId.lastIndexOf(":"))}/${r.fullName}` : undefined,
     defaultBranch: r.defaultBranch,
     isActive: r.isActive,
     autoReview: r.autoReview,

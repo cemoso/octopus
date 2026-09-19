@@ -1,5 +1,5 @@
 import "server-only";
-import { prisma } from "@octopus/db";
+import { prisma, type Prisma } from "@octopus/db";
 import { admitReviewRequest, type ReviewRequestRejection } from "@/lib/review-request-admission";
 import { createReviewAttemptComment } from "@/lib/review-attempt";
 import { publishReviewSummary } from "@/lib/review-summary-comment";
@@ -9,13 +9,14 @@ import { eventBus } from "@/lib/events";
 import * as github from "@/lib/github";
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
+import * as forgejo from "@/lib/forgejo";
 
 /**
  * Post a neutral "skipped" check run so the PR isn't blocked forever.
  * GitHub only — Bitbucket and GitLab have no equivalent checks API in this integration.
  */
 async function postSkippedCheckRun(
-  provider: "github" | "bitbucket" | "gitlab",
+  provider: "github" | "bitbucket" | "gitlab" | "forgejo",
   installationId: number | undefined,
   repoFullName: string,
   headSha: string,
@@ -37,22 +38,22 @@ async function postSkippedCheckRun(
 
 /**
  * Shared flow: admit the current head -> post placeholder comment -> notify dashboard -> start review.
- * Works for GitHub, Bitbucket, and GitLab.
+ * Forgejo queues within the admission transaction; its worker posts the placeholder.
  */
 /**
- * Outcome of startReviewFlow. Webhooks ignore it; user-facing triggers
- * (CLI / MCP) use it to say why nothing ran instead of "Review started".
+ * Forgejo webhooks use the outcome to retry transient admission failures.
+ * User-facing triggers (CLI / MCP) use it to explain why nothing ran.
  */
 export type StartReviewResult =
   | { started: true; pullRequestId: string }
   | ReviewRequestRejection
   | { started: false; reason: "org_paused" | "author_blocked"; message: string };
 
-export async function startReviewFlow(params: {
-  provider: "github" | "bitbucket" | "gitlab";
+type StartReviewParams = {
+  provider: "github" | "bitbucket" | "gitlab" | "forgejo";
   // GitHub-specific
   installationId?: number;
-  // Bitbucket / GitLab-specific
+  // Bitbucket / GitLab / Forgejo-specific
   organizationId?: string;
   // Common
   repoFullName: string;
@@ -63,9 +64,19 @@ export async function startReviewFlow(params: {
   prUrl: string;
   prAuthor: string;
   headSha: string | null;
+  automatic?: boolean;
   triggerCommentId: number;
   triggerCommentBody: string;
-}): Promise<StartReviewResult> {
+};
+
+export async function startReviewFlow(params: StartReviewParams, forgejoTransaction?: Prisma.TransactionClient): Promise<StartReviewResult> {
+  if (forgejoTransaction && params.provider !== "forgejo") throw new Error("Transactional webhook admission requires Forgejo");
+  return params.provider === "forgejo"
+    ? forgejo.runWithForgejoRepository(params.repoId, () => startReviewFlowInternal(params, forgejoTransaction))
+    : startReviewFlowInternal(params, forgejoTransaction);
+}
+
+async function startReviewFlowInternal(params: StartReviewParams, forgejoTransaction?: Prisma.TransactionClient): Promise<StartReviewResult> {
   const {
     provider,
     installationId,
@@ -114,10 +125,18 @@ export async function startReviewFlow(params: {
     }
   }
 
-  const admission = await admitReviewRequest(params);
+  const admission = await admitReviewRequest(params, forgejoTransaction);
   if (!admission.started) return admission;
   const pr = admission.pullRequest;
   console.log(`[webhook] PullRequest admitted — id: ${pr.id}, number: ${pr.number}`);
+
+  if (forgejoTransaction) {
+    const jobId = await enqueue("process-review", { pullRequestId: pr.id }, {
+      db: { executeSql: async (sql, values) => ({ rows: await forgejoTransaction.$queryRawUnsafe<unknown[]>(sql, ...(values ?? [])) }) },
+    });
+    if (!jobId) throw new Error("Forgejo review could not be queued");
+    return { started: true, pullRequestId: pr.id };
+  }
 
   const placeholderBody = `> 🐙 **Octopus Review** is queued for head \`${pr.headSha || "unknown"}\`. This summary will update when the review finishes.`;
   try {
@@ -130,6 +149,9 @@ export async function startReviewFlow(params: {
       }
       if (provider === "gitlab" && organizationId) {
         return gitlab.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
+      }
+      if (provider === "forgejo" && organizationId) {
+        return forgejo.createPullRequestComment(organizationId, repoFullName, prNumber, placeholderBody);
       }
       throw new Error("Invalid provider configuration");
     });
@@ -166,6 +188,16 @@ export async function startReviewFlow(params: {
   });
 
   // Enqueue review job — pg-boss persists it in DB, survives container restarts
-  await enqueue("process-review", { pullRequestId: pr.id });
+  try {
+    await enqueue("process-review", { pullRequestId: pr.id });
+  } catch (error) {
+    // Release only this admission. A provider retry must not be suppressed as
+    // already in progress when the durable queue never accepted the job.
+    if (provider === "forgejo") await prisma.pullRequest.updateMany({
+      where: { id: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion, status: "pending" },
+      data: { status: "failed", errorMessage: "Review could not be queued. Retry the request." },
+    });
+    throw error;
+  }
   return { started: true, pullRequestId: pr.id };
 }

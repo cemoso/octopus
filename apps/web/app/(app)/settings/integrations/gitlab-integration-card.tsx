@@ -175,7 +175,7 @@ export function GitlabIntegrationCard({
               </Button>
 
               <p className="text-muted-foreground text-center text-xs">
-                Secure access only - we never store your code.
+                Octopus accesses repository content for indexing and posts review comments.
               </p>
             </form>
           </div>

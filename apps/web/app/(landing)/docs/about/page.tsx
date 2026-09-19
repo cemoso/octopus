@@ -85,7 +85,7 @@ export default function AboutPage() {
           <ValueCard
             icon={<IconCode className="size-4" />}
             title="No Vendor Lock-in"
-            description="Self-host on your own infrastructure. Your code never has to leave your servers. Switch providers or fork the project at any time."
+            description="Self-host Octopus and choose your AI services. Local services can keep code processing on your infrastructure; external providers receive the code needed for their work."
           />
           <ValueCard
             icon={<IconHeart className="size-4" />}
@@ -127,7 +127,7 @@ export default function AboutPage() {
           horizon:
         </Paragraph>
         <ul className="mb-4 space-y-2">
-          <VisionItem text="Deeper integration with more Git providers beyond GitHub, GitLab, and Bitbucket" />
+          <VisionItem text="Deeper integration with more Git providers beyond GitHub, GitLab, Bitbucket, and Forgejo" />
           <VisionItem text="Smarter review engine that learns from your team's feedback over time" />
           <VisionItem text="Expanded CLI capabilities for CI/CD pipeline integration" />
           <VisionItem text="Plugin system for custom review rules and checks" />

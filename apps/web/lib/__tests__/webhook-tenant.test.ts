@@ -635,6 +635,7 @@ describe("enforceWebhookDeliveryRetention", () => {
     const after = Date.now();
     expect(deleted).toBe(4);
     const [{ where }] = store.webhookDelivery.deleteMany.mock.calls[0];
+    expect(where.provider).toEqual({ not: "forgejo" });
     const cutoff = where.lastSeenAt.lt.getTime();
     const retentionMs = 30 * 24 * 60 * 60 * 1000;
     expect(cutoff).toBeGreaterThanOrEqual(before - retentionMs);

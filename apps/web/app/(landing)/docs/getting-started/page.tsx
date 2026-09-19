@@ -23,7 +23,7 @@ import {
 export const metadata = {
   title: "Getting Started | Octopus Docs",
   description:
-    "Connect your repo in two minutes and get AI code reviews on every pull request. Step-by-step setup guide for GitHub, GitLab, and Bitbucket, with examples.",
+    "Connect your repo in two minutes and get AI code reviews on every pull request. Step-by-step setup guide for GitHub, GitLab, Bitbucket, and Forgejo, with examples.",
   alternates: {
     canonical: "https://octopus-review.ai/docs/getting-started",
   },
@@ -68,7 +68,7 @@ export default function GettingStartedPage() {
           <FeatureCard
             icon={<IconPlugConnected className="size-4" />}
             title="Works With Your Tools"
-            description="GitHub, GitLab, Bitbucket, Slack, Linear, Jira. Fits into your existing workflow."
+            description="GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear, Jira. Fits into your existing workflow."
           />
         </div>
       </Section>
@@ -88,9 +88,9 @@ export default function GettingStartedPage() {
             icon={<IconCloud className="size-5" />}
             eyebrow="Cloud · Free to start"
             title="Hosted for you"
-            description="Sign in, install the GitHub App, and Octopus reviews every pull request automatically. No servers to run, no maintenance."
+            description="Sign in, connect your code host, and set up pull request reviews. Octopus runs the review service for you."
             links={[
-              { href: "/login", label: "Install the GitHub App" },
+              { href: "/login", label: "Connect your repository" },
               { href: "/docs/pricing", label: "View pricing" },
             ]}
           />
@@ -107,11 +107,15 @@ export default function GettingStartedPage() {
       {/* Step 1: Connect */}
       <Section title="1. Connect Your Repository">
         <Paragraph>
-          Start by connecting your GitHub, GitLab, or Bitbucket account from the
-          dashboard. Octopus installs as a GitHub App, or connects to GitLab and
-          Bitbucket via OAuth, to receive webhook events from your repositories.
+          Start by connecting your GitHub, GitLab, Bitbucket, or Forgejo account from the
+          dashboard. Use the GitHub App, GitLab or Bitbucket OAuth, or a Forgejo
+          personal access token. For Forgejo, add the signed webhook shown in
+          Settings to each repository. See the{" "}
+          <Link href="/docs/integrations#forgejo" className="text-white underline">
+            Forgejo setup guide
+          </Link>.
         </Paragraph>
-        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+        <div className="mb-4 grid gap-3 sm:grid-cols-2">
           <ProviderCard
             icon={<IconBrandGithub className="size-5" />}
             name="GitHub"
@@ -126,6 +130,11 @@ export default function GettingStartedPage() {
             icon={<IconBrandBitbucket className="size-5" />}
             name="Bitbucket"
             description="Connect via OAuth and Octopus automatically manages webhooks."
+          />
+          <ProviderCard
+            icon={<IconServer className="size-5" />}
+            name="Forgejo"
+            description="Connect with a personal access token and repository webhooks. Private LAN/VPN instances need self-hosted Octopus on that network."
           />
         </div>
         <Paragraph>
@@ -152,7 +161,7 @@ export default function GettingStartedPage() {
                 1
               </span>
               <span>
-                Webhook event arrives from GitHub/Bitbucket
+                Your code host sends a pull request webhook
               </span>
             </li>
             <li className="flex items-start gap-2">
@@ -315,7 +324,7 @@ export default function GettingStartedPage() {
             href="/docs/integrations"
             icon={<IconPlugConnected className="size-4" />}
             title="Integrations"
-            description="Connect GitHub, GitLab, Bitbucket, Slack, Linear, and Jira"
+            description="Connect GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear, and Jira"
           />
           <NextStepCard
             href="/docs/cli"

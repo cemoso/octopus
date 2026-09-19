@@ -49,7 +49,7 @@ const RETENTION: RetentionRow[] = [
   },
   {
     category: "Integration tokens",
-    what: "OAuth refresh tokens for Slack / Linear / Jira / GitLab",
+    what: "OAuth refresh tokens for Slack / Linear / Jira / GitLab and Forgejo personal access tokens",
     retention: "Until the user disconnects the integration",
     notes: "Stored encrypted at rest (apps/web/lib/crypto.ts).",
   },
@@ -77,8 +77,8 @@ const RETENTION: RetentionRow[] = [
   {
     category: "Webhook deliveries",
     what: "Signature-verified webhook delivery metadata (IDs, event type, payload hash — never payload content)",
-    retention: "30 days (hosted default)",
-    notes: "Pruned daily; WEBHOOK_DELIVERY_RETENTION_DAYS accepts 1–365 days and fails server startup on invalid configuration.",
+    retention: "30 days by default; Forgejo acceptance records have no automatic expiry",
+    notes: "Non-Forgejo records are pruned daily; WEBHOOK_DELIVERY_RETENTION_DAYS accepts 1–365 days and fails server startup on invalid configuration. Forgejo acceptance metadata is excluded from that sweep to prevent replay from creating another billable review, including after a restart or completed review.",
   },
   {
     category: "Activity events",

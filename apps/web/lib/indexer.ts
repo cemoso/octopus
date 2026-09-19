@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { getInstallationToken, getFileContent as ghGetFileContent, getRepositoryDetails } from "@/lib/github";
 import * as bitbucketLib from "@/lib/bitbucket";
 import * as gitlabLib from "@/lib/gitlab";
+import * as forgejoLib from "@/lib/forgejo";
+import { ForgejoResponseTooLargeError } from "@/lib/forgejo-http";
 import { ensureCollection, upsertChunks, deleteRepoChunks, deleteRepoFileChunks } from "@/lib/qdrant";
 import { generateSparseVectors } from "@/lib/sparse-vector";
 import { parseOctopusIgnore, type Ignore } from "@/lib/octopus-ignore";
@@ -74,7 +76,40 @@ export async function indexRepository(
   let resolvedDefaultBranch: string | undefined;
   let emptyRepository = false;
 
-  if ((provider === "bitbucket" || provider === "gitlab") && organizationId) {
+  if (provider === "forgejo") {
+    if (!organizationId) throw new Error("Forgejo indexing requires an organization");
+    // Use the validated API transport for user-supplied hosts. A git subprocess
+    // would resolve the host independently and bypass its network restrictions.
+    await forgejoLib.runWithForgejoRepository(repoId, async () => {
+      onLog(`Fetching Forgejo repository ${fullName}@${defaultBranch}...`);
+      const head = await forgejoLib.getBranchHead(organizationId, fullName, defaultBranch);
+      if (!head) throw new Error("Forgejo did not return a repository revision");
+      const paths = await forgejoLib.getRepositoryTree(organizationId, fullName, head);
+      totalFileCount = paths.length;
+      emptyRepository = paths.length === 0;
+      const ig = paths.includes(".octopusignore")
+        ? parseOctopusIgnore(await forgejoLib.getFileContent(organizationId, fullName, head, ".octopusignore"))
+        : undefined;
+      for (const filePath of paths.filter(p => shouldIndex(p, undefined, ig))) {
+        signal?.throwIfAborted();
+        let content: string;
+        try {
+          content = await forgejoLib.getFileContent(organizationId, fullName, head, filePath);
+        } catch (error) {
+          if (!(error instanceof ForgejoResponseTooLargeError)) throw error;
+          skipped++;
+          continue;
+        }
+        if (exceedsMaxFileSize(content) || content.includes("\0")) {
+          skipped++;
+          continue;
+        }
+        allChunks.push(...chunkText(content, filePath).map(chunk => ({ ...chunk, filePath })));
+        processed++;
+      }
+      onLog(`Processed ${processed} files, skipped ${skipped}`, "success");
+    });
+  } else if ((provider === "bitbucket" || provider === "gitlab") && organizationId) {
     // ── Bitbucket / GitLab indexing flow (clone-based) ──
     const isGl = provider === "gitlab";
     onLog(`Authenticating with ${isGl ? "GitLab" : "Bitbucket"}...`);

@@ -1,12 +1,17 @@
 "use server";
 
+import "server-only";
+import { randomBytes } from "node:crypto";
 import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@octopus/db";
 import { hasOrgPermission } from "@/lib/org-permissions";
-import { decryptStringMaybeLegacy } from "@/lib/crypto";
+import { decryptStringMaybeLegacy, encryptString } from "@/lib/crypto";
+import { validateForgejoConnection } from "@/lib/forgejo";
+import { normalizeForgejoHost } from "@/lib/forgejo-http";
+import { syncForgejoRepos } from "@/lib/repo-sync";
 
 async function getAdminOrg() {
   const session = await auth.api.getSession({
@@ -19,7 +24,7 @@ async function getAdminOrg() {
   if (!orgId) return null;
 
   const member = await prisma.organizationMember.findFirst({
-    where: { userId: session.user.id, organizationId: orgId, deletedAt: null },
+    where: { userId: session.user.id, organizationId: orgId, deletedAt: null, organization: { deletedAt: null, bannedAt: null } },
     select: { role: true, organizationId: true },
   });
 
@@ -28,6 +33,86 @@ async function getAdminOrg() {
   }
 
   return { orgId: member.organizationId };
+}
+
+// ── Forgejo Actions ──
+
+export async function connectForgejo(formData: FormData): Promise<{ error?: string; synced?: number }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  const rawHost = formData.get("host");
+  const rawToken = formData.get("token");
+  if (typeof rawHost !== "string" || typeof rawToken !== "string" ||
+      !rawHost.trim() || !rawToken.trim() || rawHost.length > 2048 || rawToken.length > 4096) {
+    return { error: "Enter your Forgejo instance URL and personal access token." };
+  }
+  try {
+    const host = normalizeForgejoHost(rawHost);
+    const existing = await prisma.forgejoIntegration.findUnique({ where: { organizationId: ctx.orgId } });
+    if (existing && existing.forgejoHost !== host) {
+      return { error: "Disconnect your current Forgejo instance before connecting another host." };
+    }
+    const connection = await validateForgejoConnection(host, rawToken.trim());
+    if (existing && existing.username.toLowerCase() !== connection.username.toLowerCase()) {
+      return { error: "Disconnect your current Forgejo account before connecting another account." };
+    }
+    const accessTokenEnc = encryptString(rawToken.trim());
+    await prisma.$transaction(async (tx) => {
+      if (existing) {
+        await tx.forgejoIntegration.update({ where: { id: existing.id }, data: { accessTokenEnc } });
+      } else {
+        await tx.forgejoIntegration.create({ data: {
+          organizationId: ctx.orgId,
+          forgejoHost: connection.host,
+          username: connection.username,
+          accessTokenEnc,
+          webhookSecret: randomBytes(32).toString("hex"),
+        } });
+      }
+      // Old credentials may have broader access than a replacement token.
+      await tx.repository.updateMany({
+        where: { organizationId: ctx.orgId, provider: "forgejo" },
+        data: { isActive: false },
+      });
+    });
+  } catch {
+    return { error: "Could not connect to Forgejo. Check the HTTPS URL, network access, token and read:user, write:repository and write:issue permissions. Private instances require a self-hosted Octopus operator to enable access." };
+  }
+  return syncForgejo();
+}
+
+export async function syncForgejo(): Promise<{ error?: string; synced?: number }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  try {
+    const result = await syncForgejoRepos(ctx.orgId, { source: "manual" });
+    revalidatePath("/settings/integrations");
+    revalidatePath("/dashboard");
+    revalidatePath("/repositories");
+    return { synced: result.synced };
+  } catch {
+    revalidatePath("/settings/integrations");
+    revalidatePath("/dashboard");
+    revalidatePath("/repositories");
+    return { error: "Forgejo is connected, but repository sync failed. Check the token permissions and instance availability, then retry Sync repositories." };
+  }
+}
+
+export async function disconnectForgejo(): Promise<{ error?: string }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  await prisma.$transaction(async (tx) => {
+    // Delete first to serialize against sync's integration row lock.
+    await tx.forgejoIntegration.deleteMany({ where: { organizationId: ctx.orgId } });
+    await tx.repository.updateMany({
+      where: { organizationId: ctx.orgId, provider: "forgejo" },
+      data: { isActive: false },
+    });
+  });
+  revalidatePath("/settings/integrations");
+  revalidatePath("/dashboard");
+  revalidatePath("/repositories");
+  return {};
 }
 
 // ── Slack Actions ──

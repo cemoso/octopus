@@ -49,6 +49,7 @@ import {
 } from "@/lib/github";
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
+import * as forgejo from "@/lib/forgejo";
 import { getGithubAppConfig } from "@/lib/github-app-config";
 import { parseOctopusIgnore, detectBadCommits } from "@/lib/octopus-ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
@@ -180,7 +181,7 @@ const FEEDBACK_CLASSIFICATION_MODEL = "claude-sonnet-5";
 // GitLab commit-status context name — the merge-gating check GitLab MRs can
 // require. Kept as one constant so every finalize path uses the same name
 // (GitLab keys statuses by name; a mismatch would leave a stale "running" one).
-const GITLAB_STATUS_NAME = "octopus";
+const COMMIT_STATUS_NAME = "octopus";
 
 type ReplyIntent = "dismissed" | "accepted" | "unclear";
 
@@ -627,6 +628,16 @@ async function syncTextDismissalsForPR(
 }
 
 export async function processReview(pullRequestId: string, executionWindow?: ReviewExecutionWindow): Promise<void> {
+  const pr = await prisma.pullRequest.findUnique({
+    where: { id: pullRequestId }, select: { headSha: true, repository: { select: { id: true, provider: true } } },
+  });
+  if (pr?.repository.provider === "forgejo") {
+    return forgejo.runWithForgejoRepository(pr.repository.id, () => processReviewInternal(pullRequestId, executionWindow), pr.headSha);
+  }
+  return processReviewInternal(pullRequestId, executionWindow);
+}
+
+async function processReviewInternal(pullRequestId: string, executionWindow?: ReviewExecutionWindow): Promise<void> {
   // Load PR with repo and org info
   const pr = await prisma.pullRequest.findUnique({
     where: { id: pullRequestId },
@@ -709,6 +720,9 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   const isGitHub = repo.provider === "github";
   const isBitbucket = repo.provider === "bitbucket";
   const isGitlab = repo.provider === "gitlab";
+  const isForgejo = repo.provider === "forgejo";
+  const usesProjectApi = isGitlab || isForgejo;
+  const projectProvider = isForgejo ? forgejo : gitlab;
   const installationId = repo.installationId ?? org.githubInstallationId;
 
   if (isGitHub && !installationId) {
@@ -725,8 +739,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   const providerGetInput = (prNumber: number) =>
     isGitHub
       ? ghGetPullRequestReviewInput(installationId!, owner, repoName, prNumber, pr.headSha)
-      : isGitlab
-        ? gitlab.getPullRequestReviewInput(org.id, projectPath, prNumber, pr.headSha)
+      : usesProjectApi
+        ? projectProvider.getPullRequestReviewInput(org.id, projectPath, prNumber, pr.headSha)
         : bitbucket.getPullRequestReviewInput(org.id, owner, repoName, prNumber, pr.headSha);
 
   // PR description/body — used only to give the reviewer the change's intent.
@@ -735,8 +749,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     try {
       const details = isGitHub
         ? await ghGetPullRequestDetails(installationId!, owner, repoName, prNumber)
-        : isGitlab
-          ? await gitlab.getPullRequestDetails(org.id, projectPath, prNumber)
+        : usesProjectApi
+          ? await projectProvider.getPullRequestDetails(org.id, projectPath, prNumber)
           : await bitbucket.getPullRequestDetails(org.id, owner, repoName, prNumber);
       return details.body ?? "";
     } catch (err) {
@@ -749,8 +763,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   const providerCreateComment = (prNumber: number, body: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) =>
     isGitHub
       ? ghCreatePullRequestComment(installationId!, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body)
-      : isGitlab
-        ? gitlab.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow)
+      : usesProjectApi
+        ? projectProvider.createPullRequestComment(org.id, projectPath, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow)
         : bitbucket.createPullRequestComment(org.id, owner, repoName, prNumber, attemptLabel(publishedAttemptId) + body, publicationWindow);
 
   const publishMainComment = (body: string, expectedReviewBody?: string, publishedAttemptId = attemptId, publicationWindow?: ReviewExecutionWindow) => isGitHub
@@ -764,8 +778,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       return;
     }
     try {
-      if (isGitlab) {
-        await gitlab.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
+      if (usesProjectApi) {
+        await projectProvider.updatePullRequestComment(org.id, projectPath, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
       } else {
         await bitbucket.updatePullRequestComment(org.id, owner, repoName, pr.number, commentId, attemptLabel(publishedAttemptId) + body, publicationWindow);
       }
@@ -784,8 +798,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   const providerGetTree = (branch: string) =>
     isGitHub
       ? ghGetRepositoryTree(installationId!, owner, repoName, branch)
-      : isGitlab
-        ? gitlab.getRepositoryTree(org.id, projectPath, branch)
+      : usesProjectApi
+        ? projectProvider.getRepositoryTree(org.id, projectPath, branch)
         : bitbucket.getRepositoryTree(org.id, owner, repoName, branch);
 
   // Cheap HEAD-SHA lookup used to validate the cached file tree. GitHub returns
@@ -794,8 +808,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
   const providerGetBranchHead = (branch: string): Promise<string | null> =>
     isBitbucket
       ? bitbucket.getBranchHead(org.id, owner, repoName, branch)
-      : isGitlab
-        ? gitlab.getBranchHead(org.id, projectPath, branch)
+      : usesProjectApi
+        ? projectProvider.getBranchHead(org.id, projectPath, branch)
         : Promise.resolve(null);
 
   // Walk the repo tree, but reuse a cached copy when the branch HEAD hasn't
@@ -884,14 +898,14 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     }
   }
 
-  // GitLab: post a running commit status so the MR shows the review in flight.
+  // GitLab / Forgejo: post a running commit status so the MR shows the review in flight.
   // This is the merge-gating primitive — a project can require the "octopus"
   // status to pass before merge. Best-effort; a status failure never blocks the
   // review itself.
-  if (pr.headSha && isGitlab) {
-    await gitlab
-      .setCommitStatus(org.id, projectPath, pr.headSha, "running", GITLAB_STATUS_NAME, "Octopus review in progress")
-      .catch((err) => console.error("[reviewer] Failed to set GitLab running status:", err));
+  if (pr.headSha && usesProjectApi) {
+    await projectProvider
+      .setCommitStatus(org.id, projectPath, pr.headSha, "running", COMMIT_STATUS_NAME, "Octopus review in progress")
+      .catch((err) => console.error("[reviewer] Failed to set provider running status:", err));
   }
 
   // Pre-review: sync feedback from GitHub before generating new findings
@@ -973,10 +987,10 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
             }
             // Terminal — the review won't run, so finalize the GitLab status
             // (leaving "running" would strand the MR).
-            if (pr.headSha && isGitlab) {
-              await gitlab
-                .setCommitStatus(org.id, projectPath, pr.headSha, "failed", GITLAB_STATUS_NAME, "Repository indexing failed.")
-                .catch((e) => console.error("[reviewer] Failed to set GitLab status:", e));
+            if (pr.headSha && usesProjectApi) {
+              await projectProvider
+                .setCommitStatus(org.id, projectPath, pr.headSha, "failed", COMMIT_STATUS_NAME, "Repository indexing failed.")
+                .catch((e) => console.error("[reviewer] Failed to set provider status:", e));
             }
             return;
           }
@@ -1107,13 +1121,13 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       // Finalize the GitLab status as success — a billing limit is not a code
       // problem, so it must not block the MR merge (and leaving "running" would
       // strand it). GitHub uses no check here for the same reason.
-      if (pr.headSha && isGitlab) {
-        const gitlabMsg = outOfCredits
+      if (pr.headSha && usesProjectApi) {
+        const statusMessage = outOfCredits
           ? "Review skipped — out of credits."
           : "Review skipped — monthly usage limit reached.";
-        await gitlab
-          .setCommitStatus(org.id, projectPath, pr.headSha, "success", GITLAB_STATUS_NAME, gitlabMsg)
-          .catch((e) => console.error("[reviewer] Failed to set GitLab status:", e));
+        await projectProvider
+          .setCommitStatus(org.id, projectPath, pr.headSha, "success", COMMIT_STATUS_NAME, statusMessage)
+          .catch((e) => console.error("[reviewer] Failed to set provider status:", e));
       }
       return;
     }
@@ -1260,8 +1274,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     const fetchBaseConfig = async (file: string): Promise<string | null> =>
       isGitHub && installationId
         ? ghGetFileContent(installationId, owner, repoName, inputBaseRef, file)
-        : isGitlab
-          ? gitlab.getFileContent(org.id, projectPath, inputBaseRef, file)
+        : usesProjectApi
+          ? projectProvider.getFileContent(org.id, projectPath, inputBaseRef, file)
           : bitbucket.getFileContent(org.id, owner, repoName, inputBaseRef, file);
     // A missing policy fetch must not cause files to disappear. Review them.
     if (repoTree.includes(".gitattributes")) {
@@ -1319,8 +1333,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       if (checkRunId && isGitHub && installationId) {
         await ghUpdateCheckRun(installationId, owner, repoName, checkRunId, result.conclusion, { title: result.title, summary: result.summary });
       }
-      if (pr.headSha && isGitlab) {
-        await gitlab.setCommitStatus(org.id, projectPath, pr.headSha, result.conclusion === "success" ? "success" : "failed", GITLAB_STATUS_NAME, result.summary);
+      if (pr.headSha && usesProjectApi) {
+        await projectProvider.setCommitStatus(org.id, projectPath, pr.headSha, result.conclusion === "success" ? "success" : "failed", COMMIT_STATUS_NAME, result.summary);
       }
       await emitReviewStatus(org.id, { ...baseEvent, status: "completed", step: "completed", detail: result.summary });
       return;
@@ -1359,8 +1373,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
         const fetchContent = (p: string): Promise<string> =>
           isGitHub
             ? ghGetFileContent(installationId!, owner, repoName, ref, p).then((c) => c ?? "")
-            : isGitlab
-              ? gitlab.getFileContent(org.id, projectPath, ref, p)
+            : usesProjectApi
+              ? projectProvider.getFileContent(org.id, projectPath, ref, p)
               : bitbucket.getFileContent(org.id, owner, repoName, ref, p);
         const paths = [...diffFiles].slice(0, 200);
         // Bounded concurrency so a large PR can't fire hundreds of parallel
@@ -1754,7 +1768,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       PATTERN_RULES: patternRules,
       TOOL_FINDINGS: toolFindingsBlock,
       PR_NUMBER: String(pr.number),
-      PROVIDER: isGitHub ? "GitHub" : isBitbucket ? "Bitbucket" : isGitlab ? "GitLab" : repo.provider,
+      PROVIDER: isGitHub ? "GitHub" : isBitbucket ? "Bitbucket" : isGitlab ? "GitLab" : isForgejo ? "Forgejo" : repo.provider,
       FALSE_POSITIVE_CONTEXT: falsePositiveContext,
       RE_REVIEW_CONTEXT: priorReviewContext,
       CONFLICT_DETECTION: conflictPrompt,
@@ -1770,7 +1784,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       beforeGeneration: signal => confirmCompleteReviewCurrent({ pullRequestId: pr.id, orgId: org.id, repoId: repo.id,
         model: reviewModel, headSha: coverage.headSha!, baseSha: coverage.baseSha!, reviewRequestVersion: pr.reviewRequestVersion,
         fetchRevision: signal => isGitHub ? ghGetPullRequestDetails(installationId!, owner, repoName, pr.number, signal)
-          : isGitlab ? gitlab.getPullRequestDetails(org.id, projectPath, pr.number, signal)
+          : usesProjectApi ? projectProvider.getPullRequestDetails(org.id, projectPath, pr.number, signal)
             : bitbucket.getPullRequestDetails(org.id, owner, repoName, pr.number, signal),
       }, signal),
     } : undefined;
@@ -1954,8 +1968,8 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
             ? async (path) => (await ghGetFileContent(installationId!, owner, repoName, pr.headSha!, path)) ?? ""
             : isBitbucket
               ? (path) => bitbucket.getFileContent(org.id, owner, repoName, pr.headSha ?? repo.defaultBranch ?? "main", path)
-              : isGitlab
-                ? (path) => gitlab.getFileContent(org.id, projectPath, pr.headSha ?? repo.defaultBranch ?? "main", path)
+              : usesProjectApi
+                ? (path) => projectProvider.getFileContent(org.id, projectPath, pr.headSha ?? repo.defaultBranch ?? "main", path)
                 : undefined;
 
         // Phase 1: Cross-file context (existing — function signatures, types, APIs)
@@ -2265,14 +2279,14 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
           mainCommentBody += `\n\n${findingsBlock}`;
         }
       }
-    } else if (isBitbucket || isGitlab) {
-      // Bitbucket / GitLab: post inline comments individually, then a summary comment
+    } else if (isBitbucket || usesProjectApi) {
+      // Bitbucket / GitLab / Forgejo: post inline comments individually, then a summary comment
       const failedInlineComments: ReviewComment[] = [];
       for (const comment of inlineComments) {
         assertProcessingActive();
         try {
-          if (isGitlab) {
-            await gitlab.createInlineComment(
+          if (usesProjectApi) {
+            await projectProvider.createInlineComment(
               org.id, projectPath, pr.number,
               comment.path, comment.line, comment.body,
             );
@@ -2320,7 +2334,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       const summaryBody = `${coverageSummary(coverage)} ${visibleCount} findings.${findingsBlock ? "\n\n" + findingsBlock : ""}`;
       assertProcessingActive();
       await providerCreateComment(pr.number, summaryBody);
-      const providerLabel = isGitlab ? "GitLab" : "Bitbucket";
+      const providerLabel = isForgejo ? "Forgejo" : isGitlab ? "GitLab" : "Bitbucket";
       console.log(`[reviewer] ${providerLabel} review posted with ${inlineComments.length} inline comments, ${nonInlineWithUnmappable.length} in summary`);
     }
 
@@ -2419,15 +2433,15 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
       console.log(`[reviewer] Check run updated — conclusion: ${conclusion} (threshold: ${threshold})`);
     }
 
-    if (pr.headSha && isGitlab) {
+    if (pr.headSha && usesProjectApi) {
       const state = checkResult.conclusion === "failure" ? "failed" : "success";
-      await gitlab
-        .setCommitStatus(org.id, projectPath, pr.headSha, state, GITLAB_STATUS_NAME, summaryText, undefined, completeReviewAdmission?.window)
+      await projectProvider
+        .setCommitStatus(org.id, projectPath, pr.headSha, state, COMMIT_STATUS_NAME, summaryText, undefined, completeReviewAdmission?.window)
         .catch((err) => {
           assertProcessingActive();
-          console.error("[reviewer] Failed to set GitLab commit status:", err);
+          console.error("[reviewer] Failed to set provider commit status:", err);
         });
-      console.log(`[reviewer] GitLab commit status set — state: ${state} (threshold: ${threshold})`);
+      console.log(`[reviewer] ${repo.provider} commit status set — state: ${state} (threshold: ${threshold})`);
     }
 
     if (!promoted) return;
@@ -2565,7 +2579,7 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     } else if (reviewCommentId) {
       await providerUpdateComment(
         reviewCommentId,
-        failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`@octopus-review\` on this PR.`,
+        failureBody ?? `> 🐙 **Octopus Review** encountered an error while analyzing this pull request.\n>\n> \`${errorMessage}\`\n>\n> Please try again by commenting \`${isForgejo ? "@octopus" : "@octopus-review"}\` on this PR.`,
         failureAttemptId,
       ).catch((e) => console.error("[reviewer] Failed to update placeholder with error:", e));
     }
@@ -2586,10 +2600,10 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     }
     // GitLab: mark the status failed on a review error so a gated MR isn't left
     // hanging on a "running" status forever.
-    if (pr.headSha && isGitlab) {
-      await gitlab
-        .setCommitStatus(org.id, projectPath, pr.headSha, "failed", GITLAB_STATUS_NAME, `Review error: ${errorMessage}`.slice(0, 255))
-        .catch((e) => console.error("[reviewer] Failed to set GitLab failed status:", e));
+    if (pr.headSha && usesProjectApi) {
+      await projectProvider
+        .setCommitStatus(org.id, projectPath, pr.headSha, "failed", COMMIT_STATUS_NAME, `Review error: ${errorMessage}`.slice(0, 255))
+        .catch((e) => console.error("[reviewer] Failed to set provider failed status:", e));
     }
 
     // If indexing was in progress, mark it as failed (check current DB state, not stale in-memory value)

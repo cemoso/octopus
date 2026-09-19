@@ -33,6 +33,10 @@ export const metadata: Metadata = {
 
 const faqs = [
   {
+    q: "Can Octopus review repositories on Forgejo?",
+    a: "Yes. Connect your HTTPS Forgejo instance with a personal access token and configure signed pull request webhooks. Octopus Cloud connects to public instances; private LAN/VPN instances need self-hosted Octopus with network access and an explicit allowed origin. Octopus posts review comments and commit statuses. Repository hosting stays with your Forgejo instance; Octopus and the configured AI services process code for reviews. See the integrations guide for setup.",
+  },
+  {
     q: "Can I try both Octopus and Greptile on the same repository?",
     a: "Yes. Both tools install via your Git provider and configure independently. Running them in parallel for a few pull requests is a common way to see which review style fits your team.",
   },

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-09-19
+
+### Added
+- Connect self-hosted Forgejo repositories with a personal access token and signed webhooks. Octopus can sync repositories, review pull requests, post comments and publish commit statuses.
+- Self-hosted Octopus can reach private LAN or VPN Forgejo instances through an explicit HTTPS-origin allowlist, with verified TLS and support for trusted internal certificate authorities. See the [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo).
+- Forgejo setup is included in the dashboard, marketing pages, help content and onboarding emails.
+
+### Upgrade notes
+- Apply both Forgejo database migrations before updating the web application and review workers. The email migration updates untouched system-template defaults and preserves customized bodies and delivery settings. Refresh indexed help content after deployment; see the [content audit](docs/plans/forgejo-content-audit.md).
+
 ## [1.0.161] - 2026-09-19
 
 ### Fixed

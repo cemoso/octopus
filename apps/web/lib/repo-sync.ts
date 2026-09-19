@@ -3,6 +3,7 @@ import { prisma } from "@octopus/db";
 import { listInstallationRepos, GithubRateLimitError } from "@/lib/github";
 import { listWorkspaceRepos } from "@/lib/bitbucket";
 import { listNamespaceProjects, createProjectWebhook } from "@/lib/gitlab";
+import { listUserRepos } from "@/lib/forgejo";
 import { grantDeferredWelcomeCredit } from "@/lib/org-create";
 // Namespace import: read at call time so a partial module double elsewhere in
 // the test process cannot break module load.
@@ -24,7 +25,7 @@ import { enqueuePendingRepositoryIndexes } from "@/lib/repository-index-job";
  *  - no request-scoped side effects here (no revalidatePath): callers do that.
  */
 export type RepoSyncSource = "manual" | "scheduled" | "webhook";
-export type RepoSyncProvider = "github" | "bitbucket" | "gitlab";
+export type RepoSyncProvider = "github" | "bitbucket" | "gitlab" | "forgejo";
 
 export interface DiscoveredRepo {
   id: string;
@@ -33,6 +34,7 @@ export interface DiscoveredRepo {
 }
 
 export interface RepoSyncResult {
+  error?: string;
   /** Rows created or refreshed. */
   synced: number;
   /** Rows that did not exist before this run. */
@@ -45,8 +47,8 @@ export interface RepoSyncResult {
 }
 
 /** externalId → dismissedAt for the org's existing rows of one provider. */
-async function loadExisting(organizationId: string, provider: RepoSyncProvider) {
-  const rows = await prisma.repository.findMany({
+async function loadExisting(organizationId: string, provider: RepoSyncProvider, db: Pick<typeof prisma, "repository"> = prisma) {
+  const rows = await db.repository.findMany({
     where: { organizationId, provider },
     select: { externalId: true, dismissedAt: true },
   });
@@ -59,10 +61,11 @@ async function upsertRepo(
   existing: Map<string, Date | null>,
   result: RepoSyncResult,
   repo: { externalId: string; name: string; fullName: string; defaultBranch?: string; installationId?: number },
+  db: Pick<typeof prisma, "repository"> = prisma,
 ): Promise<"created" | "updated" | "dismissed"> {
   if (existing.has(repo.externalId) && existing.get(repo.externalId) != null) return "dismissed";
   const isNew = !existing.has(repo.externalId);
-  const row = await prisma.repository.upsert({
+  const row = await db.repository.upsert({
     where: {
       provider_externalId_organizationId: { provider, externalId: repo.externalId, organizationId },
     },
@@ -101,8 +104,9 @@ async function deactivateMissing(
   presentIds: string[],
   /** GitHub only: restrict to rows belonging to the installations that were actually listed. */
   installationIds?: number[],
+  db: Pick<typeof prisma, "repository"> = prisma,
 ) {
-  const res = await prisma.repository.updateMany({
+  const res = await db.repository.updateMany({
     where: {
       organizationId,
       provider,
@@ -246,14 +250,63 @@ export async function syncOrgRepos(
     }
   }
 
-  // First repo connect releases a deferred welcome grant (no-op otherwise).
+  // Arbitrary self-hosted identities must not unlock welcome credits.
   if (result.synced > 0) await grantDeferredWelcomeCredit(organizationId);
 
   notifyDiscovered(organizationId, opts.source, result.createdRepos);
-
   await enqueuePendingRepositoryIndexes(organizationId)
     .catch((err) => console.error("[repo-sync] Could not queue indexing; next sync will retry:", err));
 
+  const forgejo = await syncForgejoRepos(organizationId, opts).catch((err) => {
+    console.error("[repo-sync] Failed to sync Forgejo repos:", err);
+    result.error = "Forgejo repository sync failed. Check its token permissions and instance availability in Settings → Integrations.";
+    return null;
+  });
+  if (forgejo) {
+    result.synced += forgejo.synced;
+    result.created += forgejo.created;
+    result.removed += forgejo.removed;
+    result.createdRepos.push(...forgejo.createdRepos);
+    result.providers.push(...forgejo.providers);
+  }
+
+  return result;
+}
+
+/** Fetch outside the transaction, then fence disconnect/token changes before writing. */
+export async function syncForgejoRepos(
+  organizationId: string,
+  opts: { source: RepoSyncSource },
+): Promise<RepoSyncResult> {
+  const integration = await prisma.forgejoIntegration.findUnique({ where: { organizationId } });
+  const result: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
+  if (!integration) return result;
+  const repos = await listUserRepos(organizationId);
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integration.id} FOR UPDATE`;
+    const current = await tx.forgejoIntegration.findUnique({ where: { organizationId } });
+    if (!current || current.id !== integration.id || current.accessTokenEnc !== integration.accessTokenEnc) {
+      throw new Error("Forgejo connection changed during sync. Try syncing again.");
+    }
+    result.providers.push("forgejo");
+    const existing = await loadExisting(organizationId, "forgejo", tx);
+    const present: string[] = [];
+    for (const repo of repos) {
+      if (!repo.permissions?.admin || repo.archived) continue;
+      const externalId = `${integration.forgejoHost}:${repo.id}`;
+      present.push(externalId);
+      await upsertRepo(organizationId, "forgejo", existing, result, {
+        externalId,
+        name: repo.name,
+        fullName: repo.full_name,
+        defaultBranch: repo.default_branch || "main",
+      }, tx);
+    }
+    result.removed += await deactivateMissing(organizationId, "forgejo", present, undefined, tx);
+  });
+  notifyDiscovered(organizationId, opts.source, result.createdRepos);
+  await enqueuePendingRepositoryIndexes(organizationId)
+    .catch((err) => console.error("[repo-sync] Could not queue Forgejo indexing:", err));
   return result;
 }
 

@@ -27,13 +27,13 @@ Octopus is a source-available, AI-powered code review tool.`,
       },
       {
         heading: "How It Works",
-        text: `Step 1: Connect GitHub — Install the Octopus GitHub App on your repositories. Select which repos to monitor. GitLab and Bitbucket are also supported via OAuth.
+        text: `Step 1: Connect your repository. Use the GitHub App, GitLab or Bitbucket OAuth, or a Forgejo personal access token and signed repository webhooks.
 Step 2: AI Learns Your Code — Octopus indexes your codebase, creating vector embeddings of your code chunks. It understands your architecture, patterns, and conventions.
 Step 3: Reviews on Autopilot — Every pull request is automatically reviewed. Octopus posts findings as inline comments with severity levels: Critical, Major, Minor, Suggestion, and Tip.`,
       },
       {
         heading: "Cloud or Self-Host",
-        text: `Two ways to run Octopus. Cloud (recommended): a fully managed service — nothing to run or maintain. Auto-reviews every PR via the GitHub App, free credits to start with usage-based pricing after (no card required), managed updates, backups, and scaling, and your code is never stored long-term or used for training. Self-host: run the entire platform on your own infrastructure with one Docker Compose file — free and source-available (Modified MIT License), your code never leaves your network, and you can bring your own AI keys or run local models.`,
+        text: `Two ways to run Octopus. Cloud: a managed service with reviews for GitHub, GitLab, Bitbucket and Forgejo. Free credits to start, then usage-based pricing. Self-host: run Octopus with Docker Compose on your own infrastructure. It is free and source-available (Modified MIT License). You choose the AI services; external services receive code for processing. Use local services when processing must stay on your network.`,
       },
       {
         heading: "Stats",
@@ -51,12 +51,12 @@ Analytics — Track review activity, time to merge, token usage, and costs acros
       {
         heading: "Source-Available",
         text: `Octopus is source-available under a Modified MIT License and free to self-host.
-Self-Host Ready — Run Octopus on your own infrastructure with one Docker Compose file. Your code never leaves your servers. Bring your own AI keys or run local models.`,
+Self-Host Ready — Run Octopus on your own infrastructure with one Docker Compose file. Choose local AI services to keep processing on your network, or configure external AI providers.`,
       },
       {
         heading: "FAQ",
         text: `Q: What is Octopus?
-A: Octopus is an AI-powered code review tool that connects to GitHub, GitLab, and Bitbucket, indexes your codebase for deep context, and automatically reviews every pull request (and GitLab merge request) — posting findings as inline comments with severity levels.
+A: Octopus is an AI-powered code review tool that connects to GitHub, GitLab, Bitbucket, and Forgejo, indexes your codebase for deep context, and automatically reviews every pull request (and GitLab merge request) — posting findings as inline comments with severity levels.
 
 Q: How does the automated review work?
 A: When a pull request is opened, Octopus fetches the diff, retrieves relevant context from your indexed codebase using vector search, and sends it to an LLM (Anthropic Claude, OpenAI GPT, Google Gemini, xAI Grok, Alibaba Qwen, or any model on OpenRouter) for analysis. Findings are posted directly on the PR with severity ratings: Critical, Major, Minor, Suggestion, and Tip.
@@ -65,7 +65,7 @@ Q: Which programming languages are supported?
 A: Octopus is language-agnostic. It reviews any text-based code file — TypeScript, Python, Go, Rust, Java, C#, Ruby, PHP, Swift, Kotlin, and more.
 
 Q: Is my source code safe?
-A: Yes. Your code is processed in-memory and never stored permanently. Only vector embeddings are persisted for search. You can also self-host Octopus.
+A: Octopus reads repository content to index and review your code. Configured AI services process code and review context. Self-hosting Forgejo does not change this. Self-hosted Octopus with local AI services lets you keep processing on your infrastructure. See the security overview and data-retention documentation for storage details.
 
 Q: Does Octopus replace human reviewers?
 A: No. Octopus augments your team's review process. It catches bugs, security issues, and style inconsistencies so your human reviewers can focus on architecture, design decisions, and business logic.
@@ -86,14 +86,15 @@ A: Yes! Every organization gets free credits to start. You can also bring your o
         text: `Octopus is an AI-powered code review tool that indexes your entire codebase, learns your patterns and architecture, and reviews every pull request with deep context awareness. It catches real bugs, security issues, and code quality problems before they reach production.
 Codebase-Aware: Indexes your code and understands your architecture, not just the diff.
 Automatic Reviews: Every PR gets reviewed instantly with severity-rated inline comments.
-Works With Your Tools: GitHub, GitLab, Bitbucket, Slack, Linear, Jira. Fits into your existing workflow.`,
+Works With Your Tools: GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear, Jira. Fits into your existing workflow.`,
       },
       {
         heading: "1. Connect Your Repository",
-        text: `Start by connecting your GitHub, GitLab, or Bitbucket account from the dashboard. Octopus installs as a GitHub App or sets up GitLab/Bitbucket OAuth to receive webhook events from your repositories.
+        text: `Start by connecting your GitHub, GitLab, Bitbucket, or Forgejo account from the dashboard. Octopus uses the GitHub App, GitLab/Bitbucket OAuth, or a Forgejo personal access token to access repositories.
 GitHub: Install the GitHub App, select repositories, and you're ready to go.
 GitLab: Connect via OAuth and Octopus automatically manages webhooks for merge requests.
 Bitbucket: Connect via OAuth and Octopus automatically manages webhooks.
+Forgejo: Connect an HTTPS instance using a personal access token, then configure signed pull request webhooks for each repository. Instructions: /docs/integrations#forgejo.
 Once connected, Octopus indexes your codebase. It chunks your code, creates embeddings, and builds a searchable representation of your entire project.`,
       },
       {
@@ -260,6 +261,10 @@ Features: PR reviews via webhook, inline comments, automatic webhook management.
 Octopus manages the webhook lifecycle — no manual setup needed.`,
       },
       {
+        heading: "Forgejo",
+        text: `Forgejo connects through an HTTPS instance and personal access token. For authoritative token scopes, repository permissions, signed webhook setup and automatic/manual review rules, see /docs/integrations#forgejo. For private LAN/VPN access and operator configuration, see /docs/self-hosting#forgejo. Native CLI agent setup remains GitHub-only.`,
+      },
+      {
         heading: "Jira",
         text: `Connect Jira to create issues directly from review findings.
 When Octopus surfaces a critical bug or security finding, you can open a Jira issue in one click. The issue is pre-filled with the finding details, severity, PR/MR link, and file location. Configure the target project and default issue type from the integration settings.`,
@@ -304,7 +309,7 @@ The self-host compose file includes PostgreSQL and Qdrant containers.`,
       },
       {
         heading: "Environment Variables",
-        text: `Required: DATABASE_URL, QDRANT_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY, BETTER_AUTH_SECRET, BETTER_AUTH_URL, GITHUB_APP_ID, GITHUB_APP_PRIVATE_KEY, GITHUB_WEBHOOK_SECRET.
+        text: `Configure DATABASE_URL, QDRANT_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL, and your embedding/review AI services. GitHub App credentials are needed only when connecting GitHub repositories. Forgejo uses an instance URL and token entered in Settings > Integrations, plus repository webhooks.
 Optional: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (for GitHub login), COHERE_API_KEY (for re-ranking), GOOGLE_API_KEY (Gemini models), STRIPE_SECRET_KEY (for billing).
 The self-hosting docs page includes an interactive env generator.`,
       },
@@ -351,21 +356,21 @@ A: Linters check syntax and formatting rules. Octopus understands your entire co
       {
         heading: "Security & Privacy",
         text: `Q: Is my code safe?
-A: Your code is processed in-memory and never stored permanently. Only vector embeddings are persisted.
+A: Octopus reads repository content for indexing and reviews, and configured AI services process code and review context. This also applies to self-hosted Forgejo connected to Octopus Cloud. See the security overview and data-retention documentation for storage details.
 
 Q: Can I self-host Octopus?
-A: Yes. Octopus is fully self-hostable with Docker. Your code never leaves your infrastructure.
+A: Yes. Octopus is fully self-hostable with Docker. External AI services still receive code when configured. Use local services for processing that must stay on your infrastructure.
 
 Q: Which AI models are used?
 A: Claude (Anthropic), OpenAI (GPT), Google Gemini, and Qwen (Alibaba Cloud Model Studio) are all supported review/chat models, selectable per organization — and you can bring your own key for any of them (a Google Gemini API key works for reviews, not just embeddings). OpenAI text-embedding-3-large is used for embeddings. Cohere Rerank is used for search re-ranking.
 
 Q: Is my code used for AI training?
-A: No. Anthropic, OpenAI, and Google do not use API inputs to train their models. Your code is never used to train AI models.`,
+A: Octopus sends code to configured AI services for indexing and reviews. Check each service's current terms and account settings for its data-use policy. Use local services when external processing is not permitted.`,
       },
       {
         heading: "Integrations",
         text: `Q: Which Git platforms are supported?
-A: GitHub, GitLab, and Bitbucket. GitLab supports both GitLab.com and self-managed instances.
+A: GitHub, GitLab, Bitbucket, and Forgejo. GitLab supports both GitLab.com and self-managed instances. Forgejo uses an HTTPS instance, a personal access token and signed repository webhooks. See /docs/integrations#forgejo.
 
 Q: Does Octopus work with Slack?
 A: Yes. Use the /octopus command to ask questions about your codebase. You also receive notifications for review events.
@@ -451,7 +456,7 @@ Spend Limit: A monthly cost cap per organization. When reached, AI operations ar
 
 Vector Search: Semantic search using embeddings. Instead of keyword matching, vector search finds code that is semantically similar to the query, even with different wording.
 
-Webhook: An HTTP callback from GitHub, GitLab, or Bitbucket that notifies Octopus when events occur (PR/MR opened, PR/MR updated, push). This triggers automatic reviews.`,
+Webhook: An HTTP callback from GitHub, GitLab, Bitbucket, or Forgejo that notifies Octopus when events occur (PR/MR opened, PR/MR updated, push). This triggers automatic reviews.`,
       },
     ],
   },
@@ -518,7 +523,7 @@ Turborepo for monorepo management.`,
       },
       {
         heading: "Future Direction",
-        text: `More Git provider integrations beyond the current GitHub, GitLab, and Bitbucket support.
+        text: `More Git provider integrations beyond the current GitHub, GitLab, Bitbucket, and Forgejo support.
 Smarter review engine with better context retrieval.
 Expanded CLI capabilities.
 Plugin system for custom review rules and integrations.`,
