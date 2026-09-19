@@ -632,10 +632,13 @@ export async function processReview(pullRequestId: string, executionWindow?: Rev
     where: { id: pullRequestId }, select: { headSha: true, reviewRequestVersion: true, repository: { select: { id: true, provider: true } } },
   });
   if (pr?.repository.provider === "forgejo") {
-    return forgejo.runWithForgejoRepository(pr.repository.id, () => withForgejoReviewPublication(
-      pullRequestId, pr.headSha, pr.reviewRequestVersion,
-      () => processReviewInternal(pullRequestId, executionWindow, pr), executionWindow?.signal,
-    ), pr.headSha);
+    return forgejo.runWithForgejoRepository(pr.repository.id, () => {
+      if (!forgejo.usesForgejoConnector()) return processReviewInternal(pullRequestId, executionWindow, pr);
+      return withForgejoReviewPublication(
+        pullRequestId, pr.headSha, pr.reviewRequestVersion,
+        () => processReviewInternal(pullRequestId, executionWindow, pr), executionWindow?.signal,
+      );
+    }, pr.headSha);
   }
   return processReviewInternal(pullRequestId, executionWindow);
 }

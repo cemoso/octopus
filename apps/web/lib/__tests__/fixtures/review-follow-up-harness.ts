@@ -4,6 +4,8 @@ import type { AiCreateParams } from "@/lib/providers";
 import { assertReviewProcessingActive, type ReviewExecutionWindow } from "@/lib/review-capacity";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 mock.module("server-only", () => ({}));
+const directCommentFailure = process.argv.includes("--direct-forgejo-comment-failure");
+const reviewUpdates: unknown[] = [];
 let nativeFailure = false;
 let forgejoConnector = false;
 let preparationState: "ready" | "waiting" | "failure" = "ready";
@@ -65,7 +67,7 @@ mock.module("@octopus/db", () => ({ prisma: {
   repository: { findUnique: async () => repo },
   systemConfig: { findUnique: async () => null },
   reviewIssue: { findMany: async () => [] },
-  pullRequest: { findUnique: async () => pr, updateMany: async () => ({ count: 1 }) },
+  pullRequest: { findUnique: async () => pr, updateMany: async (query: unknown) => { reviewUpdates.push(query); return { count: 1 }; } },
 } }));
 mock.module("@/lib/embeddings", () => ({ createEmbeddings: async (texts: string[]) => texts.map(() => [1, 0, 0]) }));
 mock.module("@/lib/qdrant", () => ({
@@ -125,10 +127,11 @@ mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async
   summaries.push(target.body);
   return 123;
 } }));
+const realReviewAttempt = await import("@/lib/review-attempt");
 mock.module("@/lib/review-attempt", () => ({
-  withForgejoReviewPublication: async (_id: string, _head: string, _version: number, publish: () => Promise<void>) => publish(),
-  createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
-  updateCurrentReview: async () => ({ count: 1 }),
+  withForgejoReviewPublication: directCommentFailure ? realReviewAttempt.withForgejoReviewPublication : async (_id: string, _head: string, _version: number, publish: () => Promise<void>) => publish(),
+  createReviewAttemptComment: directCommentFailure ? realReviewAttempt.createReviewAttemptComment : async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
+  updateCurrentReview: directCommentFailure ? realReviewAttempt.updateCurrentReview : async () => ({ count: 1 }),
   saveReviewAttempt: async (_id: string, _pr: string, _coverage: unknown, _body: string, findings: { title: string }[]) => {
     archived.push({ id: _id, findings, coverage: structuredClone(_coverage), body: _body });
     if (adaptiveStage === "after-save" && (_coverage as ReviewCoverage).assessment?.state === "completed") adaptiveAbort.abort();
@@ -167,7 +170,11 @@ mock.module("@/lib/github", () => ({
 mock.module("@/lib/forgejo", () => ({
   runWithForgejoRepository: async (_repo: string, run: () => Promise<void>) => run(),
   usesForgejoConnector: () => forgejoConnector,
-  createPullRequestComment: async (_org: string, _project: string, _number: number, body: string) => { forgejoPublications.push(body); return 123; },
+  createPullRequestComment: async (_org: string, _project: string, _number: number, body: string) => {
+    forgejoPublications.push(body);
+    if (directCommentFailure) throw new Error("Forgejo API returned 403");
+    return 123;
+  },
   updatePullRequestComment: async (_org: string, _project: string, _number: number, _id: number, body: string) => { forgejoPublications.push(body); },
   getPullRequestReviewInput: async () => { throw new Error("Fixture stops after preparation"); },
   setCommitStatus: async (_org: string, _project: string, _sha: string, state: string) => {
@@ -249,6 +256,23 @@ ${JSON.stringify([finding])}
 const { prepareReviewInput } = await import("@/lib/review-coverage");
 const { canRestrictReviewToFollowUp } = await import("@/lib/review-follow-up");
 const { processReview } = await import("@/lib/reviewer");
+if (directCommentFailure) {
+  repo.provider = "forgejo";
+  const errors = console.error;
+  console.error = () => {};
+  try { await processReview("pr"); } finally { console.error = errors; }
+  assert.ok(forgejoPublications.some(body => body.includes("Preparing review")));
+  assert.ok(reviewUpdates.some(query => {
+    const { where, data } = query as { where: unknown; data: { status?: string; errorMessage?: string } };
+    if (data.status !== "failed") return false;
+    assert.deepEqual(where, { id: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion });
+    assert.equal(data.errorMessage, "Forgejo API returned 403");
+    return true;
+  }), "Direct comment failure is persisted for the same review attempt");
+  assert.ok(events.some(event => event.type === "review-failed"));
+  console.log("PASS handled direct Forgejo comment failure without connector uncertainty");
+  process.exit(0);
+}
 const current = prepareReviewInput({ provider: "github", headSha: pr.headSha, baseSha: "b".repeat(40), expectedFiles: 1, inventoryComplete: true, limitations: [], files: [
   { path: "src/check.ts", change: "modified", patch: "@@ -1 +1 @@\n-return value;\n+return value.name;\n", additions: 1, deletions: 1 },
 ] }, { maxChars: 350000 }).coverage;
