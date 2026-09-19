@@ -167,12 +167,12 @@ describe("Stripe-backed cash conversion normalization", () => {
     await expect(resolveStripeConversion(f.reader, "refund", "re_fixture", "org_fixture", "test")).rejects.toMatchObject({ code: "refund_not_succeeded" });
   });
 
-  it("holds refunds with inconsistent original charge, amount or timestamp", async () => {
-    const f = fixture(); f.refund.amount = 20_000;
-    await expect(resolveStripeConversion(f.reader, "refund", "re_fixture", "org_fixture", "test")).rejects.toMatchObject({ code: "invalid_refund_amount_or_time" });
+  it.each(["re_fixture", "pyr_fixture"])("holds %s with inconsistent original charge, amount or timestamp", async (reference) => {
+    const f = fixture(); f.refund.id = reference; f.refund.amount = 20_000;
+    await expect(resolveStripeConversion(f.reader, "refund", reference, "org_fixture", "test")).rejects.toMatchObject({ code: "invalid_refund_amount_or_time" });
     f.refund.amount = 1000; f.refund.created = f.charge.created - 1;
-    await expect(resolveStripeConversion(f.reader, "refund", "re_fixture", "org_fixture", "test")).rejects.toMatchObject({ code: "invalid_refund_amount_or_time" });
+    await expect(resolveStripeConversion(f.reader, "refund", reference, "org_fixture", "test")).rejects.toMatchObject({ code: "invalid_refund_amount_or_time" });
     f.refund.created = f.charge.created + 1; f.refund.charge = "ch_other";
-    await expect(resolveStripeConversion(f.reader, "refund", "re_fixture", "org_fixture", "test")).rejects.toMatchObject({ code: "refund_payment_mismatch" });
+    await expect(resolveStripeConversion(f.reader, "refund", reference, "org_fixture", "test")).rejects.toMatchObject({ code: "refund_payment_mismatch" });
   });
 });
