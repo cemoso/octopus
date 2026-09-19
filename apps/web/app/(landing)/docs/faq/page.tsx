@@ -60,7 +60,7 @@ const integrationFaqs = [
   },
   {
     q: "Does using self-hosted Forgejo keep my code on my server?",
-    a: <>Forgejo hosts your repositories. Octopus reads their contents for indexing and reviews, and your configured AI services process code and review context. Octopus Cloud connects to public HTTPS instances. For private LAN or VPN instances, run self-hosted Octopus on the network and explicitly allow the instance origin. Use local AI services if processing must stay on your network. See the <Link href="/docs/integrations#forgejo" className="text-white underline">Forgejo setup guide</Link>.</>,
+    a: <>Forgejo hosts your repositories. Octopus reads their contents for indexing and reviews, and your configured AI services process code and review context. Choose a direct public HTTPS connection to Octopus Cloud, a local connector for Octopus Cloud with private LAN/VPN access, or direct access from self-hosted Octopus. The connector keeps Forgejo private, but sends code and review context to Octopus Cloud. Use self-hosted Octopus and local AI services if processing must stay on your network. See the <Link href="/docs/integrations#forgejo" className="text-white underline">Forgejo setup guide</Link>.</>,
   },
   {
     q: "Can I connect Octopus to Slack?",

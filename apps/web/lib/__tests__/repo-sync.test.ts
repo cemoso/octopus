@@ -13,7 +13,8 @@ let repoInstallations: Array<{ installationId: number | null }> = [];
 let existingRows: Record<string, ExistingRow[]> = { github: [], bitbucket: [], gitlab: [] };
 let bitbucket: { workspaceSlug: string } | null = null;
 let gitlab: { namespacePath: string; webhookSecret: string | null } | null = null;
-let forgejo: { id: string; forgejoHost: string; accessTokenEnc: string } | null = null;
+let forgejo: { id: string; forgejoHost: string; accessTokenEnc: string; connectorError?: string; organization?: { bannedAt: Date | null; deletedAt: Date | null } } | null = null;
+let afterForgejoListing: () => void = () => {};
 let forgejoRepos: Array<Loose> = [];
 let forgejoListingError: Error | null = null;
 let forgejoDisconnectDuringListing = false;
@@ -49,7 +50,7 @@ const prisma = {
   },
   bitbucketIntegration: { findUnique: mock(async () => bitbucket) },
   gitlabIntegration: { findUnique: mock(async () => gitlab) },
-  forgejoIntegration: { findUnique: mock(async () => forgejo) },
+  forgejoIntegration: { findUnique: mock(async () => forgejo ? { ...forgejo, organization: forgejo.organization ?? { bannedAt: null, deletedAt: null } } : null) },
 };
 mock.module("@octopus/db", () => ({ prisma }));
 
@@ -89,6 +90,7 @@ mock.module("@/lib/forgejo", () => ({
   listUserRepos: mock(async () => {
     if (forgejoListingError) throw forgejoListingError;
     if (forgejoDisconnectDuringListing) forgejo = null;
+    afterForgejoListing();
     return forgejoRepos;
   }),
 }));
@@ -130,6 +132,7 @@ describe("syncOrgRepos", () => {
     forgejoRepos = [];
     forgejoListingError = null;
     forgejoDisconnectDuringListing = false;
+    afterForgejoListing = () => {};
     ghRepos = {};
     bbRepos = [];
     glProjects = [];
@@ -190,6 +193,22 @@ describe("syncOrgRepos", () => {
     await syncOrgRepos("org_1", { source: "manual" });
     expect(upserts).toHaveLength(0);
     expect(updateManys).toHaveLength(0);
+  });
+
+  it("does not activate Forgejo repositories when the connector pauses or organization closes during discovery", async () => {
+    orgRow = { githubInstallationId: null };
+    forgejoRepos = [{ ...gh(1, "active"), permissions: { admin: true } }];
+    for (const state of ["paused", "banned", "deleted"] as const) {
+      forgejo = { id: "forge_1", forgejoHost: "https://forge.example.com", accessTokenEnc: "encrypted" };
+      afterForgejoListing = () => {
+        if (state === "paused") forgejo = { ...forgejo!, connectorError: "Write result unknown" };
+        else forgejo = { ...forgejo!, organization: { bannedAt: state === "banned" ? new Date() : null, deletedAt: state === "deleted" ? new Date() : null } };
+      };
+      const result = await syncOrgRepos("org_1", { source: "manual" });
+      expect(result.providers).toEqual([]);
+      expect(upserts).toHaveLength(0);
+      expect(updateManys).toHaveLength(0);
+    }
   });
 
   it("never resurrects a repository the user removed, and never deactivates dismissed rows", async () => {

@@ -23,7 +23,7 @@ import {
 export const metadata = {
   title: "Getting Started | Octopus Docs",
   description:
-    "Connect your repo in two minutes and get AI code reviews on every pull request. Step-by-step setup guide for GitHub, GitLab, Bitbucket, and Forgejo, with examples.",
+    "Connect your repository and get AI code reviews on pull requests. Step-by-step setup guide for GitHub, GitLab, Bitbucket, and Forgejo, with examples.",
   alternates: {
     canonical: "https://octopus-review.ai/docs/getting-started",
   },
@@ -134,7 +134,7 @@ export default function GettingStartedPage() {
           <ProviderCard
             icon={<IconServer className="size-5" />}
             name="Forgejo"
-            description="Connect with a personal access token and repository webhooks. Private LAN/VPN instances need self-hosted Octopus on that network."
+            description="Choose Cloud with public HTTPS, Cloud with a local connector for private LAN/VPN access, or self-hosted Octopus with direct access."
           />
         </div>
         <Paragraph>

@@ -250,7 +250,7 @@ export default async function LandingPage() {
                 <Link href="/docs/integrations#forgejo" className="text-[#10D8BE] underline underline-offset-4">
                   Connect your Forgejo instance
                 </Link>{" "}
-                with a personal access token and repository webhooks.
+                through public HTTPS, a local connector for Cloud with private LAN/VPN access, or your own Octopus deployment.
               </p>
             </div>
 

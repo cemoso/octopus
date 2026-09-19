@@ -7,7 +7,7 @@ import { Tabs } from "./tabs";
 export const metadata = {
   title: "Self-Hosting — Octopus Docs",
   description:
-    "Deploy Octopus on your own infrastructure with Docker. Full setup guide, environment variables, and a production checklist for air-gapped deployments.",
+    "Deploy Octopus on your own infrastructure with Docker. Setup instructions, environment variables, AI services, and private Forgejo network requirements.",
   alternates: {
     canonical: "https://octopus-review.ai/docs/self-hosting",
   },
@@ -202,8 +202,8 @@ bun run start`}</CodeBlock>
           Self-Hosting
         </h1>
         <p className="mt-3 text-lg text-[#888]">
-          Deploy Octopus on your own infrastructure. Your code never leaves your
-          servers.
+          Deploy Octopus on your own infrastructure and choose the AI services
+          that process your code. External AI services receive code when configured.
         </p>
       </div>
 
@@ -340,10 +340,15 @@ DATABASE_URL=postgresql://octopus:octopus@localhost:43332/octopus bunx prisma mi
         </ol>
       </Section>
 
-      <Section id="forgejo" title="Forgejo setup, including private LAN and VPN">
+      <Section id="forgejo" title="Self-hosted Octopus + private Forgejo: direct connection">
         <Paragraph>
-          In Settings → Integrations, connect your HTTPS Forgejo instance
-          with a personal access token. Configure a signed pull request webhook
+          These steps apply when you run Octopus yourself. For Octopus Cloud
+          with a private LAN/VPN instance, use the{" "}
+          <Link href="/docs/integrations#forgejo-cloud-private" className="text-cyan-400 underline">
+            local connector setup
+          </Link>{" "}
+          instead. In your own Octopus Settings → Integrations, connect your
+          HTTPS Forgejo instance with a personal access token. Configure a signed pull request webhook
           for each repository using the URL and secret shown in Octopus. See{" "}
           <Link href="/docs/integrations#forgejo" className="text-cyan-400 underline">
             the Forgejo setup guide
@@ -365,7 +370,10 @@ DATABASE_URL=postgresql://octopus:octopus@localhost:43332/octopus bunx prisma mi
         <Paragraph>
           Configure the same allowlist on the web application and review workers.
           Both need routes and DNS access to Forgejo; Forgejo must also be able to
-          deliver webhooks to Octopus. Restart those processes after changing the
+          deliver webhooks to Octopus. If the webhook target is private, add its
+          exact hostname or IP to Forgejo&apos;s <Mono>[webhook] ALLOWED_HOST_LIST</Mono>,
+          preserving existing entries. Forgejo&apos;s default <Mono>external</Mono>
+          setting blocks private destinations. Restart those processes after changing the
           environment. Private network access alone does not authorize a host;
           its origin must be listed explicitly.
         </Paragraph>

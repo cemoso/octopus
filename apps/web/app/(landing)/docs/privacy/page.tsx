@@ -60,8 +60,11 @@ export default function PrivacyPage() {
         <P>
           A self-hosted Forgejo repository follows the same review data flow:
           Octopus reads its contents and sends relevant code to the configured
-          AI services. Hosting Forgejo yourself does not keep Octopus Cloud
-          processing on your Forgejo server.
+          AI services. This applies to both a direct public HTTPS connection and
+          a local connector for private LAN/VPN access. The connector keeps the
+          Forgejo personal access token on your machine, but sends repository
+          contents and review context to Octopus Cloud. Hosting Forgejo yourself
+          does not keep Cloud review processing on your network.
         </P>
 
         <H3>Usage Data</H3>

@@ -121,6 +121,11 @@ export async function startQueue(): Promise<PgBoss> {
     expireInSeconds: 1800, // 30 min hard cap per attempt
   }).catch(() => {});
 
+  await boss.createQueue("cleanup-forgejo-connector", {
+    retryLimit: 1,
+    expireInSeconds: 60,
+  });
+
   // Daily audit-log retention (scheduled in instrumentation.ts, worked in
   // queue-workers.ts). pg-boss v12 requires the queue to exist before
   // schedule()/work() — without this the cron silently no-ops.

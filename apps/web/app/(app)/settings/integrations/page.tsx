@@ -120,7 +120,7 @@ export default async function IntegrationsPage({
       .catch(() => null),
     prisma.forgejoIntegration.findUnique({
       where: { organizationId: orgId },
-      select: { id: true, forgejoHost: true, username: true, ...(canManage ? { webhookSecret: true } : {}) },
+      select: { id: true, forgejoHost: true, username: true, connectorTokenHash: true, connectorLastSeenAt: true, connectorError: true, ...(canManage ? { webhookSecret: true } : {}) },
     }),
   ]);
 
@@ -145,7 +145,14 @@ export default async function IntegrationsPage({
         data={gitlabIntegration}
         redirectUri={process.env.GITLAB_REDIRECT_URI ?? null}
       />
-      <ForgejoIntegrationCard data={forgejoIntegration} canManage={canManage} appUrl={process.env.BETTER_AUTH_URL ?? null} />
+      <ForgejoIntegrationCard data={forgejoIntegration ? {
+        id: forgejoIntegration.id, forgejoHost: forgejoIntegration.forgejoHost,
+        username: forgejoIntegration.username,
+        ...(canManage ? { webhookSecret: forgejoIntegration.webhookSecret } : {}),
+        connectionMode: forgejoIntegration.connectorTokenHash ? "connector" : "direct",
+        connectorLastSeenAt: forgejoIntegration.connectorLastSeenAt?.toISOString() ?? null,
+        connectorError: forgejoIntegration.connectorError,
+      } : null} canManage={canManage} selfHosted={selfHosted} appUrl={process.env.BETTER_AUTH_URL ?? null} />
       <SlackIntegrationCard data={slackIntegration} />
       <LinearIntegrationCard data={linearIntegration} />
       <JiraIntegrationCard data={jiraIntegration} />

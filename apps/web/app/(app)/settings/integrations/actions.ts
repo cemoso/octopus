@@ -10,6 +10,8 @@ import { prisma } from "@octopus/db";
 import { hasOrgPermission } from "@/lib/org-permissions";
 import { decryptStringMaybeLegacy, encryptString } from "@/lib/crypto";
 import { validateForgejoConnection } from "@/lib/forgejo";
+import { normalizeForgejoHost as normalizeConnectorHost } from "@octopus/forgejo-connector/http";
+import { createConnectorToken, hashConnectorToken } from "@/lib/forgejo-connector";
 import { normalizeForgejoHost } from "@/lib/forgejo-http";
 import { syncForgejoRepos } from "@/lib/repo-sync";
 
@@ -49,6 +51,7 @@ export async function connectForgejo(formData: FormData): Promise<{ error?: stri
   try {
     const host = normalizeForgejoHost(rawHost);
     const existing = await prisma.forgejoIntegration.findUnique({ where: { organizationId: ctx.orgId } });
+    if (existing?.connectorTokenHash) return { error: "Disconnect the private connector before changing to a direct connection." };
     if (existing && existing.forgejoHost !== host) {
       return { error: "Disconnect your current Forgejo instance before connecting another host." };
     }
@@ -76,9 +79,66 @@ export async function connectForgejo(formData: FormData): Promise<{ error?: stri
       });
     });
   } catch {
-    return { error: "Could not connect to Forgejo. Check the HTTPS URL, network access, token and read:user, write:repository and write:issue permissions. Private instances require a self-hosted Octopus operator to enable access." };
+    return { error: "Could not connect to Forgejo. Check the HTTPS URL, network access, token and read:user, write:repository and write:issue permissions. For private LAN/VPN, choose the local connector or configure direct access on self-hosted Octopus." };
   }
   return syncForgejo();
+}
+
+/** Connector tokens authorize only this integration's API requests, never an org API. */
+export async function createForgejoConnector(formData: FormData): Promise<{ error?: string; connectorToken?: string }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  const rawHost = formData.get("host");
+  if (typeof rawHost !== "string" || rawHost.length > 2048) return { error: "Enter your Forgejo HTTPS origin." };
+  try {
+    // Syntax/address validation only. Cloud never resolves or connects to this private host.
+    const forgejoHost = normalizeConnectorHost(rawHost, { allowPrivate: true });
+    const connectorToken = createConnectorToken();
+    await prisma.forgejoIntegration.create({ data: {
+      organizationId: ctx.orgId, forgejoHost, username: "", accessTokenEnc: null,
+      connectorTokenHash: hashConnectorToken(connectorToken), webhookSecret: randomBytes(32).toString("hex"),
+    } });
+    revalidatePath("/settings/integrations");
+    return { connectorToken };
+  } catch {
+    return { error: "Could not create the connector. Use an HTTPS origin and disconnect any existing Forgejo connection first. Loopback and link-local addresses are not supported." };
+  }
+}
+
+export async function rotateForgejoConnector(integrationId: string): Promise<{ error?: string; connectorToken?: string }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  const connectorToken = createConnectorToken();
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integrationId} AND "organizationId" = ${ctx.orgId} FOR UPDATE`;
+    const integration = await tx.forgejoIntegration.findFirst({ where: { id: integrationId, organizationId: ctx.orgId, connectorTokenHash: { not: null } } });
+    if (!integration) return { error: "This connector is no longer connected." };
+    const pendingWrite = await tx.forgejoConnectorRequest.findFirst({ where: { integrationId, method: { not: "GET" }, OR: [{ status: { in: ["leased", "completed"] } }, { status: "uncertain", leaseExpiresAt: { gt: new Date() } }] }, select: { id: true } });
+    if (pendingWrite) return { error: "A Forgejo write is still awaiting a result. Wait for it to finish, or check Forgejo and resume the paused connector before rotating." };
+    await tx.forgejoConnectorRequest.deleteMany({ where: { integrationId } });
+    await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorTokenHash: hashConnectorToken(connectorToken), connectorLastSeenAt: null } });
+    return { connectorToken };
+  });
+  revalidatePath("/settings/integrations");
+  return result;
+}
+
+export async function resumeForgejoConnector(integrationId: string): Promise<{ error?: string }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  const result = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integrationId} AND "organizationId" = ${ctx.orgId} FOR UPDATE`;
+    const integration = await tx.forgejoIntegration.findFirst({ where: { id: integrationId, organizationId: ctx.orgId, connectorTokenHash: { not: null } } });
+    if (!integration) return { error: "This connector is no longer connected." };
+    if (!integration.connectorError) return { error: "This connector is not paused." };
+    const active = await tx.forgejoConnectorRequest.findFirst({ where: { integrationId, status: { in: ["leased", "uncertain"] }, leaseExpiresAt: { gt: new Date() } }, select: { id: true } });
+    if (active) return { error: "A connector request is still running. Wait 30 seconds, then check Forgejo again before resuming." };
+    await tx.forgejoConnectorRequest.deleteMany({ where: { integrationId } });
+    await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorError: null } });
+    return {};
+  });
+  revalidatePath("/settings/integrations");
+  return result;
 }
 
 export async function syncForgejo(): Promise<{ error?: string; synced?: number }> {
@@ -102,7 +162,8 @@ export async function disconnectForgejo(): Promise<{ error?: string }> {
   const ctx = await getAdminOrg();
   if (!ctx) return { error: "Insufficient permissions." };
   await prisma.$transaction(async (tx) => {
-    // Delete first to serialize against sync's integration row lock.
+    // Serialize with sync and connector claim/result before revoking credentials.
+    await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "organizationId" = ${ctx.orgId} FOR UPDATE`;
     await tx.forgejoIntegration.deleteMany({ where: { organizationId: ctx.orgId } });
     await tx.repository.updateMany({
       where: { organizationId: ctx.orgId, provider: "forgejo" },

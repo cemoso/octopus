@@ -1,3 +1,4 @@
+import { cleanupForgejoConnectorRequests } from "./forgejo-connector";
 import type { PgBoss } from "pg-boss";
 import { sendWelcomeEmail } from "./emails/welcome";
 import { processReview } from "./reviewer";
@@ -110,6 +111,10 @@ export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promis
       }
     },
   );
+
+  await boss.work("cleanup-forgejo-connector", async () => {
+    await cleanupForgejoConnectorRequests();
+  });
 
   // Daily audit-log retention job — scheduled in instrumentation.ts via
   // boss.schedule(); the worker registered here executes a triggered run.

@@ -42,7 +42,7 @@ const faqs = [
   },
   {
     q: "Can Octopus review repositories on Forgejo?",
-    a: "Yes. Connect your HTTPS Forgejo instance with a personal access token and configure signed pull request webhooks. Octopus Cloud connects to public instances; private LAN/VPN instances need self-hosted Octopus with network access and an explicit allowed origin. Octopus posts review comments and commit statuses. Repository hosting stays with your Forgejo instance; Octopus and the configured AI services process code for reviews. See the integrations guide for setup.",
+    a: "Yes. Choose Octopus Cloud with a direct public HTTPS connection, Octopus Cloud with a local connector for private LAN/VPN access, or self-hosted Octopus with direct network access. All three use a Forgejo personal access token and signed repository webhooks. Octopus posts review comments and commit statuses. With either Cloud option, Octopus Cloud and your configured AI services process code for reviews. The integrations guide has separate steps for each connection.",
   },
   {
     q: "What are the main differences in approach?",

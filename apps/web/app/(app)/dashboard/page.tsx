@@ -208,10 +208,11 @@ export default async function DashboardPage({
     select: { namespaceName: true },
   });
   const gitlabConnected = !!gitlabIntegration;
-  const forgejoConnected = !!(await prisma.forgejoIntegration.findUnique({
+  const forgejoIntegration = await prisma.forgejoIntegration.findUnique({
     where: { organizationId: org.id },
-    select: { id: true },
-  }));
+    select: { username: true },
+  });
+  const forgejoConnected = Boolean(forgejoIntegration?.username);
   const bannerDismissed = cookieStore.get("providers_banner_dismissed")?.value === "1";
 
   // Connect-first empty state: an org with no provider and no repos gets one

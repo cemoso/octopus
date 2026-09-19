@@ -27,7 +27,7 @@ const RETENTION: RetentionRow[] = [
     category: "Diffs",
     what: "PR diff content used for a single review",
     retention: "Discarded after the review completes",
-    notes: "Never persisted to durable storage.",
+    notes: "Private Forgejo connector responses can temporarily include diffs in the encrypted transport queue described below.",
   },
   {
     category: "Embeddings",
@@ -49,9 +49,15 @@ const RETENTION: RetentionRow[] = [
   },
   {
     category: "Integration tokens",
-    what: "OAuth refresh tokens for Slack / Linear / Jira / GitLab and Forgejo personal access tokens",
+    what: "OAuth refresh tokens for Slack / Linear / Jira / GitLab and direct-connection Forgejo personal access tokens",
     retention: "Until the user disconnects the integration",
-    notes: "Stored encrypted at rest (apps/web/lib/crypto.ts).",
+    notes: "Stored encrypted at rest. For the private Forgejo connector, the Forgejo token stays on the connector machine; Octopus stores a hash of its separate connector credential. Disconnecting revokes connector access. Remove the local credentials and revoke the Forgejo token too.",
+  },
+  {
+    category: "Forgejo connector transport",
+    what: "Encrypted queued API requests and responses, including repository content and diffs",
+    retention: "Consumed responses are deleted; requests expire after 60 seconds",
+    notes: "Cleanup runs during connector activity and in a worker job scheduled every minute. Uncertain-write request content is cleared when the connection is paused; residual request metadata is eligible for deletion after five minutes. Worker outages can delay cleanup. Database backups follow the separate backup retention window.",
   },
   {
     category: "Sessions",
@@ -103,7 +109,7 @@ export default function DataRetentionPage() {
           Compliance
         </div>
         <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Data Retention</h1>
-        <p className="mt-3 text-sm text-[#555]">Last updated: August 2026</p>
+        <p className="mt-3 text-sm text-[#555]">Last updated: September 2026</p>
       </div>
 
       <P>

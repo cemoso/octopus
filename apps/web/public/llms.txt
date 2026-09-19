@@ -17,7 +17,7 @@ Octopus is a source-available (Modified MIT) AI code review platform. It connect
 
 - GitHub App (recommended on cloud): automatic reviews on every pull request
 - GitLab and Bitbucket integrations
-- Forgejo: connect an HTTPS instance using a personal access token, then configure signed pull request webhooks: https://octopus-review.ai/docs/integrations#forgejo
+- Forgejo: choose Cloud + public HTTPS (direct), Cloud + private LAN/VPN (local outbound connector), or self-hosted Octopus + private LAN/VPN (direct). Setup chooser: https://octopus-review.ai/docs/integrations#forgejo
 - GitHub Action for CI-triggered reviews: https://octopus-review.ai/docs/github-action
 - CLI `octp` for local and terminal workflows: https://octopus-review.ai/docs/cli
 - Claude Code integration (review from the agent): https://octopus-review.ai/docs/cli/claude-code-integration
@@ -25,7 +25,7 @@ Octopus is a source-available (Modified MIT) AI code review platform. It connect
 - Slack (ask questions about your codebase), Linear and Jira (create issues from findings): https://octopus-review.ai/docs/integrations
 - Self-hosting with Docker Compose: https://octopus-review.ai/docs/self-hosting
 
-Forgejo repositories remain on your instance, but Octopus and your configured AI services process code for reviews. Self-hosting Forgejo does not keep Octopus Cloud processing on your network. Octopus Cloud connects to public HTTPS instances. Private LAN/VPN instances require self-hosted Octopus with network access and an explicit FORGEJO_ALLOWED_PRIVATE_ORIGINS allowlist. Native CLI agent setup remains GitHub-only. Private setup: https://octopus-review.ai/docs/self-hosting#forgejo
+Forgejo repositories remain on your instance, but Octopus and your configured AI services process code for reviews. Self-hosting Forgejo does not keep Octopus Cloud processing on your network. Octopus Cloud connects directly to public HTTPS instances or uses a local outbound connector for private LAN/VPN instances. The connector keeps Forgejo private; code and review context still reach Octopus Cloud and configured AI services. Self-hosted Octopus can instead connect directly over the LAN/VPN with network access and an explicit FORGEJO_ALLOWED_PRIVATE_ORIGINS allowlist. Native CLI agent setup remains GitHub-only. Cloud private setup: https://octopus-review.ai/docs/integrations#forgejo-cloud-private. Self-hosted direct setup: https://octopus-review.ai/docs/self-hosting#forgejo
 
 ## Pricing
 

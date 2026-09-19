@@ -27,13 +27,13 @@ Octopus is a source-available, AI-powered code review tool.`,
       },
       {
         heading: "How It Works",
-        text: `Step 1: Connect your repository. Use the GitHub App, GitLab or Bitbucket OAuth, or a Forgejo personal access token and signed repository webhooks.
+        text: `Step 1: Connect your repository. Use the GitHub App, GitLab or Bitbucket OAuth, or Forgejo. For Forgejo choose Cloud + public HTTPS (direct), Cloud + private LAN/VPN (local connector), or self-hosted Octopus + private LAN/VPN (direct). All Forgejo connections use a personal access token and signed repository webhooks.
 Step 2: AI Learns Your Code — Octopus indexes your codebase, creating vector embeddings of your code chunks. It understands your architecture, patterns, and conventions.
 Step 3: Reviews on Autopilot — Every pull request is automatically reviewed. Octopus posts findings as inline comments with severity levels: Critical, Major, Minor, Suggestion, and Tip.`,
       },
       {
         heading: "Cloud or Self-Host",
-        text: `Two ways to run Octopus. Cloud: a managed service with reviews for GitHub, GitLab, Bitbucket and Forgejo. Free credits to start, then usage-based pricing. Self-host: run Octopus with Docker Compose on your own infrastructure. It is free and source-available (Modified MIT License). You choose the AI services; external services receive code for processing. Use local services when processing must stay on your network.`,
+        text: `Two ways to run Octopus. Cloud: a managed service with reviews for GitHub, GitLab, Bitbucket and Forgejo. Forgejo can connect directly over public HTTPS or through a local connector for private LAN/VPN access. The connector and Forgejo both need outbound HTTPS to Cloud. Free credits to start, then usage-based pricing. Self-host: run Octopus with Docker Compose on your own infrastructure. It is free and source-available (Modified MIT License). You choose the AI services; external services receive code for processing. Use local services when processing must stay on your network.`,
       },
       {
         heading: "Stats",
@@ -94,7 +94,7 @@ Works With Your Tools: GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear, Jira. 
 GitHub: Install the GitHub App, select repositories, and you're ready to go.
 GitLab: Connect via OAuth and Octopus automatically manages webhooks for merge requests.
 Bitbucket: Connect via OAuth and Octopus automatically manages webhooks.
-Forgejo: Connect an HTTPS instance using a personal access token, then configure signed pull request webhooks for each repository. Instructions: /docs/integrations#forgejo.
+Forgejo: Choose Cloud + public HTTPS (direct), Cloud + private LAN/VPN (local connector), or self-hosted Octopus + private LAN/VPN (direct). Use the matching personal access token and signed webhook steps at /docs/integrations#forgejo.
 Once connected, Octopus indexes your codebase. It chunks your code, creates embeddings, and builds a searchable representation of your entire project.`,
       },
       {
@@ -261,8 +261,17 @@ Features: PR reviews via webhook, inline comments, automatic webhook management.
 Octopus manages the webhook lifecycle — no manual setup needed.`,
       },
       {
-        heading: "Forgejo",
-        text: `Forgejo connects through an HTTPS instance and personal access token. For authoritative token scopes, repository permissions, signed webhook setup and automatic/manual review rules, see /docs/integrations#forgejo. For private LAN/VPN access and operator configuration, see /docs/self-hosting#forgejo. Native CLI agent setup remains GitHub-only.`,
+        heading: "Forgejo connection options",
+        text: `Choose one of three setups at /docs/integrations#forgejo:
+1. Octopus Cloud + public HTTPS: direct connection with a personal access token stored encrypted in Octopus. /docs/integrations#forgejo-cloud-public.
+2. Octopus Cloud + private LAN/VPN: run the local outbound connector on a machine with private Forgejo access. Forgejo stays private; its personal access token stays on the connector machine. Both the connector and Forgejo need outbound HTTPS to octopus-review.ai on port 443. The connector handles API requests, and Forgejo sends signed webhooks directly to Cloud. No public Forgejo address, tunnel or connector inbound port is needed. Code and review context still reach Cloud and the configured AI services. /docs/integrations#forgejo-cloud-private.
+3. Self-hosted Octopus + private LAN/VPN: connect directly from your own Octopus web application and review workers. Both need network/DNS access and FORGEJO_ALLOWED_PRIVATE_ORIGINS with exact HTTPS origins; see /docs/self-hosting#forgejo. No connector is required.
+All modes use a dedicated Forgejo account with repository admin access, not instance administrator access. Token scopes: read:user, write:repository, write:issue. For private repositories choose All (public, private, and limited), limiting repository access through the bot account. Specific repositories tokens cannot include read:user. One Forgejo instance per Octopus organization; only repositories administered by the account sync. Configure signed Pull Request webhooks using the URL and secret in Settings; enable Issue Comment events for @octopus or /octopus PR commands. Token, webhook and automatic/manual event details: /docs/integrations#forgejo. Native CLI agent setup remains GitHub-only.`,
+      },
+      {
+        heading: "Forgejo private connector setup",
+        text: `In Octopus Cloud Settings > Integrations > Forgejo, select Private network connector, enter the exact HTTPS Forgejo origin and create the one-time connector credential. On the private network machine, configure OCTOPUS_URL=https://octopus-review.ai, OCTOPUS_CONNECTOR_TOKEN, FORGEJO_URL and FORGEJO_TOKEN in a protected connector.env file (chmod 600). Run the connector image ghcr.io/octopusreview/octopus-selfhost:forgejo-connector-1.2.0 with --env-file connector.env, --restart unless-stopped, --stop-timeout 120 and --read-only; publish no ports. Container DNS/VPN routes must reach Forgejo, not just the host browser. Verified HTTPS is required; localhost, loopback, link-local, metadata addresses, redirects and HTTP are blocked. For an internal CA, set NODE_EXTRA_CA_CERTS to a mounted trusted PEM file and keep certificate verification enabled. Refresh status in Octopus, wait for online, sync repositories, then add webhooks targeting the Cloud URL directly and enable automatic reviews. Keep the connector running for indexing and reviews.
+Rotating the connector credential invalidates the old one; update the local configuration and restart. Docker users must recreate the container with the env file; docker restart does not reload it. An uncertain write result pauses the connector; inspect Forgejo before selecting Resume after checking Forgejo. The uncertain write is not automatically replayed. Disconnecting deactivates repositories. Remove webhooks and revoke the Forgejo token too. This connection needs internet access and does not keep Cloud review processing on your network. Full setup: /docs/integrations#forgejo-cloud-private.`,
       },
       {
         heading: "Jira",
@@ -309,7 +318,7 @@ The self-host compose file includes PostgreSQL and Qdrant containers.`,
       },
       {
         heading: "Environment Variables",
-        text: `Configure DATABASE_URL, QDRANT_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL, and your embedding/review AI services. GitHub App credentials are needed only when connecting GitHub repositories. Forgejo uses an instance URL and token entered in Settings > Integrations, plus repository webhooks.
+        text: `Configure DATABASE_URL, QDRANT_URL, BETTER_AUTH_SECRET, BETTER_AUTH_URL, and your embedding/review AI services. GitHub App credentials are needed only when connecting GitHub repositories. For a direct Forgejo connection, enter the instance URL and token in Settings > Integrations and add repository webhooks. Self-hosted Octopus can reach private Forgejo through FORGEJO_ALLOWED_PRIVATE_ORIGINS configured on both web and review workers. Cloud users with private Forgejo instead use the local connector described at /docs/integrations#forgejo-cloud-private.
 Optional: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET (for GitHub login), COHERE_API_KEY (for re-ranking), GOOGLE_API_KEY (Gemini models), STRIPE_SECRET_KEY (for billing).
 The self-hosting docs page includes an interactive env generator.`,
       },
@@ -370,7 +379,7 @@ A: Octopus sends code to configured AI services for indexing and reviews. Check 
       {
         heading: "Integrations",
         text: `Q: Which Git platforms are supported?
-A: GitHub, GitLab, Bitbucket, and Forgejo. GitLab supports both GitLab.com and self-managed instances. Forgejo uses an HTTPS instance, a personal access token and signed repository webhooks. See /docs/integrations#forgejo.
+A: GitHub, GitLab, Bitbucket, and Forgejo. GitLab supports both GitLab.com and self-managed instances. Forgejo supports Cloud + public HTTPS (direct), Cloud + private LAN/VPN (local connector), or self-hosted Octopus + private LAN/VPN (direct). All use an HTTPS instance, a personal access token and signed repository webhooks. See /docs/integrations#forgejo.
 
 Q: Does Octopus work with Slack?
 A: Yes. Use the /octopus command to ask questions about your codebase. You also receive notifications for review events.

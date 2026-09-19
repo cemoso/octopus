@@ -1,83 +1,67 @@
-# Forgejo launch content audit
+# Forgejo connection content audit
 
-Date: 19 September 2026. Baseline: `origin/master` at `8c73c57`.
+Updated: 19 September 2026. Connector baseline: v1.1.0, commit `85d94b190b25a681a0c289af7a94744b8ee4b3c8`.
 
-This audit covers current website copy, onboarding emails, help content and machine-readable product descriptions. The changes describe the Forgejo integration in this branch. They do not establish a deployed release or an authenticated end-to-end review against a real Forgejo installation.
+This audit covers the repository's current website, onboarding emails, help content and machine-readable descriptions. It tracks the v1.2.0 connector changes separately from the direct Forgejo integration shipped in v1.1.0. Source changes and local validation do not establish a deployed release or a completed review against a user's Forgejo installation.
 
-## Supported connection described in the copy
+## The three connection paths
 
-The [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo) owns connection, webhook and review-event instructions. The [private-network setup guide](https://octopus-review.ai/docs/self-hosting#forgejo) owns operator configuration and network requirements. Native CLI agent onboarding remains GitHub-only.
+The [Forgejo setup chooser](https://octopus-review.ai/docs/integrations#forgejo) is the canonical entry point. It separates these paths before giving credentials or webhook instructions:
 
-## Essential launch content updated
+| Path | Forgejo access | Forgejo personal access token | Webhook destination |
+| --- | --- | --- | --- |
+| [Octopus Cloud + public HTTPS](https://octopus-review.ai/docs/integrations#forgejo-cloud-public) | Cloud connects directly to a public HTTPS origin | Encrypted in Octopus | Octopus Cloud |
+| [Octopus Cloud + private LAN/VPN](https://octopus-review.ai/docs/integrations#forgejo-cloud-private) | Local connector polls Cloud outward and accesses its configured private HTTPS origin | Stays on the connector machine | Forgejo sends directly to Octopus Cloud over outbound HTTPS |
+| [Self-hosted Octopus + private LAN/VPN](https://octopus-review.ai/docs/integrations#forgejo-self-hosted) | Web and review workers connect directly with matching routes, DNS and explicit allowed origins | Encrypted in the user's Octopus deployment | The user's Octopus deployment |
 
-Paths and line references below point to this branch; later code edits may move lines.
+The Cloud connector opens no listener and needs no tunnel or public Forgejo URL. Both the connector and Forgejo need outbound HTTPS to Octopus Cloud. Container routing and DNS must work independently of access from the operator's browser. Cloud options send code and review context to Octopus Cloud and configured AI services. The connector does not keep review processing on the private network.
 
-| Surface | Source | Change |
+The [self-hosting guide](https://octopus-review.ai/docs/self-hosting#forgejo) owns direct private-network operator configuration. It links Cloud users back to the connector path. Native CLI agent onboarding remains GitHub-only.
+
+## Current content inventory
+
+| Surface | Source | Result |
 | --- | --- | --- |
-| Homepage | `apps/web/app/(landing)/page.tsx:36`, `:67`, `:80`, `:249`, `:270` | Provider list, product JSON-LD, visible Forgejo setup link and cloud features. Qualified local-processing claims. |
-| SEO and social previews | `apps/web/app/layout.tsx:34`, `:43`, `:59`, `:73` | Description, Forgejo keyword, Open Graph and Twitter copy. |
-| Shared structured data | `apps/web/lib/structured-data.ts:34`, `:92` | Organization and product/pricing descriptions. |
-| Sign-in product panel | `apps/web/app/(auth)/login/login-content.tsx:69` | Forgejo in review-provider list, setup-aware onboarding copy and a data-retention link. Sign-in methods are unchanged. |
-| Adjacent connection dialogs | `apps/web/components/dashboard/providers-banner.tsx`; `apps/web/app/(app)/settings/integrations/gitlab-integration-card.tsx`; `bitbucket-integration-card.tsx` in the same directory | Removed four inaccurate "we never store your code" promises; dialogs now state that Octopus accesses repository content for indexing and posts review comments. |
-| Setup instructions | `apps/web/app/(landing)/docs/integrations/page.tsx:157` | `/docs/integrations#forgejo`: token scopes, admin access, manual signed webhooks, public/private connection choices and processing location. |
-| Quickstart | `apps/web/app/(landing)/docs/getting-started/page.tsx:26`, `:91`, `:110`, `:133` | Fourth provider card and accurate setup method. Generic cloud entry no longer sends every user to GitHub App installation. |
-| FAQ | `apps/web/app/(landing)/docs/faq/page.tsx:17`, `:40`, `:59`, `:62` | Provider coverage and a direct answer about self-hosted Forgejo versus where code is processed. |
-| Self-hosting and private-network setup | `apps/web/app/(landing)/docs/self-hosting/page.tsx:161`, `:268`, `:278`, `:341`; `env-generator.tsx:43` in the same directory | Forgejo instructions, exact-origin allowlist, worker/network/DNS requirements and trusted internal CA setup; GitHub credentials apply only to GitHub. |
-| Environment examples | `.env.example:71`; `apps/web/app/(landing)/docs/self-hosting/env-generator.tsx:53` | Optional private Forgejo origin allowlist and CA file settings, with the build-time image mode or alternative runtime server flag. |
-| Mobile docs header | `apps/web/app/(landing)/docs/layout.tsx:29` | Browser QA found the existing header CTA extending to 453px at a 390px viewport. Reduced mobile spacing and hid the redundant brand word on small screens; the logo keeps its accessible name. Desktop layout is unchanged. |
-| Help search | `apps/web/app/(landing)/docs/docs-search.tsx:60` | Forgejo, token and self-hosted keywords; refreshed integration description. |
-| Other help references | `apps/web/app/(landing)/docs/about/page.tsx:88`, `:130`; `docs/glossary/page.tsx:87`; `docs/github-action/page.tsx:528` under the same landing directory | Current provider descriptions and related-links copy. GitHub Action itself remains GitHub-specific. |
-| Comparison pages | `apps/web/app/(landing)/vs-coderabbit/page.tsx:44`; `vs-greptile/page.tsx:36` in the same directory | Added Octopus Forgejo FAQ. No unverified competitor support claims. |
-| Privacy data flow | `apps/web/app/(landing)/docs/privacy/page.tsx:56`, `:61`, `:117` | Forgejo repository access and processing location. |
-| Security overview | `apps/web/app/(landing)/docs/security-overview/page.tsx:31`, `:52`, `:80`, `:107` | Signed Forgejo webhooks, encrypted personal access tokens, a separate webhook secret per integration and code-host access. Webhook secrets are stored in a plain database column; no encryption claim is made for them. |
-| Instance operator distinction | `apps/web/app/(landing)/docs/sub-processors/page.tsx:173` | Forgejo is software; the chosen instance operator and AI services determine the parties handling data. |
-| Security program scope | `apps/web/app/(landing)/bug-bounty/page.tsx:98` | Includes Forgejo integration flows. |
-| Repository introduction | `README.md:7`, `:39`, `:42`, `:58` | Provider list and Forgejo setup/data-flow note. Existing GitHub setup prompt remains scoped. |
-| Public assistant knowledge | `apps/web/lib/docs-content.ts:30`, `:93`, `:264`, `:314`, `:375`; `apps/web/app/api/ask-octopus/route.ts:60` | Mirrored setup information and explicit Forgejo boundaries. |
-| LLM discovery | `apps/web/public/llms.txt:3`, `:20`, `:28`; `apps/web/app/llms-full.txt/route.ts:12` | Forgejo discovery and setup link. GitHub reply-follow-up claim is explicitly scoped. |
-| Welcome email | `apps/web/lib/email-template-seeds.ts:33` | Includes all four providers and a Forgejo guide, with token/webhook steps and processing disclosure. |
-| Getting-started and reminder emails | `apps/web/lib/email-template-seeds.ts:241`, `:264` | Same provider coverage and Forgejo setup link. Removed inaccurate one-minute/setup-complete claims. |
-| Existing email templates | `packages/db/prisma/migrations/20260919153000_forgejo_email_templates/migration.sql:1` | Updates only exact old default bodies on system templates. Custom bodies, sender, subject, enabled state and delivery preferences stay intact. No email is sent. |
+| Setup chooser and three separate instructions | `apps/web/app/(landing)/docs/integrations/page.tsx` | Named anchors, common bot/token prerequisites, actual runner environment and image, Cloud webhook destination, TLS/CA, status, rotation, disconnect and uncertain-write recovery. Shared review-event rules remain explicit. |
+| Self-hosted operator guide | `apps/web/app/(landing)/docs/self-hosting/page.tsx` | Direct private access is clearly scoped to self-hosted Octopus; Cloud connector crosslink, origin allowlist, matching workers/DNS, trusted CA and private webhook target rules. |
+| Homepage and repository introduction | `apps/web/app/(landing)/page.tsx`, `README.md` | Three connection options and setup links; no private hosting claim that implies local Cloud processing. |
+| Dashboard onboarding | `apps/web/components/dashboard/providers-banner.tsx` | Names public direct, Cloud private connector and self-hosted direct access. |
+| Settings | `apps/web/app/(app)/settings/integrations/forgejo-integration-card.tsx` | Direct and connector choices, setup link, one-time credential, connection state and management actions. |
+| Quickstart and FAQ | `apps/web/app/(landing)/docs/getting-started/page.tsx`, `docs/faq/page.tsx` | Three paths; removes private-requires-selfhost claim and unrealistic two-minute setup promise. |
+| Comparison FAQ | `apps/web/app/(landing)/vs-coderabbit/page.tsx`, `vs-greptile/page.tsx` | Octopus's three connection options. No new competitor capability claims. |
+| Search | `apps/web/app/(landing)/docs/docs-search.tsx` | Includes private, LAN, VPN, connector, public and HTTPS keywords. |
+| Public assistant and full LLM text | `apps/web/lib/docs-content.ts`, `apps/web/app/api/ask-octopus/route.ts`, generated `apps/web/app/llms-full.txt/route.ts` | Separate connection paths and actual connector setup; no self-host-only answer for Cloud private users. |
+| LLM index | `apps/web/public/llms.txt` | Separate Cloud private and self-hosted direct links; clear Cloud processing statement. |
+| Welcome, getting-started and reminder emails | `apps/web/lib/email-template-seeds.ts` | All three Forgejo options, chooser links and Cloud data-flow disclosure. |
+| Existing email templates | `packages/db/prisma/migrations/20260919213000_forgejo_connector_email_templates/migration.sql` | Updates only exact v1.1.0 default system-template bodies. Custom content, sender, subject, enabled state and delivery preferences remain intact. No emails are sent. |
+| Privacy, security and retention | `apps/web/app/(landing)/docs/privacy/page.tsx`, `docs/security-overview/page.tsx`, `docs/data-retention/page.tsx` | Distinguishes local Forgejo token from hashed connector credential; discloses encrypted transport storage, cleanup and backup limits. |
+| Release notes | `CHANGELOG.md` | Customer-facing connector behavior and upgrade instructions in v1.2.0. Earlier release notes retain their dated scope. |
+| Reviewed, no mode-specific change needed | `apps/web/app/layout.tsx`, `apps/web/lib/structured-data.ts`, login panel, about, glossary, GitHub Action related links, sub-processors, bug-bounty page | Existing provider lists remain accurate. GitHub-only features retain their scope. |
 
-## Deployment steps that source changes do not complete
+The token instructions account for Forgejo's scope restrictions: `read:user` is unavailable for Specific repositories tokens. A dedicated account limits access to intended repositories while the token uses All (public, private, and limited) with `read:user`, `write:repository` and `write:issue`. No instance administrator access is needed. See [Forgejo token scope documentation](https://forgejo.org/docs/latest/user/authentication/token-scope/).
 
-1. Deploy the integration and content together after validation. Public copy must not precede functioning connection and review routes.
-2. Apply both Forgejo migrations. Updating `email-template-seeds.ts` alone does not update existing records: `seedEmailTemplates` skips existing slugs, and `renderEmailTemplate` reads the database (`apps/web/lib/email-template-seeds.ts:342`; `apps/web/lib/email-renderer.ts:21`). The guarded migration updates untouched defaults; customized templates need a separate editorial review.
-3. Refresh the public assistant's indexed documentation after deployment using the existing authorized `POST /api/admin/seed-docs` process. That endpoint replaces the docs collection (`apps/web/app/api/admin/seed-docs/route.ts:27`). Source updates and `/llms-full.txt` do not by themselves refresh existing Qdrant docs chunks.
-4. Verify the live homepage, sign-in panel, `/docs/integrations#forgejo`, help search and rendered email preview. Do not send test emails to users as part of validation.
-5. Verify private-network connectivity from both web and review workers, including an allowed-origin rejection check and an internal-CA connection where applicable. No shared infrastructure configuration is part of this source change.
-6. Connect an authorized Forgejo test repository and verify a signed event through an actual completed review, inline/summary comments and final commit status. Local fixtures and browser previews do not establish this live result.
+For direct self-hosted Octopus webhooks on a private destination, Forgejo operators must preserve existing `ALLOWED_HOST_LIST` entries and add the specific target host. The Cloud connector's webhook destination is public Octopus Cloud and needs no private webhook target. See [Forgejo webhook configuration](https://forgejo.org/docs/latest/admin/config-cheat-sheet/#webhook-webhook).
 
-## Follow-up content and claims
+## Release follow-through
 
-- **GitHub organization profile:** a read-only GitHub API check on 19 September found `octopusreview/.github`, `profile/README.md:9`, still saying findings appear in GitHub, GitLab and Bitbucket (blob `2c701e1f14b57c3b0f26f9266e4a67d056f3d8b9`). Add Forgejo and the integration-guide link in that separate repository after launch. Preserve the GitHub-only agent setup instructions. No external profile was edited.
-- **External campaigns and social bios:** no current campaign or social-account inventory was available in this repository audit. Check active ads, pinned social posts, launch directories and sales templates for exhaustive three-provider lists after the integration is live. No campaigns or posts were changed.
-- **Historical blog posts, changelog and screenshots:** preserve dated statements and real GitHub example screenshots. Publish a Forgejo launch note or capture a real Forgejo review after live verification instead of rewriting history. Blog bodies are database-backed, so a source scan is not a complete live editorial inventory (`apps/web/app/(landing)/blog/[slug]/page.tsx`).
-- **Competitor comparisons:** current Octopus Forgejo FAQs are updated. Add comparison-table Forgejo rows only after independently checking each competitor's current support.
-- **Privacy/storage assertions corrected on touched surfaces:** homepage cloud copy, login, the FAQ and privacy storage section now describe stored review/indexing data and link to the retention documentation. Removed absolute source-storage and model-training claims from these touched passages and the mirrored assistant corpus. A full privacy-policy, retention and vendor-terms verification remains outside this integration change.
-- **GitHub-specific product paths:** native agent setup, GitHub Action, GitHub issue creation and dependency analysis retain their existing scope. Do not add Forgejo to their claims without corresponding implementation and validation.
+1. Deploy connector support, its versioned image and content together. Do not publish setup claims before the referenced connector is available.
+2. Apply the additive connector schema migration and guarded email migration. Changing seeds alone does not replace existing database templates. Customized email bodies need editorial review; migrations preserve them.
+3. Refresh the assistant's indexed documentation using the existing authorized `POST /api/admin/seed-docs` process after deployment. Source updates and generated LLM text do not refresh Qdrant by themselves.
+4. Check the live chooser, all three anchors, narrow layouts, Settings flow and rendered email previews. Do not send live customer emails to validate this change.
+5. Verify an authorized private Forgejo repository through actual indexing, a signed event, a completed review, comments and commit status. A successful webhook delivery, mocked AI review or TLS fixture establishes only its measured portion of that flow.
 
-## Content validation evidence
+## Validation recorded for this change
 
-- Full suite: `bun test --timeout 15000` passed with 1,836 passing tests, 43 skipped and zero failures. An infrastructure fixture exceeded the default five-second timeout on the first run; the full run with a 15-second timeout passed.
-- Lint, typecheck and production build passed on the final source, including the runtime self-host flag correction. The focused Forgejo harness also passed after that correction.
-- The actual Forgejo schema SQL was applied transactionally to a disposable PostgreSQL database; deleting the fixture organization cascaded to its Forgejo integration as expected.
-- Dashboard and settings browser checks passed at 1280px and 390px without horizontal overflow. Keyboard order followed host → token → Connect. A failed connection preserved the entered form values.
-- Scoped ESLint passed for the edited website, docs, metadata, assistant and email-template files.
-- `forgejo-email-migration.test.ts` passed against a fresh local PostgreSQL database: 1 test, 53 assertions. It executes the real migration twice, verifies all three new bodies match their seeds, and preserves custom bodies, non-system templates, disabled delivery, sender and subject. The test uses a temporary table and accepts only a test database URL. The disposable cluster was stopped and removed afterward.
-- To repeat that database check: `FORGEJO_EMAIL_TEST_DATABASE_URL=postgres://.../forgejo_email_test bun test apps/web/lib/__tests__/forgejo-email-migration.test.ts`. The test skips when the variable is absent.
-- Updated welcome email was rendered through the existing `renderEmailPreview` function with the database mocked, without sending. Local artifact: `/tmp/octopus-forgejo-welcome.html`.
-- Chrome preview checked at 1200px desktop and 390px narrow viewport. Both had zero horizontal overflow; the logo loaded and Forgejo guide, dashboard and preference links resolved to their intended destinations. Screenshots: `/tmp/octopus-forgejo-welcome.png` and `/tmp/octopus-forgejo-welcome-mobile.png`. This is browser HTML validation, not inbox-client deliverability testing.
-- Real local Next.js pages were checked against the disposable database at `http://localhost:3117`: homepage, `/docs/integrations#forgejo` and `/docs/self-hosting#forgejo` at 1440px and 390px. The homepage link and private-setup link navigated to the right anchors. Allowed-origin, self-host flag, worker/DNS and trusted-CA instructions rendered. A pre-existing mobile header overflow was fixed; all three pages then fit both widths. Screenshots are under `/tmp/octopus-forgejo-ui-evidence/` (`homepage.png`, `homepage-mobile.png`, `docs-forgejo.png`, `docs-forgejo-mobile.png`, `docs-private-forgejo-mobile.png`). This remains local preview evidence, not production or authenticated Forgejo execution.
-- Full integration checks and real Forgejo end-to-end evidence are tracked by the implementation task; this content audit makes no production deployment claim.
-- A real authenticated Forgejo pull request and an actual private VPN deployment remain unverified. Fixture tests and local UI checks do not establish those outcomes.
+- Scoped ESLint passed for the edited landing, docs, assistant, dashboard and email files.
+- The email migration-chain test passed against disposable PostgreSQL: 2 tests, 72 assertions. It runs both Forgejo email migrations twice, checks upgrades from pre-Forgejo and v1.1.0 defaults, matches the latest seeds, and preserves customized and non-system bodies, disabled delivery, sender and subject. The database was stopped afterward.
+- Repeat the database check with `FORGEJO_EMAIL_TEST_DATABASE_URL=postgres://.../forgejo_email_test bun test apps/web/lib/__tests__/forgejo-email-migration.test.ts`. It requires a test-named database and uses a temporary table.
+- All three email bodies rendered through the existing `renderEmailPreview` with a mocked database. No emails were sent. Local previews: `/tmp/octopus-forgejo-connector-welcome.html`, `/tmp/octopus-forgejo-connector-get-started-new-user.html`, `/tmp/octopus-forgejo-connector-connect-repo-reminder.html`.
+- Real local Next.js docs at `http://localhost:43411` were browser-checked at 1280px and 390px. All three chooser links reached unique section anchors. The private setup and self-hosted guide had no page overflow; the latter linked Cloud users to the connector and rendered allowlist/CA instructions. Evidence: `/tmp/octopus-forgejo-connector-docs-{desktop,chooser-mobile,private-mobile,selfhost-mobile}.png`. Subsequent source edits removed the native Bun alternative, fixed one inline spacing issue, matched the UI labels and removed a pre-existing absolute self-host processing claim; repeat against the final release build.
+- The welcome preview showed all three paths, the expected setup/dashboard/preferences links and a loaded logo at 1200px and a 390px narrow browser viewport without horizontal overflow. Screenshots: `/tmp/octopus-forgejo-connector-welcome-{desktop,narrow}.png`. This is rendered HTML validation, not inbox deliverability testing.
+- Full application gates, final-build browser verification, actual connector behavior and deployment evidence belong to the release validation; this audit does not substitute for them.
 
-## Automatic review events
+## External content requiring separate follow-through
 
-See the [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo) for automatic and manual review rules. The event mapping is implemented in `apps/web/app/api/forgejo/webhook/[integrationId]/route.ts`; admission and replay regressions live in `apps/web/lib/__tests__/forgejo-webhook.test.ts` and `forgejo-delivery.test.ts`. Upstream references: [title-change notifier](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/services/webhook/notifier.go) and [draft detection](https://codeberg.org/forgejo/forgejo/src/branch/forgejo/models/issues/pull.go).
-
-Forgejo webhook acceptance, review admission, and the pg-boss job commit in one
-PostgreSQL transaction. A crash before commit leaves none of them committed;
-retry admits the same request version. A crash after commit leaves the signed
-payload identity durable, so replay cannot enqueue another review even after
-the first completes. See the [data-retention policy](https://octopus-review.ai/docs/data-retention) for acceptance-record retention. The review worker publishes the initial comment after commit.
+- The organization profile at `octopusreview/.github`, `profile/README.md`, omitted Forgejo (baseline blob `2c701e1f14b57c3b0f26f9266e4a67d056f3d8b9`). [Draft PR #4](https://github.com/octopusreview/.github/pull/4), commit `53ab2bf`, adds Forgejo, the three-path chooser and Cloud processing disclosure while preserving the GitHub-only native agent setup. The one-file diff passed `git diff --check`. Keep this draft unmerged until Octopus v1.2.0 and the connector image are live, then verify the rendered public profile.
+- Ads, social bios, pinned posts, sales templates and launch directories are not stored here. Their current content needs a separate account inventory. No campaigns or posts were changed.
+- Blog bodies are database-backed, so a source scan is not a complete editorial inventory. Preserve dated posts and authentic GitHub example screenshots. A new Forgejo announcement or screenshot should match the verified release and actual review behavior.

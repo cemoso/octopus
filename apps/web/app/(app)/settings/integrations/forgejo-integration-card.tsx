@@ -8,115 +8,155 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { connectForgejo, disconnectForgejo, syncForgejo } from "./actions";
+import { connectForgejo, createForgejoConnector, disconnectForgejo, rotateForgejoConnector, resumeForgejoConnector, syncForgejo } from "./actions";
 
 type ForgejoData = {
   id: string;
   forgejoHost: string;
   username: string;
   webhookSecret?: string;
+  connectionMode: "direct" | "connector";
+  connectorLastSeenAt: string | null;
+  connectorError: string | null;
 } | null;
+type ActionResult = { error?: string; synced?: number; connectorToken?: string };
 
-export function ForgejoIntegrationCard({ data, canManage, appUrl }: {
+export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: {
   data: ForgejoData;
   canManage: boolean;
+  selfHosted: boolean;
   appUrl: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const busy = useRef(false);
+  const [mode, setMode] = useState<"direct" | "connector">(data?.connectionMode ?? "direct");
   const [host, setHost] = useState(data?.forgejoHost ?? "");
   const [token, setToken] = useState("");
+  const [connectorToken, setConnectorToken] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [origin, setOrigin] = useState(appUrl ?? "");
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => { if (!appUrl) setOrigin(window.location.origin); }, [appUrl]);
+  const connector = data?.connectionMode === "connector";
+  useEffect(() => {
+    if (!connector) return;
+    const timer = setInterval(() => { setNow(Date.now()); router.refresh(); }, 10_000);
+    return () => clearInterval(timer);
+  }, [connector, router]);
+  const online = !!data?.connectorLastSeenAt && now - Date.parse(data.connectorLastSeenAt) < 30_000;
+  const ready = !!data && (!connector || (online && !!data.username && !data.connectorError));
+  const status = !connector ? "Connected" : data?.connectorError ? "Paused" : online ? "Connector online" : data?.username ? "Connector offline" : "Waiting for connector";
   const webhookUrl = data && origin ? `${origin.replace(/\/$/, "")}/api/forgejo/webhook/${data.id}` : "";
 
-  function run(action: () => Promise<{ error?: string; synced?: number }>, onSuccess?: () => void) {
+  function run(action: () => Promise<ActionResult>, success: string, onSuccess?: () => void) {
     if (busy.current) return;
     busy.current = true;
-    setError("");
-    setMessage("");
+    setError(""); setMessage("");
     startTransition(async () => {
       try {
         const result = await action();
         if (result.error) setError(result.error);
         else {
           onSuccess?.();
-          if (result.synced !== undefined) setMessage(`${result.synced} repositories synced. Configure a webhook on each repository to start automatic reviews.`);
-          else setMessage("Forgejo disconnected. Remove the Octopus webhooks and revoke its token in Forgejo.");
+          if (result.connectorToken) setConnectorToken(result.connectorToken);
+          setMessage(result.synced !== undefined ? `${result.synced} repositories synced. Configure each repository’s webhook to start automatic reviews.` : success);
         }
-        router.refresh();
-      } catch {
-        setError("The request failed. Please try again.");
-      } finally {
-        busy.current = false;
-      }
+        router.refresh(); setNow(Date.now());
+      } catch { setError("The request failed. Refresh the connection status before retrying."); }
+      finally { busy.current = false; }
     });
   }
 
   return (
-    <Card id="forgejo" className="scroll-mt-6">
+    <Card id="forgejo" className="min-w-0 scroll-mt-6">
       <CardHeader>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <IconGitFork className="size-5 text-orange-500" />
           <CardTitle>Forgejo</CardTitle>
-          {data && <Badge variant="outline">Connected</Badge>}
+          {data && <Badge variant="outline">{status}</Badge>}
         </div>
-        <CardDescription>Review pull requests on your self-hosted Forgejo instance.</CardDescription>
+        <CardDescription>Review pull requests on your Forgejo instance.</CardDescription>
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="min-w-0 space-y-4">
         <p className="text-muted-foreground text-sm">
-          Use an HTTPS instance and a dedicated account with repository admin access.
-          Create a personal access token in Forgejo Settings → Applications with{" "}
-          <code>read:user</code>, <code>write:repository</code> and <code>write:issue</code> scopes.
-          Repository write access lets Octopus post reviews and commit statuses.
+          {selfHosted
+            ? "Self-hosted Octopus can connect directly over HTTPS to public instances or operator-approved LAN/VPN instances. A local connector is also available."
+            : "Connect a public HTTPS instance directly, or run a local connector for a private LAN/VPN instance."}
         </p>
-        <p className="text-muted-foreground text-xs">Octopus Cloud connects to public HTTPS instances. For a private HTTPS instance, your self-hosted Octopus operator must enable access first.</p>
-        <a className="text-primary text-sm underline underline-offset-4" href="/docs/integrations#forgejo">Forgejo setup guide</a>
-        {data && <p className="break-all text-sm">{data.username} · {data.forgejoHost}</p>}
+        <a className="text-primary text-sm underline underline-offset-4" href="/docs/integrations#forgejo">Compare the three Forgejo connection options</a>
+        {data && <p className="break-all text-sm">{data.username ? `${data.username} · ` : ""}{data.forgejoHost} · {connector ? "Local connector" : "Direct HTTPS"}</p>}
         {!canManage ? <p className="text-muted-foreground text-sm">An organization owner or admin can manage this connection.</p> : (
           <>
-            <details open={!data}>
-              <summary className="cursor-pointer text-sm font-medium">{data ? "Replace access token" : "Connect your instance"}</summary>
+            {!data && <fieldset className="space-y-2" disabled={pending}>
+              <legend className="mb-2 text-sm font-medium">How should Octopus connect?</legend>
+              <label className="flex cursor-pointer items-start gap-2 rounded-md border p-3 text-sm">
+                <input type="radio" name="forgejo-mode" value="direct" checked={mode === "direct"} onChange={() => setMode("direct")} className="mt-1" />
+                <span><span className="block font-medium">{selfHosted ? "Direct HTTPS from self-hosted Octopus" : "Public HTTPS instance"}</span><span className="text-muted-foreground">{selfHosted ? "Your Octopus server reaches Forgejo. Private addresses require an operator allowlist." : "Octopus Cloud reaches Forgejo over the internet."}</span></span>
+              </label>
+              <label className="flex cursor-pointer items-start gap-2 rounded-md border p-3 text-sm">
+                <input type="radio" name="forgejo-mode" value="connector" checked={mode === "connector"} onChange={() => setMode("connector")} className="mt-1" />
+                <span><span className="block font-medium">Private network connector</span><span className="text-muted-foreground">Run a connector beside Forgejo. No public Forgejo URL or inbound ports required.</span></span>
+              </label>
+            </fieldset>}
+            {(!data || !connector) && <details open={!data}>
+              <summary className="cursor-pointer text-sm font-medium">{data ? "Replace access token" : mode === "connector" ? "Create a private connector" : "Connect your instance"}</summary>
               <form className="mt-3 space-y-3" onSubmit={(event) => {
                 event.preventDefault();
                 const formData = new FormData(event.currentTarget);
-                run(() => connectForgejo(formData), () => setToken(""));
+                run(() => mode === "connector" && !data ? createForgejoConnector(formData) : connectForgejo(formData), "Connector created. Save its token and start the connector, then sync repositories.", () => setToken(""));
               }}>
                 <div className="space-y-1.5">
                   <Label htmlFor="forgejo-host">Forgejo instance URL</Label>
                   <Input id="forgejo-host" name="host" type="url" placeholder="https://forgejo.example.com" value={data?.forgejoHost ?? host} onChange={(event) => setHost(event.target.value)} readOnly={!!data || pending} required />
                 </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="forgejo-token">Personal access token</Label>
-                  <Input id="forgejo-token" name="token" type="password" autoComplete="new-password" value={token} onChange={(event) => setToken(event.target.value)} readOnly={pending} maxLength={4096} required />
-                </div>
-                <p className="text-muted-foreground text-xs">One instance per organization. Only repositories this account administers are synced.</p>
-                <Button type="submit" disabled={pending}>{pending ? "Working…" : data ? "Replace token and sync" : "Connect Forgejo"}</Button>
+                {(mode === "direct" || !!data) ? <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="forgejo-token">Personal access token</Label>
+                    <Input id="forgejo-token" name="token" type="password" autoComplete="new-password" value={token} onChange={(event) => setToken(event.target.value)} readOnly={pending} maxLength={4096} required />
+                  </div>
+                  <p className="text-muted-foreground text-xs">Use a dedicated Forgejo account with admin access only to the intended repositories. Choose All repositories for the token and the read:user, write:repository and write:issue scopes.</p>
+                </> : <p className="text-muted-foreground text-sm">The Forgejo token stays on the connector. Repository content and diffs travel to Octopus and its configured AI providers for indexing and reviews. Both Forgejo and the connector need outbound HTTPS access to Octopus.</p>}
+                <p className="text-muted-foreground text-xs">One instance per organization. Only repositories the Forgejo account administers are synced.</p>
+                <Button type="submit" disabled={pending}>{pending ? "Working…" : data ? "Replace token and sync" : mode === "connector" ? "Create connector" : "Connect Forgejo"}</Button>
               </form>
-            </details>
-            {data && data.webhookSecret && (
-              <div className="border-border space-y-3 rounded-md border p-4">
-                <p className="text-sm font-medium">Set up automatic reviews</p>
-                <p className="text-muted-foreground text-sm">In each synced repository, open Settings → Webhooks → Add Webhook → Forgejo. Use POST, application/json, the URL and secret below, and select Pull Request events. Keep the webhook active.</p>
-                <p className="text-muted-foreground text-xs">Also select Issue Comment events to request reviews with <code>@octopus</code> or <code>/octopus</code> in pull request comments.</p>
-                <div className="space-y-1.5">
-                  <Label htmlFor="forgejo-webhook-url">Target URL</Label>
-                  <Input id="forgejo-webhook-url" value={webhookUrl} readOnly onFocus={(event) => event.target.select()} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="forgejo-webhook-secret">Webhook secret</Label>
-                  <Input id="forgejo-webhook-secret" value={data.webhookSecret} readOnly onFocus={(event) => event.target.select()} />
-                </div>
-                <p className="text-muted-foreground text-xs">Open or update a pull request after saving the webhook to trigger its first review.</p>
-              </div>
-            )}
+            </details>}
+            {connectorToken && <div className="space-y-3 rounded-md border p-4">
+              <p className="text-sm font-medium">Save this connector token now</p>
+              <p className="text-muted-foreground text-sm">It is shown once. Store it as OCTOPUS_CONNECTOR_TOKEN in the connector’s private environment file. Keep your Forgejo personal access token on that machine.</p>
+              <Label htmlFor="forgejo-connector-token">Connector token</Label>
+              <Input id="forgejo-connector-token" type="password" value={connectorToken} readOnly onFocus={(event) => event.target.select()} />
+              <Button variant="outline" onClick={() => { void navigator.clipboard.writeText(connectorToken).then(() => setMessage("Connector token copied."), () => setError("Copy failed. Select and copy the token manually.")); }}>Copy connector token</Button>
+            </div>}
+            {connector && <div className="space-y-2 rounded-md border p-4">
+              <p className="text-sm font-medium">Run the connector on your private network</p>
+              <p className="text-muted-foreground text-sm">Set OCTOPUS_URL to {origin.startsWith("https://") ? origin : "your Octopus HTTPS origin"}, FORGEJO_URL to {data.forgejoHost}, and add the connector token and your Forgejo token locally.</p>
+              <a className="text-primary text-sm underline underline-offset-4" href="/docs/integrations#forgejo-cloud-private">Docker setup, certificates and troubleshooting</a>
+              <p className="text-muted-foreground text-xs">{data.connectorLastSeenAt ? `Last contact: ${new Date(data.connectorLastSeenAt).toLocaleString()}` : "Waiting for the connector’s first authenticated connection."}</p>
+              <Button variant="outline" disabled={pending} onClick={() => { router.refresh(); setNow(Date.now()); }}>Refresh status</Button>
+              {data.connectorError && <>
+                <p role="alert" className="text-destructive text-sm">{data.connectorError} Check comments, reviews and commit statuses in Forgejo before resuming.</p>
+                <Button variant="outline" disabled={pending} onClick={() => {
+                  if (window.confirm("Have you checked Forgejo for the interrupted write? Resuming allows new reviews; retry a failed review only after checking for an existing result.")) run(() => resumeForgejoConnector(data.id), "Connector resumed. Check the failed review before requesting another run.");
+                }}>Resume after checking Forgejo</Button>
+              </>}
+            </div>}
+            {data?.webhookSecret && <div className="space-y-3 rounded-md border p-4">
+              <p className="text-sm font-medium">Set up automatic reviews</p>
+              <p className="text-muted-foreground text-sm">After syncing repositories, open each repository’s Settings → Webhooks → Add Webhook → Forgejo. Use POST, application/json, the URL and secret below, and select Pull Request and Issue Comment events. Keep the webhook active.</p>
+              {connector && <p className="text-muted-foreground text-sm">Forgejo sends this webhook outward to Octopus. The connector has no webhook port.</p>}
+              <div className="space-y-1.5"><Label htmlFor="forgejo-webhook-url">Target URL</Label><Input id="forgejo-webhook-url" value={webhookUrl} readOnly onFocus={(event) => event.target.select()} /></div>
+              <div className="space-y-1.5"><Label htmlFor="forgejo-webhook-secret">Webhook secret</Label><Input id="forgejo-webhook-secret" value={data.webhookSecret} readOnly onFocus={(event) => event.target.select()} /></div>
+              <p className="text-muted-foreground text-xs">Open or update a pull request, or comment <code>@octopus</code> or <code>/octopus</code> to request a review.</p>
+            </div>}
             {data && <div className="flex flex-wrap gap-2">
-              <Button variant="outline" disabled={pending} onClick={() => run(syncForgejo)}>Sync repositories</Button>
+              <Button variant="outline" disabled={pending || !ready} onClick={() => run(syncForgejo, "Repositories synced.")}>Sync repositories</Button>
+              {connector && <Button variant="outline" disabled={pending} onClick={() => {
+                if (window.confirm("Rotate this connector’s token? Update the local environment file and recreate the Docker container afterward. The old token will stop working.")) run(() => rotateForgejoConnector(data.id), "Token rotated. Update the environment file and recreate the Docker container, or restart the local connector process.");
+              }}>Rotate connector token</Button>}
               <Button variant="outline" disabled={pending} onClick={() => {
-                if (window.confirm("Disconnect Forgejo and deactivate its repositories? Existing review history is kept. Remove the webhooks and revoke the token in Forgejo afterward.")) run(disconnectForgejo);
+                if (window.confirm("Disconnect Forgejo and deactivate its repositories? Review history is kept. Stop any connector, remove Octopus webhooks and revoke its Forgejo token afterward.")) run(disconnectForgejo, "Forgejo disconnected. Stop the connector, remove the webhooks and revoke its Forgejo token.", () => { setConnectorToken(""); setToken(""); });
               }}>Disconnect</Button>
             </div>}
           </>

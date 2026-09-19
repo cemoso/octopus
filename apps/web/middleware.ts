@@ -19,6 +19,7 @@ const publicPrefixes = [
   "/api/bitbucket/webhook",
   "/api/gitlab/webhook",
   "/api/forgejo/webhook/",
+  "/api/forgejo/connector/",
   "/api/pubby",
   "/api/version",
   "/api/invitations",
