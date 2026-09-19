@@ -21,9 +21,21 @@ export async function createReviewAttemptComment(
   return withForgejoPublication(async () => {
     const id = await create();
     const updated = await updateCurrentReview(pullRequestId, headSha, reviewRequestVersion, { reviewCommentId: id }, expectedReviewBody);
-    saved = updated.count > 0;
+    saved = updated.count === 1;
     return id;
-  }, { acknowledged: async () => saved });
+  }, { key: JSON.stringify([pullRequestId, headSha, reviewRequestVersion]), acknowledged: async () => saved });
+}
+
+export function withForgejoReviewPublication(
+  pullRequestId: string, headSha: string | null, reviewRequestVersion: number,
+  review: () => Promise<void>, signal?: AbortSignal,
+): Promise<void> {
+  return withForgejoPublication(review, {
+    key: JSON.stringify([pullRequestId, headSha, reviewRequestVersion]), signal,
+    acknowledged: async tx => (await tx.pullRequest.count({ where: {
+      id: pullRequestId, headSha, reviewRequestVersion, status: { in: ["completed", "failed"] },
+    } })) === 1,
+  });
 }
 
 export async function hasReviewAttempt(attemptId: string, pullRequestId: string, coverage: ReviewCoverage, reviewBody: string, client: Pick<Prisma.TransactionClient, "reviewAttempt"> = prisma) {

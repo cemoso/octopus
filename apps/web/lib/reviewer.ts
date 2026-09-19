@@ -50,7 +50,6 @@ import {
 import * as bitbucket from "@/lib/bitbucket";
 import * as gitlab from "@/lib/gitlab";
 import * as forgejo from "@/lib/forgejo";
-import { withForgejoPublication } from "@/lib/forgejo-connector";
 import { getGithubAppConfig } from "@/lib/github-app-config";
 import { parseOctopusIgnore, detectBadCommits } from "@/lib/octopus-ignore";
 import { buildGeneratedMatcher } from "@/lib/generated-files";
@@ -63,7 +62,7 @@ import { createCoveredReviewRequest } from "@/lib/review-request";
 import { canRestrictReviewToFollowUp } from "@/lib/review-follow-up";
 import { prepareRecoveredReviewPresentation, prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
 import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
-import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview } from "@/lib/review-attempt";
+import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, withForgejoReviewPublication } from "@/lib/review-attempt";
 import { publishReviewSummary } from "@/lib/review-summary-comment";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
@@ -630,22 +629,18 @@ async function syncTextDismissalsForPR(
 
 export async function processReview(pullRequestId: string, executionWindow?: ReviewExecutionWindow): Promise<void> {
   const pr = await prisma.pullRequest.findUnique({
-    where: { id: pullRequestId }, select: { headSha: true, repository: { select: { id: true, provider: true } } },
+    where: { id: pullRequestId }, select: { headSha: true, reviewRequestVersion: true, repository: { select: { id: true, provider: true } } },
   });
   if (pr?.repository.provider === "forgejo") {
-    return forgejo.runWithForgejoRepository(pr.repository.id, () => withForgejoPublication(
-      () => processReviewInternal(pullRequestId, executionWindow), {
-        signal: executionWindow?.signal,
-        acknowledged: async () => (await prisma.pullRequest.count({ where: {
-          id: pullRequestId, status: { in: ["completed", "failed", "queued", "pending"] },
-        } })) > 0,
-      },
+    return forgejo.runWithForgejoRepository(pr.repository.id, () => withForgejoReviewPublication(
+      pullRequestId, pr.headSha, pr.reviewRequestVersion,
+      () => processReviewInternal(pullRequestId, executionWindow, pr), executionWindow?.signal,
     ), pr.headSha);
   }
   return processReviewInternal(pullRequestId, executionWindow);
 }
 
-async function processReviewInternal(pullRequestId: string, executionWindow?: ReviewExecutionWindow): Promise<void> {
+async function processReviewInternal(pullRequestId: string, executionWindow?: ReviewExecutionWindow, expected?: { headSha: string | null; reviewRequestVersion: number }): Promise<void> {
   // Load PR with repo and org info
   const pr = await prisma.pullRequest.findUnique({
     where: { id: pullRequestId },
@@ -660,6 +655,8 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
     console.error(`[reviewer] PullRequest not found: ${pullRequestId}`);
     return;
   }
+
+  if (expected && (pr.headSha !== expected.headSha || pr.reviewRequestVersion !== expected.reviewRequestVersion)) return;
 
   // Guard against duplicate processing (e.g. pg-boss jobs replicated to standby DB,
   // or webhook retries). Use atomic UPDATE with WHERE to claim the review — only one
@@ -910,7 +907,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
   // This is the merge-gating primitive — a project can require the "octopus"
   // status to pass before merge. Best-effort; a status failure never blocks the
   // review itself.
-  if (pr.headSha && usesProjectApi) {
+  if (pr.headSha && usesProjectApi && !isForgejo) {
     await projectProvider
       .setCommitStatus(org.id, projectPath, pr.headSha, "running", COMMIT_STATUS_NAME, "Octopus review in progress")
       .catch((err) => console.error("[reviewer] Failed to set provider running status:", err));
@@ -927,7 +924,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
   }
 
   try {
-    reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
+    if (!isForgejo) reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
     // Phase 0: Ensure the repository is indexed before preparing review context
     if (repo.indexStatus !== "indexed") {
       console.log(`[reviewer] Repository ${repo.fullName} not indexed (status: ${repo.indexStatus}). Starting auto-index...`);
@@ -1194,6 +1191,10 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
       }
       await deferReviewForRepository(pullRequestId, pr.headSha, pr.reviewRequestVersion);
       return;
+    }
+    if (isForgejo) {
+      if (pr.headSha) await forgejo.setCommitStatus(org.id, projectPath, pr.headSha, "running", COMMIT_STATUS_NAME, "Octopus review in progress");
+      reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
     }
     if (reviewCommentId) {
       await providerUpdateComment(

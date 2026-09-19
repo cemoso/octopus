@@ -57,7 +57,7 @@ const RETENTION: RetentionRow[] = [
     category: "Forgejo connector transport",
     what: "Encrypted queued API requests and responses, including repository content and diffs",
     retention: "Consumed responses are deleted; requests expire after 60 seconds",
-    notes: "Cleanup runs during connector activity and in a worker job scheduled every minute. Uncertain-write request content is cleared when the connection is paused; residual request metadata is eligible for deletion after five minutes. Worker outages can delay cleanup. Database backups follow the separate backup retention window.",
+    notes: "Cleanup runs during connector activity and in a worker job scheduled every minute. Uncertain-write content is cleared when the connection is paused. Payload-free publication recovery metadata remains until durable acknowledgement, with renewable 60-second leases capped at two hours. Failed or expired metadata is eligible for deletion after five minutes; the reconciliation hold remains until an administrator resumes the connector. Worker outages can delay cleanup. Database backups follow the separate backup retention window.",
   },
   {
     category: "Sessions",

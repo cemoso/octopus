@@ -25,38 +25,120 @@ type Operation = { path: string; method: "GET" | "POST" | "PATCH"; body?: unknow
 type Result = { result: { body: string; headers: { "x-hasmore"?: string } } } | { error: "http" | "too_large" | "failed"; status?: number };
 type Auth = { id: string; tokenHash: string };
 
-const publications = new AsyncLocalStorage<Map<string, Auth>>();
+type PublicationOptions = {
+  key: string;
+  signal?: AbortSignal;
+  acknowledged: (tx: Tx) => Promise<boolean>;
+};
+type Publication = {
+  options: PublicationOptions;
+  auth?: Auth;
+  markerId?: string;
+  token: string;
+  requests: Set<string>;
+  deadline: number;
+  failed: boolean;
+};
+const publications = new AsyncLocalStorage<Publication>();
 
-export async function withForgejoPublication<T>(publish: () => Promise<T>, options: { signal?: AbortSignal; acknowledged?: () => Promise<boolean> } = {}): Promise<T> {
-  const receipts = new Map<string, Auth>();
+async function pausePublication(tx: Tx, scope: Publication): Promise<void> {
+  scope.failed = true;
+  if (!scope.auth || !scope.markerId) return;
+  await tx.forgejoIntegration.updateMany({ where: { id: scope.auth.id }, data: { connectorError: FORGEJO_CONNECTOR_UNCERTAIN_MESSAGE } });
+  await tx.forgejoConnectorRequest.updateMany({ where: {
+    integrationId: scope.auth.id, id: { in: [scope.markerId, ...scope.requests] },
+  }, data: { status: "uncertain", requestEnc: "", responseEnc: null, expiresAt: new Date() } });
+}
+
+async function validPublication(tx: Tx, scope: Publication, final: boolean): Promise<boolean> {
+  if (scope.failed || scope.options.signal?.aborted || Date.now() >= scope.deadline || !scope.auth || !scope.markerId) return false;
+  const rows = await tx.forgejoConnectorRequest.findMany({ where: {
+    integrationId: scope.auth.id, id: { in: [scope.markerId, ...scope.requests] },
+  } });
+  const now = new Date();
+  return rows.length === scope.requests.size + 1 && rows.every(row => row.expiresAt > now
+    && (row.status !== "leased" || (!!row.leaseExpiresAt && row.leaseExpiresAt > now)) && (
+    row.id === scope.markerId ? row.status === "publishing" && row.leaseToken === scope.token
+      : final ? row.status === "delivered" : ["queued", "leased", "completed", "delivered"].includes(row.status)
+  ));
+}
+
+async function settlePublication(scope: Publication, final: boolean): Promise<boolean> {
+  return prisma.$transaction(async tx => {
+    const integration = await lockIntegration(tx, scope.auth!);
+    if (!integration || integration.connectorError || !await validPublication(tx, scope, final)
+      || (final && !await scope.options.acknowledged(tx))) {
+      await pausePublication(tx, scope);
+      return false;
+    }
+    const where = { integrationId: scope.auth!.id, id: { in: [scope.markerId!, ...scope.requests] } };
+    if (final) {
+      const removed = await tx.forgejoConnectorRequest.deleteMany({ where });
+      if (removed.count !== scope.requests.size + 1) throw new ForgejoConnectorUncertainError();
+    } else {
+      const pending = await tx.forgejoConnectorRequest.count({ where: { ...where, status: { in: ["queued", "leased", "completed"] } } });
+      const renewed = await tx.forgejoConnectorRequest.updateMany({ where: { ...where, status: { in: ["publishing", "delivered"] } },
+        data: { expiresAt: new Date(Math.min(Date.now() + REQUEST_TTL_MS, scope.deadline)) } });
+      if (renewed.count !== scope.requests.size + 1 - pending) {
+        await pausePublication(tx, scope);
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+async function failPublication(scope: Publication): Promise<void> {
+  scope.failed = true;
+  if (!scope.auth) return;
+  await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM forgejo_integrations WHERE id = ${scope.auth!.id} FOR UPDATE`;
+    await pausePublication(tx, scope);
+  });
+}
+
+export async function withForgejoPublication<T>(publish: () => Promise<T>, options: PublicationOptions): Promise<T> {
+  const parent = publications.getStore();
+  if (parent) {
+    try {
+      if (parent.failed || parent.options.key !== options.key) throw new ForgejoConnectorUncertainError();
+      const result = await publish();
+      if (parent.failed || parent.options.signal?.aborted
+        || (parent.markerId && !await options.acknowledged(prisma))) throw new ForgejoConnectorUncertainError();
+      return result;
+    } catch (error) {
+      await failPublication(parent);
+      throw error;
+    }
+  }
+  const scope: Publication = { options, requests: new Set(), token: randomBytes(32).toString("hex"),
+    deadline: Date.now() + 2 * 60 * 60_000, failed: false };
   let renewal = Promise.resolve();
   const timer = setInterval(() => {
-    if (!receipts.size || options.signal?.aborted) return;
+    if (!scope.markerId || scope.failed) return;
     renewal = renewal.then(async () => {
-      const now = new Date();
-      await prisma.forgejoConnectorRequest.updateMany({ where: {
-        id: { in: [...receipts.keys()] }, status: "delivered", expiresAt: { gt: now },
-      }, data: { expiresAt: new Date(now.getTime() + REQUEST_TTL_MS) } });
-    }).catch(() => {});
+      try {
+        if (!await settlePublication(scope, false)) scope.failed = true;
+      } catch {
+        scope.failed = true;
+        await failPublication(scope).catch(() => { scope.failed = true; });
+      }
+    });
   }, 10_000);
   timer.unref();
   try {
-    const result = await publications.run(receipts, publish);
+    const result = await publications.run(scope, publish);
     clearInterval(timer);
     await renewal;
-    options.signal?.throwIfAborted();
-    if (receipts.size && options.acknowledged && !await options.acknowledged()) {
-      throw new Error("Forgejo publication bookkeeping is incomplete");
-    }
-    for (const [id, auth] of receipts) await prisma.$transaction(async tx => {
-      if (!await lockIntegration(tx, auth)) return;
-      await reap(tx, auth.id, new Date());
-      await tx.forgejoConnectorRequest.deleteMany({ where: { id, integrationId: auth.id, status: "delivered" } });
-    });
+    if (scope.failed || (scope.markerId && !await settlePublication(scope, true))) throw new ForgejoConnectorUncertainError();
     return result;
+  } catch (error) {
+    clearInterval(timer);
+    await renewal;
+    await failPublication(scope);
+    throw error;
   } finally {
     clearInterval(timer);
-    await renewal;
   }
 }
 
@@ -83,7 +165,7 @@ async function reap(tx: Tx, integrationId: string, now: Date): Promise<boolean> 
     integrationId, method: { not: "GET" },
     OR: [
       { status: "leased", OR: [{ leaseExpiresAt: { lte: now } }, { expiresAt: { lte: now } }] },
-      { status: { in: ["completed", "delivered"] }, expiresAt: { lte: now } },
+      { status: { in: ["completed", "delivered", "publishing"] }, expiresAt: { lte: now } },
     ],
   }, data: { status: "uncertain", requestEnc: "", responseEnc: null } });
   if (uncertain.count) await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorError: FORGEJO_CONNECTOR_UNCERTAIN_MESSAGE } });
@@ -93,7 +175,7 @@ async function reap(tx: Tx, integrationId: string, now: Date): Promise<boolean> 
   await tx.forgejoConnectorRequest.deleteMany({ where: { integrationId, OR: [
     { expiresAt: { lte: now }, status: { in: ["queued", "completed"] } },
     { expiresAt: { lte: now }, method: "GET" },
-    { status: { not: "delivered" }, createdAt: { lt: new Date(now.getTime() - RETENTION_MS) } },
+    { status: { notIn: ["delivered", "publishing"] }, createdAt: { lt: new Date(now.getTime() - RETENTION_MS) } },
   ] } });
   return uncertain.count > 0;
 }
@@ -221,6 +303,8 @@ export async function requestViaForgejoConnector(
   validateForgejoOperation(operation);
   options.signal?.throwIfAborted();
   const auth = { id: integrationId, tokenHash: connectorTokenHash };
+  const scope = publications.getStore();
+  if (scope?.failed) throw new ForgejoConnectorUncertainError();
   const expiresAt = new Date(Date.now() + REQUEST_TTL_MS);
   const task = await prisma.$transaction(async tx => {
     const integration = await lockIntegration(tx, auth);
@@ -230,9 +314,38 @@ export async function requestViaForgejoConnector(
     if (!integration.username || !integration.connectorLastSeenAt || Date.now() - integration.connectorLastSeenAt.getTime() > 90_000) throw new Error("Forgejo connector is offline. Start the connector and retry.");
     const count = await tx.forgejoConnectorRequest.count({ where: { integrationId, status: { in: ["queued", "leased"] } } });
     if (count >= 64) throw new Error("Forgejo connector is busy. Retry after current requests finish.");
-    return tx.forgejoConnectorRequest.create({ data: { integrationId, method: operation.method, requestEnc: encryptJson(operation), expiresAt } });
+    if (scope) {
+      if (scope.failed || scope.options.signal?.aborted || Date.now() >= scope.deadline
+        || (scope.auth && (scope.auth.id !== auth.id || scope.auth.tokenHash !== auth.tokenHash))) {
+        await pausePublication(tx, scope);
+        return null;
+      }
+      if (scope.markerId) {
+        if (!await validPublication(tx, scope, false)) {
+          await pausePublication(tx, scope);
+          return null;
+        }
+      } else if (operation.method !== "GET") {
+        scope.auth = auth;
+        scope.markerId = `publication_${createHash("sha256").update(JSON.stringify([integrationId, scope.options.key])).digest("hex")}`;
+        if (await tx.forgejoConnectorRequest.findUnique({ where: { id: scope.markerId } })) {
+          await pausePublication(tx, scope);
+          return null;
+        }
+        await tx.forgejoConnectorRequest.create({ data: {
+          id: scope.markerId, integrationId, method: "POST", status: "publishing", requestEnc: "",
+          leaseToken: scope.token, expiresAt: new Date(Math.min(Date.now() + REQUEST_TTL_MS, scope.deadline)),
+        } });
+      }
+    }
+    const request = await tx.forgejoConnectorRequest.create({ data: { integrationId, method: operation.method, requestEnc: encryptJson(operation), expiresAt } });
+    if (operation.method !== "GET") scope?.requests.add(request.id);
+    return request;
   });
-  if (!task) throw new ForgejoConnectorUncertainError();
+  if (!task) {
+    if (scope) scope.failed = true;
+    throw new ForgejoConnectorUncertainError();
+  }
   try {
     while (Date.now() < expiresAt.getTime()) {
       options.signal?.throwIfAborted();
@@ -240,6 +353,10 @@ export async function requestViaForgejoConnector(
         const integration = await lockIntegration(tx, auth);
         if (!integration) return { disconnected: true };
         const uncertain = await reap(tx, integration.id, new Date());
+        if (scope?.markerId && (integration.connectorError || uncertain || !await validPublication(tx, scope, false))) {
+          await pausePublication(tx, scope);
+          return { uncertain: true };
+        }
         const current = await tx.forgejoConnectorRequest.findFirst({ where: { id: task.id, integrationId } });
         if (current?.status === "completed" && current.responseEnc) {
           const result = decryptJson<Result>(current.responseEnc);
@@ -247,10 +364,12 @@ export async function requestViaForgejoConnector(
           if (current.method !== "GET" && "result" in result && !uncertain) {
             await tx.forgejoConnectorRequest.update({ where: { id: current.id }, data: {
               status: "delivered", responseEnc: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
-              expiresAt: new Date(Date.now() + REQUEST_TTL_MS),
+              expiresAt: new Date(Math.min(Date.now() + REQUEST_TTL_MS, scope?.deadline ?? Infinity)),
             } });
-            publications.getStore()?.set(current.id, auth);
-          } else if (!uncertain) await tx.forgejoConnectorRequest.delete({ where: { id: current.id } });
+          } else if (!uncertain) {
+            await tx.forgejoConnectorRequest.delete({ where: { id: current.id } });
+            scope?.requests.delete(current.id);
+          }
           return { result, uncertain };
         }
         return { uncertain: Boolean(uncertain || integration.connectorError || current?.status === "uncertain"), missing: !current };

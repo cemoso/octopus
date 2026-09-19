@@ -271,7 +271,7 @@ docker run -d --name octopus-forgejo-connector \
           </P>
           <ol className="mb-3 list-outside list-decimal space-y-2 pl-5 text-sm text-[#888]">
             <li>Follow the <a href="/docs/self-hosting#forgejo" className="text-cyan-400 underline">self-hosted network, DNS and certificate setup</a> on both web and review workers.</li>
-            <li>In your Octopus Settings → Integrations → Forgejo, choose <strong className="text-[#ccc]">Direct HTTPS from self-hosted Octopus</strong> and enter the private HTTPS origin and personal access token. Connect and sync repositories.</li>
+            <li>In your Octopus Settings → Integrations → Forgejo, enter the private HTTPS origin and personal access token, then click <strong className="text-[#ccc]">Connect Forgejo</strong> to connect and sync repositories.</li>
             <li>Add signed webhooks targeting your own Octopus deployment. If the target is private, allow its exact host in Forgejo&apos;s <code>[webhook] ALLOWED_HOST_LIST</code>, keeping existing entries.</li>
           </ol>
           <P>Your Octopus deployment and configured AI services determine where reviews are processed. Use local AI services when processing must stay on your network.</P>

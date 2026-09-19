@@ -96,6 +96,7 @@ mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async
   return 123;
 } }));
 mock.module("@/lib/review-attempt", () => ({
+  withForgejoReviewPublication: async () => { throw new Error("Unexpected Forgejo publication"); },
   createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
   updateCurrentReview: async () => ({ count: 1 }),
   saveReviewAttempt: async (_id: string, _pr: string, _coverage: unknown, _body: string, findings: { title: string }[]) => {

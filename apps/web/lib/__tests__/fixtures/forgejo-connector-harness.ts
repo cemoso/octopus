@@ -127,7 +127,7 @@ try {
   assert.equal((await read).body, '{"login":"review-bot"}');
   assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
 
-  const { createReviewAttemptComment } = await import("@/lib/review-attempt");
+  const { createReviewAttemptComment, withForgejoReviewPublication } = await import("@/lib/review-attempt");
   const forgejo = await import("@/lib/forgejo");
   const repo = await prisma.repository.create({ data: {
     organizationId: organizations[0], name: "project", fullName: "team/project", provider: "forgejo", externalId: `${host}:1`,
@@ -171,7 +171,7 @@ try {
     if (crash) {
       assert.match((await publication).message, /worker stopped/);
       await prisma.forgejoConnectorRequest.update({ where: { id: command.id }, data: { expiresAt: new Date(Date.now() - 1) } });
-      await assert.rejects(forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Retry"), ForgejoConnectorUncertainError);
+      await assert.rejects(forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Retry"), /unknown result/);
       assert.equal((await poll()).status, 409);
     } else {
       assert.equal(await publication, 42);
@@ -188,15 +188,123 @@ try {
     await reset();
     const publication = withForgejoPublication(async () => {
       await requestViaForgejoConnector(integration.id, hash, `/api/v1/repos/team/project${operation.path}`, operation);
-    }, { acknowledged: async () => false }).catch(error => error);
+    }, { key: JSON.stringify([pr.id, pr.headSha, 1]), acknowledged: async () => false }).catch(error => error);
     await until(async () => await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }) === 1);
     const command = (await (await poll()).json()).commands[0];
     assert.equal((await completed(command)).status, 200);
-    assert.match((await publication).message, /bookkeeping is incomplete/);
-    await prisma.forgejoConnectorRequest.update({ where: { id: command.id }, data: { expiresAt: new Date(Date.now() - 1), createdAt: new Date(Date.now() - 6 * 60_000) } });
+    assert.ok(await publication instanceof ForgejoConnectorUncertainError);
+    await prisma.forgejoConnectorRequest.updateMany({ where: { integrationId: integration.id }, data: { expiresAt: new Date(Date.now() - 1), createdAt: new Date(Date.now() - 6 * 60_000) } });
     await cleanupForgejoConnectorRequests();
     assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
     assert.equal((await poll()).status, 409);
+  }
+
+  const completeNext = async () => {
+    await until(async () => await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }) > 0);
+    const response = await poll();
+    assert.equal(response.status, 200);
+    const command = (await response.json()).commands[0];
+    assert.ok(command);
+    assert.equal((await completed(command, '{"id":84}')).status, 200);
+    return command;
+  };
+  for (const outcome of ["completed", "failed", "crash", "queued", "pending", "head-changed", "version-changed", "zero-row", "expired", "missing", "revoked", "renewal-missing", "pause-failed"]) {
+    await reset();
+    await prisma.pullRequest.update({ where: { id: pr.id }, data: { headSha: pr.headSha, reviewRequestVersion: 1, status: "reviewing", reviewCommentId: null } });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let nestedFinished = false;
+    const publication = withForgejoReviewPublication(pr.id, pr.headSha, 1, async () => {
+      await createReviewAttemptComment(pr.id, pr.headSha, 1, async () => {
+        const id = await forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Nested summary");
+        if (outcome === "zero-row") await prisma.pullRequest.update({ where: { id: pr.id }, data: { reviewRequestVersion: 2 } });
+        return id;
+      });
+      if (outcome === "missing") await forgejo.updatePullRequestComment(organizations[0], "team/project", 1, 84, "Second owned write");
+      nestedFinished = true;
+      await gate;
+      if (["crash", "pause-failed"].includes(outcome)) throw new Error("outer worker stopped");
+      if (outcome === "renewal-missing") {
+        await reset();
+        await assert.rejects(forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Expired worker after resume"), ForgejoConnectorUncertainError);
+        assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }), 0);
+      }
+      await prisma.pullRequest.update({ where: { id: pr.id }, data: {
+        status: ["queued", "pending", "failed"].includes(outcome) ? outcome : "completed",
+        ...(outcome === "head-changed" ? { headSha: "b".repeat(40) } : {}),
+        ...(outcome === "version-changed" ? { reviewRequestVersion: 2 } : {}),
+      } });
+    }).then(() => null, error => error);
+    const command = await completeNext();
+    const secondCommand = outcome === "missing" ? await completeNext() : null;
+    if (outcome === "zero-row") {
+      assert.ok(await publication instanceof ForgejoConnectorUncertainError);
+      assert.equal((await poll()).status, 409);
+      assert.equal((await prisma.pullRequest.findUniqueOrThrow({ where: { id: pr.id } })).reviewCommentId, null);
+      continue;
+    }
+    await until(async () => nestedFinished);
+    assert.equal((await prisma.pullRequest.findUniqueOrThrow({ where: { id: pr.id } })).reviewCommentId, 84n);
+    const receipt = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: command.id } });
+    assert.equal(receipt.status, "delivered");
+    assert.equal(receipt.requestEnc, "");
+    assert.equal(receipt.responseEnc?.length, 64);
+    const marker = await prisma.forgejoConnectorRequest.findFirstOrThrow({ where: { integrationId: integration.id, status: "publishing" } });
+    assert.equal(marker.requestEnc, "");
+    assert.ok(marker.expiresAt > new Date());
+    if (outcome === "completed") {
+      const independent = withForgejoPublication(() => forgejo.updatePullRequestComment(organizations[0], "team/project", 1, 84, "Unrelated review"), {
+        key: "another-logical-review", acknowledged: async () => true,
+      });
+      await completeNext();
+      await independent;
+      assert.ok(await prisma.forgejoConnectorRequest.findUnique({ where: { id: marker.id } }));
+    }
+    if (outcome === "expired") await prisma.forgejoConnectorRequest.update({ where: { id: command.id }, data: { expiresAt: new Date(Date.now() - 1) } });
+    if (["missing", "renewal-missing"].includes(outcome)) await prisma.forgejoConnectorRequest.delete({ where: { id: command.id } });
+    if (outcome === "revoked") await prisma.forgejoIntegration.update({ where: { id: integration.id }, data: { connectorTokenHash: hashConnectorToken(token2) + "revoked" } });
+    if (outcome === "renewal-missing") {
+      await Bun.sleep(10_500);
+      assert.ok((await prisma.forgejoIntegration.findUniqueOrThrow({ where: { id: integration.id } })).connectorError);
+    }
+    if (outcome === "pause-failed") {
+      await prisma.$executeRawUnsafe(`CREATE FUNCTION connector_test_pause_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'simulated pause failure'; END $$`);
+      await prisma.$executeRawUnsafe(`CREATE TRIGGER connector_test_pause_failure BEFORE UPDATE OF "connectorError" ON forgejo_integrations FOR EACH ROW EXECUTE FUNCTION connector_test_pause_failure()`);
+    }
+    release();
+    const result = await publication;
+    if (["completed", "failed"].includes(outcome)) {
+      assert.equal(result, null);
+      assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
+    } else {
+      assert.ok(result instanceof Error);
+      if (outcome === "pause-failed") {
+        await prisma.$executeRawUnsafe('DROP TRIGGER connector_test_pause_failure ON forgejo_integrations');
+        await prisma.$executeRawUnsafe('DROP FUNCTION connector_test_pause_failure()');
+        const prior = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: marker.id } });
+        assert.equal(prior.status, "publishing");
+        assert.ok(prior.expiresAt > new Date());
+        assert.equal((await prisma.forgejoIntegration.findUniqueOrThrow({ where: { id: integration.id } })).connectorError, null);
+        const queuedBefore = await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } });
+        await assert.rejects(withForgejoReviewPublication(pr.id, pr.headSha, 1, async () => {
+          await forgejo.createPullRequestComment(organizations[0], "team/project", 1, "Immediate retry");
+        }), ForgejoConnectorUncertainError);
+        assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }), queuedBefore);
+      }
+      assert.ok((await prisma.forgejoIntegration.findUniqueOrThrow({ where: { id: integration.id } })).connectorError);
+      if (secondCommand) {
+        const retained = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: secondCommand.id } });
+        assert.equal(retained.status, "uncertain");
+        assert.equal(retained.responseEnc, null);
+      }
+      if (outcome !== "renewal-missing") assert.equal((await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: marker.id } })).status, "uncertain");
+      if (!["missing", "renewal-missing"].includes(outcome)) {
+        const retained = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: command.id } });
+        assert.equal(retained.status, outcome === "pause-failed" ? "delivered" : "uncertain");
+        if (outcome === "pause-failed") assert.equal(retained.responseEnc?.length, 64);
+        else assert.equal(retained.responseEnc, null);
+      }
+    }
   }
   await reset();
 
