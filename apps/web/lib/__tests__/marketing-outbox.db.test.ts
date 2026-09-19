@@ -492,6 +492,44 @@ async function due(id: string) {
     }
     expect(bodies.size).toBe(2);
     expect(await prisma.marketingConversion.count({ where: { status: "delivered" } })).toBe(4);
+
+    const purchases = await prisma.marketingConversion.findMany({ where: { kind: "purchase" }, orderBy: { id: "asc" } });
+    expect(purchases).toHaveLength(3);
+    expect(purchases.map(row => row.httpStatus).sort()).toEqual([200, 200, 201]);
+    f.refund.id = "pyr_later"; f.refund.amount = 100;
+    await ledger("later_refund", "usage", null, f.refund.id);
+    await outbox.captureMarketingConversions(config);
+    const later = (await outbox.claimMarketingConversion(config))!;
+    const sends: string[] = [];
+    const send = withIdentity(async (request: Request) => { sends.push(await request.text()); return received(); });
+    expect(await outbox.processMarketingConversion(later, config, f.reader, send)).toBe("delivered");
+
+    f.refund.id = "pyr_blocked";
+    await ledger("blocked_refund", "usage", null, f.refund.id);
+    await outbox.captureMarketingConversions(config);
+    const blocked = (await outbox.claimMarketingConversion(config))!;
+    await outbox.finishMarketingConversion(blocked, { kind: "blocked", code: "unsupported_refund_reference" });
+    const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+    const ledgerBefore = (await db.query('SELECT * FROM credit_transactions ORDER BY id')).rows;
+    const retry = await import("../marketing-refund-retry");
+    const preview = await retry.previewMarketingRefundRetry(blocked.id, config, f.reader);
+    expect(preview.originalPurchase).toMatchObject({ outboxId: purchases[0]!.id, receiptId });
+    expect(await retry.previewMarketingRefundRetry(blocked.id, config, f.reader)).toEqual(preview);
+    expect(await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } })).toEqual(before);
+    const results = await Promise.allSettled([1, 2].map(() => retry.retryMarketingRefund(blocked.id, preview.previewHash, config, f.reader)));
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    await expect(retry.retryMarketingRefund(blocked.id, preview.previewHash, config, f.reader)).rejects.toThrow("refund_retry_ineligible");
+    const recovered = (await outbox.claimMarketingConversion(config))!;
+    expect(recovered.id).toBe(blocked.id);
+    expect(await outbox.processMarketingConversion(recovered, config, f.reader, send)).toBe("delivered");
+    expect(sends.map(body => JSON.parse(body))).toEqual([
+      expect.objectContaining({ eventType: "refund", amountMinor: "100", transactionId: conversionId("refund", "pyr_later") }),
+      preview.event,
+    ]);
+    expect(await outbox.claimMarketingConversion(config)).toBeNull();
+    expect(await prisma.marketingConversion.count()).toBe(before.length);
+    expect(await prisma.marketingConversion.findMany({ where: { kind: "purchase" }, orderBy: { id: "asc" } })).toEqual(purchases);
+    expect((await db.query('SELECT * FROM credit_transactions ORDER BY id')).rows).toEqual(ledgerBefore);
   });
 
   it("holds a conflicting receipt and retries auth/rate-limit failures without changing identity", async () => {
@@ -604,6 +642,52 @@ async function due(id: string) {
     }))).toBe("delivered");
     expect(await prisma.marketingConversion.count({ where: { kind: "purchase" } })).toBe(1);
     expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id: original.id } })).toEqual(before);
+  });
+
+  it("rejects every conflicting delivered alias in preview, retry and ordinary delivery", async () => {
+    const { f, original, refund, retry } = await blockedRefund();
+    const purchase = await prisma.marketingConversion.findUniqueOrThrow({ where: { id: original.id } });
+    await prisma.marketingConversion.create({ data: { ...purchase, id: "zz_equivalent", originKey: `payment:${f.payment.id}`, httpStatus: 200 } });
+    const preview = await retry.previewMarketingRefundRetry(refund.id, config, f.reader);
+    const conflicts = [
+      { payload: JSON.stringify({ ...JSON.parse(purchase.payload!), amountMinor: "1" }) },
+      { environment: "live" }, { organizationId: "foreign_org" },
+      { receiptId: randomUUID() }, { receiptId: "invalid" }, { httpStatus: 202 },
+    ];
+    const ledgerBefore = (await db.query('SELECT * FROM credit_transactions ORDER BY id')).rows;
+    for (const [index, conflict] of conflicts.entries()) {
+      const alias = await prisma.marketingConversion.create({ data: { ...purchase, id: "zzz_conflict", originKey: "ledger:conflict", ...conflict } });
+      const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+      await expect(retry.previewMarketingRefundRetry(refund.id, config, f.reader)).rejects.toThrow("original_payment_conflict");
+      await expect(retry.retryMarketingRefund(refund.id, preview.previewHash, config, f.reader)).rejects.toThrow("original_payment_conflict");
+      expect(await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } })).toEqual(before);
+      const next = await prisma.marketingConversion.create({ data: {
+        sourceId: config.sourceId, environment: config.environment, kind: "refund", organizationId: purchase.organizationId,
+        originKey: `ledger:later_${index}`, reference: f.refund.id, sourceCreatedAt: new Date(),
+      } });
+      const claimed = (await outbox.claimMarketingConversion(config))!;
+      expect(claimed.id).toBe(next.id);
+      const send = mock(async () => received());
+      expect(await outbox.processMarketingConversion(claimed, config, f.reader, send)).toBe("blocked");
+      expect(send).not.toHaveBeenCalled();
+      expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id: next.id } })).toMatchObject({ errorCode: "original_payment_conflict", payload: null });
+      await prisma.marketingConversion.deleteMany({ where: { id: { in: [alias.id, next.id] } } });
+    }
+    expect((await db.query('SELECT * FROM credit_transactions ORDER BY id')).rows).toEqual(ledgerBefore);
+  });
+
+  it("rejects delivered alias overflow instead of ignoring further candidates", async () => {
+    const { f, original, refund, retry } = await blockedRefund();
+    const purchase = await prisma.marketingConversion.findUniqueOrThrow({ where: { id: original.id } });
+    await prisma.marketingConversion.createMany({ data: Array.from({ length: 99 }, (_, index) => ({
+      ...purchase, id: `zz_alias_${index}`, originKey: `ledger:alias_${index}`, httpStatus: 200,
+    })) });
+    const preview = await retry.previewMarketingRefundRetry(refund.id, config, f.reader);
+    await prisma.marketingConversion.create({ data: { ...purchase, id: "zzz_overflow", originKey: "ledger:overflow", httpStatus: 200 } });
+    const before = await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } });
+    await expect(retry.previewMarketingRefundRetry(refund.id, config, f.reader)).rejects.toThrow("original_payment_conflict");
+    await expect(retry.retryMarketingRefund(refund.id, preview.previewHash, config, f.reader)).rejects.toThrow("original_payment_conflict");
+    expect(await prisma.marketingConversion.findMany({ orderBy: { id: "asc" } })).toEqual(before);
   });
 
   it("rejects changed facts, stale state, foreign binding and missing original delivery", async () => {

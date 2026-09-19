@@ -18,6 +18,7 @@ const CAPTURE_BATCH = 100;
 const LEASE_MS = 120_000;
 const TICK_MS = 90_000;
 const DELIVERY_BATCH = 20;
+const MAX_PURCHASE_ALIASES = 100;
 
 /** Internal server interface only. Capture must verify consent and campaign membership first. */
 export async function enqueueMarketingTracking(config: TrackingConfig, payload: string): Promise<string> {
@@ -104,13 +105,18 @@ export async function deliveredMarketingPurchase(
 ): Promise<MarketingConversion | null> {
   const matches = await db.marketingConversion.findMany({
     where: { sourceId: row.sourceId, kind: "purchase", status: "delivered", payload: { contains: original.event.transactionId } },
-    take: 2,
+    orderBy: { id: "asc" },
+    take: MAX_PURCHASE_ALIASES + 1,
   });
   if (!matches.length) return null;
   const purchase = matches[0]!;
-  if (matches.length !== 1 || purchase.environment !== row.environment || purchase.organizationId !== row.organizationId ||
-      purchase.payload !== serializeConversion(original.event) || !purchase.receiptId || !purchase.deliveredAt ||
-      (purchase.httpStatus !== 200 && purchase.httpStatus !== 201)) {
+  const payload = serializeConversion(original.event);
+  if (matches.length > MAX_PURCHASE_ALIASES || matches.some(candidate =>
+    candidate.environment !== row.environment || candidate.organizationId !== row.organizationId ||
+    candidate.payload !== payload || !candidate.receiptId ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(candidate.receiptId) ||
+    candidate.receiptId !== purchase.receiptId || !candidate.deliveredAt ||
+    (candidate.httpStatus !== 200 && candidate.httpStatus !== 201))) {
     throw new MarketingSourceError("original_payment_conflict");
   }
   return purchase;
