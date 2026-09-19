@@ -132,6 +132,10 @@ try {
   const repo = await prisma.repository.create({ data: {
     organizationId: organizations[0], name: "project", fullName: "team/project", provider: "forgejo", externalId: `${host}:1`,
   } });
+  await forgejo.runWithForgejoRepository(repo.id, async () => assert.equal(forgejo.usesForgejoConnector(), true));
+  await prisma.forgejoIntegration.update({ where: { id: integration.id }, data: { connectorTokenHash: null, accessTokenEnc: "unused-fixture-credential" } });
+  await forgejo.runWithForgejoRepository(repo.id, async () => assert.equal(forgejo.usesForgejoConnector(), false));
+  await prisma.forgejoIntegration.update({ where: { id: integration.id }, data: { connectorTokenHash: hash, accessTokenEnc: null } });
   const pr = await prisma.pullRequest.create({ data: {
     repositoryId: repo.id, number: 1, title: "Publication", url: `${host}/team/project/pulls/1`, author: "author",
     headSha: "a".repeat(40), reviewRequestVersion: 1,
@@ -199,13 +203,13 @@ try {
     assert.equal((await poll()).status, 409);
   }
 
-  const completeNext = async () => {
+  const completeNext = async (credential = token) => {
     await until(async () => await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }) > 0);
-    const response = await poll();
+    const response = await poll(credential);
     assert.equal(response.status, 200);
     const command = (await response.json()).commands[0];
     assert.ok(command);
-    assert.equal((await completed(command, '{"id":84}')).status, 200);
+    assert.equal((await completed(command, '{"id":84}', credential)).status, 200);
     return command;
   };
   for (const outcome of ["completed", "failed", "crash", "queued", "pending", "head-changed", "version-changed", "zero-row", "expired", "missing", "revoked", "renewal-missing", "pause-failed"]) {
@@ -291,17 +295,19 @@ try {
         }), ForgejoConnectorUncertainError);
         assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id, status: "queued" } }), queuedBefore);
       }
-      assert.ok((await prisma.forgejoIntegration.findUniqueOrThrow({ where: { id: integration.id } })).connectorError);
+      const held = (await prisma.forgejoIntegration.findUniqueOrThrow({ where: { id: integration.id } })).connectorError;
+      if (["revoked", "renewal-missing"].includes(outcome)) assert.equal(held, null);
+      else assert.ok(held);
       if (secondCommand) {
         const retained = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: secondCommand.id } });
         assert.equal(retained.status, "uncertain");
         assert.equal(retained.responseEnc, null);
       }
-      if (outcome !== "renewal-missing") assert.equal((await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: marker.id } })).status, "uncertain");
+      if (outcome !== "renewal-missing") assert.equal((await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: marker.id } })).status, outcome === "revoked" ? "publishing" : "uncertain");
       if (!["missing", "renewal-missing"].includes(outcome)) {
         const retained = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: command.id } });
-        assert.equal(retained.status, outcome === "pause-failed" ? "delivered" : "uncertain");
-        if (outcome === "pause-failed") assert.equal(retained.responseEnc?.length, 64);
+        assert.equal(retained.status, ["pause-failed", "revoked"].includes(outcome) ? "delivered" : "uncertain");
+        if (["pause-failed", "revoked"].includes(outcome)) assert.equal(retained.responseEnc?.length, 64);
         else assert.equal(retained.responseEnc, null);
       }
     }
@@ -393,6 +399,74 @@ try {
   assert.equal((await actions.rotateForgejoConnector(integration.id)).error, "Insufficient permissions.");
   assert.equal((await actions.resumeForgejoConnector(integration.id)).error, "Insufficient permissions.");
   await prisma.organizationMember.update({ where: { id: membership.id }, data: { role: "owner" } });
+  for (const rotate of [false, true]) {
+    for (const delayed of ["failure", "settlement", "dispatch", "renewal"]) {
+      await reset();
+      assert.equal((await poll()).status, 200);
+      let releaseOld!: () => void;
+      let releaseNew!: () => void;
+      const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+      const newGate = new Promise<void>(resolve => { releaseNew = resolve; });
+      let oldDelivered = false;
+      let newDelivered = false;
+      const key = "recovered-publication";
+      const writePath = "/api/v1/repos/team/project/issues/1/comments";
+      const oldWorker = withForgejoPublication(async () => {
+        await requestViaForgejoConnector(integration.id, hash, writePath, { method: "POST", body: { body: "Old worker" } });
+        oldDelivered = true;
+        await oldGate;
+        if (delayed === "failure") throw new Error("Delayed old worker failure");
+        if (["dispatch", "renewal"].includes(delayed)) {
+          await assert.rejects(requestViaForgejoConnector(integration.id, hash, writePath, {
+            method: "POST", body: { body: "Stale worker must not publish" },
+          }));
+        }
+      }, { key, acknowledged: async () => true }).then(() => null, error => error);
+      await completeNext();
+      await until(async () => oldDelivered);
+      const oldMarker = await prisma.forgejoConnectorRequest.findFirstOrThrow({ where: { integrationId: integration.id, status: "publishing" } });
+      await prisma.forgejoConnectorRequest.updateMany({ where: { integrationId: integration.id }, data: {
+        expiresAt: new Date(Date.now() - 1), leaseExpiresAt: new Date(Date.now() - 1),
+      } });
+      await cleanupForgejoConnectorRequests();
+      let credential = token;
+      if (rotate) {
+        const rotation = await actions.rotateForgejoConnector(integration.id);
+        assert.equal(rotation.error, undefined);
+        credential = rotation.connectorToken!;
+      }
+      assert.equal((await actions.resumeForgejoConnector(integration.id)).error, undefined);
+      assert.equal((await poll(credential)).status, 200);
+      const newWorker = withForgejoPublication(async () => {
+        await requestViaForgejoConnector(integration.id, hashConnectorToken(credential), writePath, { method: "POST", body: { body: "New worker" } });
+        newDelivered = true;
+        await newGate;
+      }, { key, acknowledged: async () => true }).then(() => null, error => error);
+      const newCommand = await completeNext(credential);
+      await until(async () => newDelivered);
+      const newMarker = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: oldMarker.id } });
+      assert.notEqual(newMarker.leaseToken, oldMarker.leaseToken);
+      if (delayed === "renewal") await Bun.sleep(10_500);
+      releaseOld();
+      assert.ok(await oldWorker instanceof Error, `${rotate}:${delayed}`);
+      const binding = await prisma.forgejoIntegration.findUniqueOrThrow({ where: { id: integration.id } });
+      assert.equal(binding.connectorError, null, `${rotate}:${delayed}`);
+      assert.equal(binding.connectorTokenHash, hashConnectorToken(credential));
+      const retained = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: newMarker.id } });
+      assert.equal(retained.leaseToken, newMarker.leaseToken);
+      assert.equal(retained.status, "publishing");
+      assert.ok(retained.expiresAt > new Date());
+      const receipt = await prisma.forgejoConnectorRequest.findUniqueOrThrow({ where: { id: newCommand.id } });
+      assert.equal(receipt.status, "delivered");
+      assert.equal(receipt.requestEnc, "");
+      assert.equal(receipt.responseEnc?.length, 64);
+      assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 2);
+      assert.equal((await (await poll(credential)).json()).commands.length, 0);
+      releaseNew();
+      assert.equal(await newWorker, null);
+      assert.equal(await prisma.forgejoConnectorRequest.count({ where: { integrationId: integration.id } }), 0);
+    }
+  }
   await prisma.forgejoIntegration.delete({ where: { id: integration.id } });
   const created = await actions.createForgejoConnector(form);
   assert.match(created.connectorToken!, /^ofc_[a-f0-9]{64}$/);

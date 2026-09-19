@@ -726,6 +726,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
   const isBitbucket = repo.provider === "bitbucket";
   const isGitlab = repo.provider === "gitlab";
   const isForgejo = repo.provider === "forgejo";
+  const isForgejoConnector = isForgejo && forgejo.usesForgejoConnector();
   const usesProjectApi = isGitlab || isForgejo;
   const projectProvider = isForgejo ? forgejo : gitlab;
   const installationId = repo.installationId ?? org.githubInstallationId;
@@ -907,7 +908,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
   // This is the merge-gating primitive — a project can require the "octopus"
   // status to pass before merge. Best-effort; a status failure never blocks the
   // review itself.
-  if (pr.headSha && usesProjectApi && !isForgejo) {
+  if (pr.headSha && usesProjectApi && !isForgejoConnector) {
     await projectProvider
       .setCommitStatus(org.id, projectPath, pr.headSha, "running", COMMIT_STATUS_NAME, "Octopus review in progress")
       .catch((err) => console.error("[reviewer] Failed to set provider running status:", err));
@@ -924,7 +925,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
   }
 
   try {
-    if (!isForgejo) reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
+    if (!isForgejoConnector) reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
     // Phase 0: Ensure the repository is indexed before preparing review context
     if (repo.indexStatus !== "indexed") {
       console.log(`[reviewer] Repository ${repo.fullName} not indexed (status: ${repo.indexStatus}). Starting auto-index...`);
@@ -1192,7 +1193,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
       await deferReviewForRepository(pullRequestId, pr.headSha, pr.reviewRequestVersion);
       return;
     }
-    if (isForgejo) {
+    if (isForgejoConnector) {
       if (pr.headSha) await forgejo.setCommitStatus(org.id, projectPath, pr.headSha, "running", COMMIT_STATUS_NAME, "Octopus review in progress");
       reviewCommentId = await publishMainComment("> 🐙 **Octopus Review** — Preparing review...");
     }

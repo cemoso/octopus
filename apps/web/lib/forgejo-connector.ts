@@ -43,7 +43,11 @@ const publications = new AsyncLocalStorage<Publication>();
 
 async function pausePublication(tx: Tx, scope: Publication): Promise<void> {
   scope.failed = true;
-  if (!scope.auth || !scope.markerId) return;
+  if (!scope.auth || !scope.markerId || !await lockIntegration(tx, scope.auth)) return;
+  const marker = await tx.forgejoConnectorRequest.findFirst({ where: {
+    id: scope.markerId, integrationId: scope.auth.id, leaseToken: scope.token,
+  } });
+  if (!marker) return;
   await tx.forgejoIntegration.updateMany({ where: { id: scope.auth.id }, data: { connectorError: FORGEJO_CONNECTOR_UNCERTAIN_MESSAGE } });
   await tx.forgejoConnectorRequest.updateMany({ where: {
     integrationId: scope.auth.id, id: { in: [scope.markerId, ...scope.requests] },
@@ -329,7 +333,9 @@ export async function requestViaForgejoConnector(
         scope.auth = auth;
         scope.markerId = `publication_${createHash("sha256").update(JSON.stringify([integrationId, scope.options.key])).digest("hex")}`;
         if (await tx.forgejoConnectorRequest.findUnique({ where: { id: scope.markerId } })) {
-          await pausePublication(tx, scope);
+          await tx.forgejoIntegration.update({ where: { id: integrationId }, data: { connectorError: FORGEJO_CONNECTOR_UNCERTAIN_MESSAGE } });
+          await tx.forgejoConnectorRequest.update({ where: { id: scope.markerId },
+            data: { status: "uncertain", requestEnc: "", responseEnc: null, expiresAt: new Date() } });
           return null;
         }
         await tx.forgejoConnectorRequest.create({ data: {

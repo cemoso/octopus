@@ -10,4 +10,4 @@ it.skipIf(!process.env.FORGEJO_CONNECTOR_TEST_DATABASE_URL)("fences connector co
   const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
   expect(code, stdout + stderr).toBe(0);
   expect(stdout).toContain("forgejo connector checks passed");
-}, 60_000);
+}, 90_000);

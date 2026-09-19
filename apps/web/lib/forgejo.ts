@@ -37,6 +37,10 @@ export async function runWithForgejoRepository<T>(repoId: string, callback: () =
     host: integration.forgejoHost, username: integration.username, connectorTokenHash: integration.connectorTokenHash, expectedHead: expectedHead ?? parent?.expectedHead }, callback);
 }
 
+export function usesForgejoConnector(): boolean {
+  return !!repositoryContext.getStore()?.connectorTokenHash;
+}
+
 async function credentials(organizationId: string): Promise<Credentials> {
   const integration = await prisma.forgejoIntegration.findUnique({ where: { organizationId },
     include: { organization: { select: { bannedAt: true, deletedAt: true } } } });
