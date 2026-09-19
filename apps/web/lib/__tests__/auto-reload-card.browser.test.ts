@@ -54,7 +54,7 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("preserves auto-reload drafts thr
       return route.continue();
     });
     await page.goto(server.url.href);
-    const toggle = page.getByRole("switch", { name: "Enable auto-reload" });
+    const toggle = page.getByRole("switch", { name: "Enable auto-reload", includeHidden: true });
     const save = page.getByRole("button", { name: "Save Auto-Reload", exact: true });
     await toggle.click();
     await page.getByLabel("When balance falls below").fill("17");
@@ -71,10 +71,16 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("preserves auto-reload drafts thr
     await dialog.getByRole("button", { name: "Save card", exact: true }).click();
     await page.getByText("Fixture authentication failure", { exact: true }).waitFor();
     expect(await page.evaluate("window.billingFixture.saves.length")).toBe(0);
+    expect(await toggle.getAttribute("aria-checked")).toBe("true");
+    expect(await page.getByLabel("When balance falls below").inputValue()).toBe("17");
+    expect(await page.getByLabel("Reload amount", { exact: true }).inputValue()).toBe("85");
     await page.evaluate("window.billingFixture.cardResult='success'; window.billingFixture.finalizeFails=true");
     await dialog.getByRole("button", { name: "Save card", exact: true }).click();
     await page.getByText("Fixture finalization failure", { exact: true }).waitFor();
     expect(await page.evaluate("window.billingFixture.saves.length")).toBe(0);
+    expect(await toggle.getAttribute("aria-checked")).toBe("true");
+    expect(await page.getByLabel("When balance falls below").inputValue()).toBe("17");
+    expect(await page.getByLabel("Reload amount", { exact: true }).inputValue()).toBe("85");
     await page.evaluate("window.billingFixture.finalizeFails=false");
     await dialog.getByRole("button", { name: "Save card", exact: true }).click();
     await dialog.waitFor({ state: "hidden" });
@@ -110,6 +116,13 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("preserves auto-reload drafts thr
       expect(await page.getByLabel("When balance falls below").inputValue()).toBe("17");
       expect(await page.getByLabel("Reload amount", { exact: true }).inputValue()).toBe("85");
     }
+    await page.goto(new URL("?enabled=1", server.url).href);
+    expect(await toggle.getAttribute("aria-checked")).toBe("true");
+    await page.getByLabel("Reload amount", { exact: true }).fill("85");
+    await save.click();
+    await page.getByText("Auto-reload updated.", { exact: true }).waitFor();
+    expect(await dialog.count()).toBe(0);
+    expect(await page.evaluate("window.billingFixture.saves")).toEqual([{ enabled: "true", thresholdAmount: "10", reloadAmount: "85" }]);
     expect(externalRequests).toEqual([]);
   } finally {
     await browser.close();

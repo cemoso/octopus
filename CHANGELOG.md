@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.161] - 2026-09-19
 
 ### Fixed
-- Saving auto-reload without a payment method now opens Add card and keeps your draft settings. After adding a card, review and save separately to enable auto-reload.
+- Saving with auto-reload enabled and no saved payment method now opens Add card. See [Credits & Billing](/docs/pricing) for the card setup and settings save flow.
 
 ## [1.0.160] - 2026-09-19
 
