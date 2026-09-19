@@ -47,7 +47,7 @@ function addressAllowed(address: string, allowPrivate: boolean): boolean {
     ? privateNetwork.check(address, "ipv4") : isIP(address) === 6 && privateNetwork.check(address, "ipv6")));
 }
 
-const networkError = () => new Error("Forgejo requires a public HTTPS address, or a private LAN/VPN origin explicitly allowed by a self-hosted Octopus operator in FORGEJO_ALLOWED_PRIVATE_ORIGINS. Loopback, link-local and reserved addresses are not supported.");
+const networkError = () => new Error("Use public HTTPS for a direct Octopus Cloud connection, a local connector for private LAN/VPN access from Cloud, or an origin explicitly allowed in FORGEJO_ALLOWED_PRIVATE_ORIGINS for direct private access from self-hosted Octopus. Loopback, link-local, metadata and reserved addresses are not supported.");
 
 export function normalizeForgejoHost(value: string, options: { allowPrivate?: boolean } = {}): string {
   const url = parseHost(value);
