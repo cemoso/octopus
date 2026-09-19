@@ -14,7 +14,7 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("preserves auto-reload drafts thr
       builder.onResolve({ filter: /^\.\/purchase-dialog$/ }, () => ({ path: "purchase", namespace: "fixture" }));
       builder.onLoad({ filter: /.*/, namespace: "fixture" }, ({ path }) => ({ loader: "js", contents: {
         actions: `
-          export async function updateAutoReload(_, data) { window.billingFixture.saves.push(Object.fromEntries(data)); return {success:true}; }
+          export async function updateAutoReload(_, data) { window.billingFixture.saves.push(Object.fromEntries(data)); return window.billingFixture.saveError ? {error:window.billingFixture.saveError} : {success:true}; }
           export async function updateBillingEmail() { return {}; }
           export async function updateSpendLimit() { return {}; }
           export async function loadMoreTransactions() { return []; }
@@ -96,6 +96,20 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("preserves auto-reload drafts thr
     await save.click();
     await page.getByText("Auto-reload updated.", { exact: true }).waitFor();
     expect(await page.evaluate("window.billingFixture.saves")).toEqual([{ enabled: "false", thresholdAmount: "10", reloadAmount: "50" }]);
+    for (const saveError of ["", "Fixture backend payment-method guard"]) {
+      await page.goto(new URL("?lookupFailed=1", server.url).href);
+      await page.evaluate((error: string) => { (window as unknown as { billingFixture: { saveError: string } }).billingFixture.saveError = error; }, saveError);
+      await toggle.click();
+      await page.getByLabel("When balance falls below").fill("17");
+      await page.getByLabel("Reload amount", { exact: true }).fill("85");
+      await save.click();
+      await page.getByText(saveError || "Auto-reload updated.", { exact: true }).waitFor();
+      expect(await dialog.count()).toBe(0);
+      expect(await page.evaluate("window.billingFixture.saves")).toEqual([{ enabled: "true", thresholdAmount: "17", reloadAmount: "85" }]);
+      expect(await toggle.getAttribute("aria-checked")).toBe("true");
+      expect(await page.getByLabel("When balance falls below").inputValue()).toBe("17");
+      expect(await page.getByLabel("Reload amount", { exact: true }).inputValue()).toBe("85");
+    }
     expect(externalRequests).toEqual([]);
   } finally {
     await browser.close();

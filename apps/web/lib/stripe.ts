@@ -218,6 +218,7 @@ export type PaymentMethodInfo = {
 
 export async function getCustomerPaymentMethods(
   stripeCustomerId: string,
+  options: { throwOnError?: boolean } = {},
 ): Promise<PaymentMethodInfo[]> {
   try {
     const methods = await getStripe().paymentMethods.list({
@@ -231,7 +232,8 @@ export async function getCustomerPaymentMethods(
       expMonth: m.card?.exp_month ?? 0,
       expYear: m.card?.exp_year ?? 0,
     }));
-  } catch {
+  } catch (error) {
+    if (options.throwOnError) throw error;
     return [];
   }
 }

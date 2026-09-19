@@ -3,6 +3,8 @@ import { BillingSettings } from "../../../app/(app)/settings/billing/billing-set
 
 const fixture = {
   savedCard: false,
+  paymentMethodsLoaded: !new URLSearchParams(location.search).has("lookupFailed"),
+  saveError: "",
   cardResult: "failure",
   finalizeFails: false,
   saves: [] as Record<string, FormDataEntryValue>[],
@@ -17,6 +19,7 @@ function render() {
     stripePublishableKey="fixture-only" planTier="free" planRenewsAt={null}
     planCancelAtPeriodEnd={false} autoReloadConfig={{ enabled: false, pausedForDurableUpgrade: false, thresholdAmount: 10, reloadAmount: 50 }}
     initialTransactions={[]} totalTransactions={0} monthlySpend={0} monthlyResetLabel="Next month"
+    paymentMethodsLoaded={fixture.paymentMethodsLoaded}
     paymentMethods={fixture.savedCard ? [{ brand: "fixture", last4: "0000", expMonth: 1, expYear: 2099 }] : []}
   />);
 }

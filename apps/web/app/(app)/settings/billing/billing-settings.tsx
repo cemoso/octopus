@@ -85,6 +85,7 @@ type Props = {
   monthlySpend: number;
   monthlyResetLabel: string;
   paymentMethods: PaymentMethod[];
+  paymentMethodsLoaded: boolean;
 };
 
 function formatUsd(n: number): string {
@@ -151,6 +152,7 @@ export function BillingSettings({
   monthlySpend,
   monthlyResetLabel,
   paymentMethods,
+  paymentMethodsLoaded,
 }: Props) {
   const router = useRouter();
   const [purchaseOpen, setPurchaseOpen] = useState(false);
@@ -275,7 +277,7 @@ export function BillingSettings({
                 event.preventDefault();
                 return;
               }
-              if (canManageBilling && autoReloadEnabled && paymentMethods.length === 0) {
+              if (canManageBilling && autoReloadEnabled && paymentMethodsLoaded && paymentMethods.length === 0) {
                 event.preventDefault();
                 setAutoReloadCardNotice("Add a card, then review and save these settings. Your changes have not been saved.");
                 setCardOpen(true);
