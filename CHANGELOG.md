@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Recognize Stripe `pyr_` refunds when delivering cash conversions to Unified Ads, preserving individual refund IDs and original-payment validation. Previously blocked deliveries still require deliberate recovery.
+
 ## [1.1.0] - 2026-09-19
 
 ### Added

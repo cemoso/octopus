@@ -127,6 +127,15 @@ its source fact/configuration diagnosed before any deliberate retry; never edit
 its payload or create a fresh identity to bypass a conflict. Outbox records are
 retained for retry deduplication, without automatic deletion in this release.
 
+Stripe refund references support both `re_` and `pyr_`. Both use the same
+read-only Refund retrieval and exact object, original-payment, ownership,
+currency, amount, timestamp and succeeded-status validation. The full original
+refund ID determines the canonical event ID; never rename a `pyr_` reference.
+A previously blocked row does not automatically retry after a resolver fix.
+There is currently no operator retry endpoint or command for blocked conversions;
+recovery requires a separately reviewed supported retry path and coordination
+with receiver evidence, not direct database edits or another Stripe refund.
+
 Capture depends on retained users and the billing ledger. Deletion before the
 next capture can remove a source fact; a successful processor payment missing
 its billing ledger remains unobserved until normal billing reconciliation
