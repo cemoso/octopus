@@ -688,15 +688,37 @@ model ForgejoIntegration {
   id             String   @id @default(cuid())
   forgejoHost    String
   username       String
-  accessTokenEnc String
+  accessTokenEnc String?
+  connectorTokenHash String? @unique
+  connectorLastSeenAt DateTime?
+  connectorError String?
   webhookSecret String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   organizationId String       @unique
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connectorRequests ForgejoConnectorRequest[]
 
   @@map("forgejo_integrations")
+}
+
+model ForgejoConnectorRequest {
+  id String @id @default(cuid())
+  integrationId String
+  integration ForgejoIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  method String
+  requestEnc String
+  responseEnc String?
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  status String @default("queued")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([integrationId, status, createdAt])
+  @@index([expiresAt])
+  @@map("forgejo_connector_requests")
 }
 
 model CollabIntegration {

@@ -60,6 +60,8 @@ export async function register() {
       }, 60 * 60 * 1000);
       cleanupTimer.unref?.();
 
+      await boss.schedule("cleanup-forgejo-connector", "* * * * *");
+
       // Daily audit-log retention enforcement (03:00 UTC). pg-boss dedups the
       // schedule across instances; the worker in queue-workers.ts runs the
       // deletion. Self-hosters tune the window via AUDIT_LOG_RETENTION_DAYS.

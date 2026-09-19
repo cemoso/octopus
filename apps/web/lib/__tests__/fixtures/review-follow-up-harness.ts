@@ -4,7 +4,12 @@ import type { AiCreateParams } from "@/lib/providers";
 import { assertReviewProcessingActive, type ReviewExecutionWindow } from "@/lib/review-capacity";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 mock.module("server-only", () => ({}));
+const directCommentFailure = process.argv.includes("--direct-forgejo-comment-failure");
+const reviewUpdates: unknown[] = [];
 let nativeFailure = false;
+let forgejoConnector = false;
+let preparationState: "ready" | "waiting" | "failure" = "ready";
+const forgejoPublications: string[] = [];
 let directComments = 0;
 let prior: ReviewCoverage | null = null;
 let lookupFailure = false;
@@ -62,7 +67,7 @@ mock.module("@octopus/db", () => ({ prisma: {
   repository: { findUnique: async () => repo },
   systemConfig: { findUnique: async () => null },
   reviewIssue: { findMany: async () => [] },
-  pullRequest: { findUnique: async () => pr, updateMany: async () => ({ count: 1 }) },
+  pullRequest: { findUnique: async () => pr, updateMany: async (query: unknown) => { reviewUpdates.push(query); return { count: 1 }; } },
 } }));
 mock.module("@/lib/embeddings", () => ({ createEmbeddings: async (texts: string[]) => texts.map(() => [1, 0, 0]) }));
 mock.module("@/lib/qdrant", () => ({
@@ -122,9 +127,11 @@ mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async
   summaries.push(target.body);
   return 123;
 } }));
+const realReviewAttempt = await import("@/lib/review-attempt");
 mock.module("@/lib/review-attempt", () => ({
-  createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
-  updateCurrentReview: async () => ({ count: 1 }),
+  withForgejoReviewPublication: directCommentFailure ? realReviewAttempt.withForgejoReviewPublication : async (_id: string, _head: string, _version: number, publish: () => Promise<void>) => publish(),
+  createReviewAttemptComment: directCommentFailure ? realReviewAttempt.createReviewAttemptComment : async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
+  updateCurrentReview: directCommentFailure ? realReviewAttempt.updateCurrentReview : async () => ({ count: 1 }),
   saveReviewAttempt: async (_id: string, _pr: string, _coverage: unknown, _body: string, findings: { title: string }[]) => {
     archived.push({ id: _id, findings, coverage: structuredClone(_coverage), body: _body });
     if (adaptiveStage === "after-save" && (_coverage as ReviewCoverage).assessment?.state === "completed") adaptiveAbort.abort();
@@ -159,6 +166,21 @@ mock.module("@/lib/github", () => ({
   listPullRequestIssueComments: async () => [],
   listPullRequestReviews: async () => [],
   getCommentReactions: async () => ({ thumbsUp: 0, thumbsDown: 0 }),
+}));
+mock.module("@/lib/forgejo", () => ({
+  runWithForgejoRepository: async (_repo: string, run: () => Promise<void>) => run(),
+  usesForgejoConnector: () => forgejoConnector,
+  createPullRequestComment: async (_org: string, _project: string, _number: number, body: string) => {
+    forgejoPublications.push(body);
+    if (directCommentFailure) throw new Error("Forgejo API returned 403");
+    return 123;
+  },
+  updatePullRequestComment: async (_org: string, _project: string, _number: number, _id: number, body: string) => { forgejoPublications.push(body); },
+  getPullRequestReviewInput: async () => { throw new Error("Fixture stops after preparation"); },
+  setCommitStatus: async (_org: string, _project: string, _sha: string, state: string) => {
+    forgejoPublications.push(state);
+    if (state === "running") throw new Error("Forgejo API returned 500");
+  },
 }));
 mock.module("@/lib/bitbucket", () => ({}));
 mock.module("@/lib/gitlab", () => ({
@@ -195,7 +217,16 @@ mock.module("@/lib/cost", () => ({ getOrgSpendLimitStatus: async () => ({ blocke
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: async (_channel: string, _name: string, data: { status?: string }) => { events.push(data); } } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: (event: { type: string }) => { events.push(event); } } }));
 mock.module("@/lib/indexer", () => ({ indexRepository: async () => { throw new Error("unexpected indexing"); } }));
-mock.module("@/lib/review-repository-preparation", () => ({ ensureRepositoryAnalysis: async () => "ready", deferReviewForRepository: async () => {} }));
+mock.module("@/lib/review-repository-preparation", () => ({
+  ensureRepositoryAnalysis: async (_repo: string, _org: string, onStart: () => Promise<void>) => {
+    if (repo.provider === "forgejo") {
+      await onStart();
+      if (preparationState === "failure") throw new Error("Repository analysis failed");
+    }
+    return preparationState;
+  },
+  deferReviewForRepository: async () => {},
+}));
 mock.module("@/lib/elasticsearch", () => ({ writeSyncLog: () => {}, deleteSyncLogs: async () => {} }));
 mock.module("@/lib/repo-config", () => ({
   fetchRepoConfigFile: async () => null, extractRepoConfigRules: async () => null,
@@ -225,6 +256,23 @@ ${JSON.stringify([finding])}
 const { prepareReviewInput } = await import("@/lib/review-coverage");
 const { canRestrictReviewToFollowUp } = await import("@/lib/review-follow-up");
 const { processReview } = await import("@/lib/reviewer");
+if (directCommentFailure) {
+  repo.provider = "forgejo";
+  const errors = console.error;
+  console.error = () => {};
+  try { await processReview("pr"); } finally { console.error = errors; }
+  assert.ok(forgejoPublications.some(body => body.includes("Preparing review")));
+  assert.ok(reviewUpdates.some(query => {
+    const { where, data } = query as { where: unknown; data: { status?: string; errorMessage?: string } };
+    if (data.status !== "failed") return false;
+    assert.deepEqual(where, { id: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion });
+    assert.equal(data.errorMessage, "Forgejo API returned 403");
+    return true;
+  }), "Direct comment failure is persisted for the same review attempt");
+  assert.ok(events.some(event => event.type === "review-failed"));
+  console.log("PASS handled direct Forgejo comment failure without connector uncertainty");
+  process.exit(0);
+}
 const current = prepareReviewInput({ provider: "github", headSha: pr.headSha, baseSha: "b".repeat(40), expectedFiles: 1, inventoryComplete: true, limitations: [], files: [
   { path: "src/check.ts", change: "modified", patch: "@@ -1 +1 @@\n-return value;\n+return value.name;\n", additions: 1, deletions: 1 },
 ] }, { maxChars: 350000 }).coverage;
@@ -422,3 +470,34 @@ for (const stage of ["summary-send", "summary-timeout", "check-send", "gitlab-au
 
 }
 console.log("PASS after-save publication expiry and unrelated transport controls");
+
+adaptiveStage = null;
+repo.provider = "forgejo";
+for (const connector of [false, true]) {
+  forgejoConnector = connector;
+  for (const preparation of ["waiting", "failure", "ready"] as const) {
+    preparationState = preparation;
+    forgejoPublications.length = 0;
+    const beforeEvents = events.length;
+    const errors = console.error;
+    console.error = () => {};
+    try { await processReview("pr"); } finally { console.error = errors; }
+    if (connector) {
+      assert.deepEqual(forgejoPublications, preparation === "waiting" ? [] : preparation === "failure" ? ["failed"] : ["running", "failed"]);
+    } else {
+      assert.equal(forgejoPublications[0], "running");
+      assert.ok(forgejoPublications[1].includes("Preparing review"));
+      assert.ok(forgejoPublications[2].includes("Analyzing repository"));
+      if (preparation === "waiting") {
+        assert.ok(forgejoPublications.at(-1)!.includes("retry automatically"));
+        assert.ok(!events.slice(beforeEvents).some(event => event.type === "review-failed"));
+      } else if (preparation === "failure") {
+        assert.ok(forgejoPublications.some(body => body.includes("Repository analysis failed")));
+        assert.equal(forgejoPublications.at(-1), "failed");
+      } else {
+        assert.ok(forgejoPublications.some(body => body.includes("Starting PR review")));
+      }
+    }
+  }
+}
+console.log("PASS direct Forgejo progress and best-effort status, connector publication deferral");

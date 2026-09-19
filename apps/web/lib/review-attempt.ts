@@ -2,6 +2,7 @@ import "server-only";
 import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { isDeepStrictEqual } from "node:util";
 import { prisma, type Prisma } from "@octopus/db";
+import { withForgejoPublication } from "@/lib/forgejo-connector";
 import type { ReviewCoverage } from "@/lib/review-coverage";
 
 export async function updateCurrentReview(pullRequestId: string, headSha: string | null, reviewRequestVersion: number | undefined, data: Prisma.PullRequestUpdateManyMutationInput, expectedReviewBody?: string) {
@@ -16,9 +17,25 @@ export async function createReviewAttemptComment(
   create: () => Promise<number>,
   expectedReviewBody?: string,
 ): Promise<number> {
-  const id = await create();
-  await updateCurrentReview(pullRequestId, headSha, reviewRequestVersion, { reviewCommentId: id }, expectedReviewBody);
-  return id;
+  let saved = false;
+  return withForgejoPublication(async () => {
+    const id = await create();
+    const updated = await updateCurrentReview(pullRequestId, headSha, reviewRequestVersion, { reviewCommentId: id }, expectedReviewBody);
+    saved = updated.count === 1;
+    return id;
+  }, { key: JSON.stringify([pullRequestId, headSha, reviewRequestVersion]), acknowledged: async () => saved });
+}
+
+export function withForgejoReviewPublication(
+  pullRequestId: string, headSha: string | null, reviewRequestVersion: number,
+  review: () => Promise<void>, signal?: AbortSignal,
+): Promise<void> {
+  return withForgejoPublication(review, {
+    key: JSON.stringify([pullRequestId, headSha, reviewRequestVersion]), signal,
+    acknowledged: async tx => (await tx.pullRequest.count({ where: {
+      id: pullRequestId, headSha, reviewRequestVersion, status: { in: ["completed", "failed"] },
+    } })) === 1,
+  });
 }
 
 export async function hasReviewAttempt(attemptId: string, pullRequestId: string, coverage: ReviewCoverage, reviewBody: string, client: Pick<Prisma.TransactionClient, "reviewAttempt"> = prisma) {

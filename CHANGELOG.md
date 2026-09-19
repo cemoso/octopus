@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-19
+
+### Added
+- Octopus Cloud can review repositories on private LAN/VPN Forgejo instances through a local outbound connector. Forgejo stays private and its personal access token stays on your machine. Both Forgejo and the connector need outbound HTTPS access to Cloud; code and review context are processed by Octopus Cloud and configured AI services.
+- Choose clearly separated Forgejo setup paths: [Cloud + public HTTPS](https://octopus-review.ai/docs/integrations#forgejo-cloud-public), [Cloud + private LAN/VPN with a connector](https://octopus-review.ai/docs/integrations#forgejo-cloud-private), or [self-hosted Octopus + direct private access](https://octopus-review.ai/docs/integrations#forgejo-self-hosted). The website, onboarding emails and help content use the same distinction.
+- Connector settings show connection status and support token rotation and disconnection. An uncertain Forgejo write pauses the connector until an administrator checks the result and resumes it.
+
+### Upgrade notes
+- Apply the additive connector schema and guarded email-template migrations before updating the web application and review workers. Customized email bodies and delivery settings remain unchanged. Refresh indexed help content after deployment.
+
 ## [1.1.1] - 2026-09-19
 
 ### Fixed

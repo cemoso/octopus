@@ -19,6 +19,7 @@ const publicPrefixes = [
   "/api/bitbucket/webhook",
   "/api/gitlab/webhook",
   "/api/forgejo/webhook/",
+  "/api/forgejo/connector/",
   "/api/pubby",
   "/api/version",
   "/api/invitations",
@@ -103,5 +104,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+  matcher: ["/((?!api/forgejo/connector/result/?$|_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };

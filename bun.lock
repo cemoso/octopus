@@ -27,7 +27,7 @@
     },
     "apps/web": {
       "name": "@octopus/web",
-      "version": "1.0.157",
+      "version": "1.1.0",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.91.1",
         "@aws-sdk/client-s3": "^3.1030.0",
@@ -36,6 +36,7 @@
         "@getpubby/sdk": "^0.2.0",
         "@google/generative-ai": "^0.24.1",
         "@octopus/db": "workspace:*",
+        "@octopus/forgejo-connector": "workspace:*",
         "@octopus/package-analyzer": "workspace:*",
         "@qdrant/js-client-rest": "^1.18.0",
         "@react-email/components": "^1.0.12",
@@ -115,6 +116,15 @@
         "@octopus/tsconfig": "workspace:*",
         "@types/pg": "^8.20.0",
         "prisma": "^7.4.1",
+        "typescript": "^5",
+      },
+    },
+    "packages/forgejo-connector": {
+      "name": "@octopus/forgejo-connector",
+      "version": "1.1.0",
+      "devDependencies": {
+        "@octopus/tsconfig": "workspace:*",
+        "@types/node": "^25",
         "typescript": "^5",
       },
     },
@@ -579,6 +589,8 @@
     "@octopus/db": ["@octopus/db@workspace:packages/db"],
 
     "@octopus/eslint-config": ["@octopus/eslint-config@workspace:tools/eslint-config"],
+
+    "@octopus/forgejo-connector": ["@octopus/forgejo-connector@workspace:packages/forgejo-connector"],
 
     "@octopus/package-analyzer": ["@octopus/package-analyzer@workspace:packages/package-analyzer"],
 

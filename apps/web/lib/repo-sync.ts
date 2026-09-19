@@ -284,8 +284,10 @@ export async function syncForgejoRepos(
   const repos = await listUserRepos(organizationId);
   await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integration.id} FOR UPDATE`;
-    const current = await tx.forgejoIntegration.findUnique({ where: { organizationId } });
-    if (!current || current.id !== integration.id || current.accessTokenEnc !== integration.accessTokenEnc) {
+    const current = await tx.forgejoIntegration.findUnique({ where: { organizationId }, include: { organization: { select: { bannedAt: true, deletedAt: true } } } });
+    if (!current || current.organization.bannedAt || current.organization.deletedAt || current.connectorError
+      || current.id !== integration.id || current.accessTokenEnc !== integration.accessTokenEnc
+      || current.connectorTokenHash !== integration.connectorTokenHash || current.username !== integration.username) {
       throw new Error("Forgejo connection changed during sync. Try syncing again.");
     }
     result.providers.push("forgejo");

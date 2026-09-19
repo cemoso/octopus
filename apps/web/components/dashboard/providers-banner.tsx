@@ -269,7 +269,7 @@ export function ProvidersBanner({
               <IconGitFork className="size-5 shrink-0 text-orange-500" />
               <span className="text-sm font-medium">Forgejo</span>
             </div>
-            <p className="text-muted-foreground mt-2 text-xs leading-relaxed">Connect your self-hosted Forgejo instance with a personal access token and repository webhooks.</p>
+            <p className="text-muted-foreground mt-2 text-xs leading-relaxed">Use Cloud with public HTTPS or a local connector for private LAN/VPN access. Self-hosted Octopus can connect directly.</p>
             <div className="text-muted-foreground mt-3 flex flex-wrap items-center gap-2 text-[10px]">
               <span className="flex items-center gap-1"><IconGitPullRequest className="size-3" />Auto-review PRs</span>
               <span className="flex items-center gap-1"><IconShieldCheck className="size-3" />Self-hosted</span>

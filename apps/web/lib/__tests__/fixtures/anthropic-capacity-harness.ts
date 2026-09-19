@@ -25,7 +25,11 @@ const db = {
       ? { id: claim.id, repository: { organization: { reviewsPaused: paused } } } : null },
 };
 mock.module("@octopus/db", () => ({ prisma: { ...db, $transaction: (fn: (tx: typeof db) => unknown) => fn(db) } }));
-mock.module("../../crypto", () => ({ decryptStringMaybeLegacy: (value: string) => value }));
+mock.module("../../crypto", () => ({
+  decryptStringMaybeLegacy: (value: string) => value,
+  encryptJson: () => { throw new Error("Unexpected connector encryption in capacity harness"); },
+  decryptJson: () => { throw new Error("Unexpected connector decryption in capacity harness"); },
+}));
 mock.module("../../ai-client", () => ({ getReviewModel: () => { throw new Error("Frozen route must not resolve an organization default"); } }));
 let count = 300_000, endpoint = "https://api.anthropic.com", mode = "normal";
 let metadata: ReturnType<typeof validMetadata>;

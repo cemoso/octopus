@@ -39,7 +39,13 @@ To set up through the dashboard instead:
 2. Create your organization, connect GitHub, GitLab, Bitbucket or Forgejo, and choose the repositories to review.
 3. Open a pull request or merge request. Read the review in your code host and address the findings there.
 
-For Forgejo, connect an HTTPS instance with a personal access token and configure signed repository webhooks. Public instances work with Octopus Cloud. For private LAN/VPN instances, run self-hosted Octopus on the network and configure the explicit allowed origins. Follow the [Forgejo setup guide](https://octopus-review.ai/docs/integrations#forgejo). Octopus and your configured AI services process code for reviews; hosting Forgejo yourself does not keep that processing on the Forgejo server.
+Forgejo has three connection options:
+
+- [Octopus Cloud + public HTTPS](https://octopus-review.ai/docs/integrations#forgejo-cloud-public): connect directly with a personal access token.
+- [Octopus Cloud + private LAN/VPN](https://octopus-review.ai/docs/integrations#forgejo-cloud-private): run the local connector on your network. It connects outward to Octopus Cloud; Forgejo stays private.
+- [Self-hosted Octopus + private LAN/VPN](https://octopus-review.ai/docs/integrations#forgejo-self-hosted): connect directly from your own Octopus deployment with the explicit allowed origins.
+
+All three use signed repository webhooks. Octopus and your configured AI services process code for reviews, including when a local connector is used. Hosting Forgejo yourself does not keep Cloud review processing on your network.
 
 <p align="center">
   <a href="https://octopus-review.ai/login"><img src="docs/screenshots/cloud-sign-in.png" width="440" alt="The live Octopus Cloud sign-in screen, with Google, GitHub, Microsoft and email options" /></a>

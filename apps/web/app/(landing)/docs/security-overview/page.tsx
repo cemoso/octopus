@@ -18,7 +18,7 @@ export default function SecurityOverviewPage() {
           Security
         </div>
         <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Security Overview</h1>
-        <p className="mt-3 text-sm text-[#555]">Last updated: May 2026</p>
+        <p className="mt-3 text-sm text-[#555]">Last updated: September 2026</p>
       </div>
 
       <Section title="1. Data flow at a glance">
@@ -29,8 +29,8 @@ export default function SecurityOverviewPage() {
         </P>
         <UL>
           <li><strong>Webhook</strong> — GitHub, GitLab, Bitbucket, or Forgejo POSTs a PR/MR event; we verify GitHub, Bitbucket, and Forgejo HMAC signatures or GitLab&apos;s per-organisation hook token before processing.</li>
-          <li><strong>Clone</strong> — we clone the repository into a per-job temporary directory; never persisted beyond the job.</li>
-          <li><strong>Index</strong> — file contents are chunked and embedded into Qdrant for vector search. Source files are not stored as plaintext outside the indexing window.</li>
+          <li><strong>Read repository</strong> — depending on the provider, Octopus reads repository content through its API or clones it into a temporary directory. Private Forgejo API access uses the local connector when connected to Cloud.</li>
+          <li><strong>Index</strong> — file contents are chunked and embedded into Qdrant for vector search. See the data-retention policy for stored review, indexing and connector data.</li>
           <li><strong>Review</strong> — relevant chunks plus the diff are sent to the configured LLM provider. Provider choice and BYOK key live on the organisation.</li>
           <li><strong>Comment</strong> — findings are posted as inline review comments on the PR/MR via the platform API.</li>
         </UL>
@@ -49,7 +49,8 @@ export default function SecurityOverviewPage() {
           <li>Qdrant vector store — full-disk encryption on the underlying volume.</li>
           <li>Object storage (S3 / R2) for org avatars and large review payloads — server-side encryption with provider-managed keys.</li>
           <li>OAuth tokens for third-party integrations (Slack, Linear, Jira, GitLab) are stored encrypted at the row level using an AES-256 key derived from the application secret. See <code>apps/web/lib/crypto.ts</code>.</li>
-          <li>Forgejo personal access tokens are encrypted at rest. Each integration has a separate webhook secret for verifying signed events. Use a dedicated account and revoke its token in Forgejo when access is no longer needed.</li>
+          <li>Direct Forgejo connections store personal access tokens encrypted in Octopus. With the private network connector, the Forgejo token stays on the connector machine; protect its local configuration file. Each integration has a separate webhook secret. Use a dedicated account and revoke its token in Forgejo when access is no longer needed.</li>
+          <li>Private Forgejo connector credentials are stored as hashes in Octopus. Queued API request and response content is encrypted, then deleted on consumption or expired-request cleanup. See <a href="/docs/data-retention" className="text-cyan-400 underline">connector transport retention</a> for cleanup timing and backup limits.</li>
         </UL>
       </Section>
 
@@ -109,6 +110,14 @@ export default function SecurityOverviewPage() {
           <li>Email provider (Resend) for notifications</li>
           <li>OAuth providers during sign-in (GitHub / Google / Microsoft) — Microsoft Graph is contacted during Microsoft sign-in when configured</li>
         </UL>
+        <P>
+          With a private Forgejo connector, the connector initiates HTTPS requests
+          to Octopus Cloud and calls its configured Forgejo origin locally. Forgejo
+          sends signed webhooks directly to Cloud over outbound HTTPS. No incoming
+          internet connection or listening port is required on the connector.
+          Repository content still reaches Cloud and the configured AI services.
+          See the <a href="/docs/integrations#forgejo" className="text-cyan-400 underline">three Forgejo connection options</a>.
+        </P>
         <P>
           See the <a href="/docs/sub-processors" className="text-cyan-400 underline">sub-processors page</a> for the full vendor list.
         </P>

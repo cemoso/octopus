@@ -1,6 +1,7 @@
 import "server-only";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { prisma } from "@octopus/db";
+import { requestViaForgejoConnector } from "@/lib/forgejo-connector";
 import { decryptString } from "@/lib/crypto";
 import { forgejoRequest, ForgejoHttpError, ForgejoResponseTooLargeError, normalizeForgejoHost } from "@/lib/forgejo-http";
 import { attachReviewPatches, type ReviewInput, type ReviewFileInput } from "@/lib/review-coverage";
@@ -8,17 +9,17 @@ import { MAX_FETCH_DIFF_CHARS, truncateDiff } from "@/lib/diff-truncate";
 import { reviewPublicationSignal, type ReviewExecutionWindow } from "@/lib/review-capacity";
 import type { ReviewComment } from "@/lib/github";
 
-type Credentials = { host: string; token: string };
+type Credentials = { host: string; token?: string; integrationId?: string; connectorTokenHash?: string };
 type RequestOptions = Parameters<typeof forgejoRequest>[3];
 const shaPattern = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
-const repositoryContext = new AsyncLocalStorage<{ organizationId: string; integrationId: string; host: string; username: string; expectedHead?: string | null }>();
+const repositoryContext = new AsyncLocalStorage<{ organizationId: string; integrationId: string; host: string; username: string; connectorTokenHash?: string | null; expectedHead?: string | null }>();
 
 /** A worker admitted for one instance must never adopt credentials from a
  * disconnected/replaced integration midway through a review or index job. */
 export async function runWithForgejoRepository<T>(repoId: string, callback: () => Promise<T>, expectedHead?: string | null): Promise<T> {
   const repo = await prisma.repository.findUnique({ where: { id: repoId }, select: {
     provider: true, organizationId: true, isActive: true, dismissedAt: true, externalId: true,
-    organization: { select: { bannedAt: true, deletedAt: true, forgejoIntegration: { select: { id: true, forgejoHost: true, username: true } } } },
+    organization: { select: { bannedAt: true, deletedAt: true, forgejoIntegration: { select: { id: true, forgejoHost: true, username: true, connectorTokenHash: true } } } },
   } });
   const integration = repo?.organization.forgejoIntegration;
   if (!repo || repo.provider !== "forgejo" || !repo.isActive || repo.dismissedAt || !integration
@@ -29,11 +30,15 @@ export async function runWithForgejoRepository<T>(repoId: string, callback: () =
   }
   const parent = repositoryContext.getStore();
   if (parent && (parent.organizationId !== repo.organizationId || parent.integrationId !== integration.id
-    || parent.host !== integration.forgejoHost || parent.username !== integration.username)) {
+    || parent.host !== integration.forgejoHost || parent.username !== integration.username || parent.connectorTokenHash !== integration.connectorTokenHash)) {
     throw new Error("Forgejo integration changed during the operation");
   }
   return repositoryContext.run({ organizationId: repo.organizationId, integrationId: integration.id,
-    host: integration.forgejoHost, username: integration.username, expectedHead: expectedHead ?? parent?.expectedHead }, callback);
+    host: integration.forgejoHost, username: integration.username, connectorTokenHash: integration.connectorTokenHash, expectedHead: expectedHead ?? parent?.expectedHead }, callback);
+}
+
+export function usesForgejoConnector(): boolean {
+  return !!repositoryContext.getStore()?.connectorTokenHash;
 }
 
 async function credentials(organizationId: string): Promise<Credentials> {
@@ -43,14 +48,28 @@ async function credentials(organizationId: string): Promise<Credentials> {
   if (integration.organization.bannedAt || integration.organization.deletedAt) throw new Error("Forgejo organization is no longer active");
   const context = repositoryContext.getStore();
   if (context && (context.organizationId !== organizationId || context.integrationId !== integration.id
-    || context.host !== integration.forgejoHost || context.username !== integration.username)) {
+    || context.host !== integration.forgejoHost || context.username !== integration.username || context.connectorTokenHash !== integration.connectorTokenHash)) {
     throw new Error("Forgejo integration changed during the operation; retry from the connected repository");
   }
+  if (integration.connectorTokenHash) {
+    if (!integration.username) throw new Error("Start your Forgejo connector before syncing repositories");
+    if (integration.connectorError) throw new Error(integration.connectorError);
+    return { host: integration.forgejoHost, integrationId: integration.id, connectorTokenHash: integration.connectorTokenHash };
+  }
+  if (!integration.accessTokenEnc) throw new Error("Forgejo has no active credentials");
   return { host: integration.forgejoHost, token: decryptString(integration.accessTokenEnc) };
 }
 
+async function request(auth: Credentials, path: string, options?: RequestOptions) {
+  if (auth.integrationId && auth.connectorTokenHash) {
+    return requestViaForgejoConnector(auth.integrationId, auth.connectorTokenHash, path, options);
+  }
+  if (!auth.token) throw new Error("Forgejo has no active credentials");
+  return forgejoRequest(auth.host, auth.token, path, options);
+}
+
 async function read<T>(auth: Credentials, path: string, options?: RequestOptions): Promise<T> {
-  const response = await forgejoRequest(auth.host, auth.token, `/api/v1${path}`, options);
+  const response = await request(auth, `/api/v1${path}`, options);
   try { return JSON.parse(response.body) as T; } catch { throw new Error("Invalid Forgejo API response"); }
 }
 
@@ -139,7 +158,7 @@ export async function getPullRequestReviewInput(organizationId: string, fullName
   let exhausted = false;
   type ChangedFile = { filename: string; previous_filename?: string; status: string; additions?: number; deletions?: number };
   for (let page = 1; page <= 60; page++) {
-    const response = await forgejoRequest(auth.host, auth.token, `/api/v1${path}/files?limit=50&page=${page}`);
+    const response = await request(auth, `/api/v1${path}/files?limit=50&page=${page}`);
     let entries: ChangedFile[];
     try { entries = JSON.parse(response.body); } catch { throw new Error("Invalid Forgejo changed-file response"); }
     if (entries === null && expectedFiles === 0 && files.length === 0) entries = [];
@@ -159,7 +178,7 @@ export async function getPullRequestReviewInput(organizationId: string, fullName
   let rawDiff = "";
   let diffLimited = false;
   try {
-    const response = await forgejoRequest(auth.host, auth.token, `/api/v1${path}.diff`, { maxBytes: Math.min(MAX_FETCH_DIFF_CHARS * 4, 16 * 1024 * 1024) });
+    const response = await request(auth, `/api/v1${path}.diff`, { maxBytes: Math.min(MAX_FETCH_DIFF_CHARS * 4, 16 * 1024 * 1024) });
     rawDiff = truncateDiff(response.body, MAX_FETCH_DIFF_CHARS);
     diffLimited = response.body.length > MAX_FETCH_DIFF_CHARS;
   } catch (error) {
@@ -189,7 +208,7 @@ export async function createPullRequestComment(organizationId: string, fullName:
 
 export async function updatePullRequestComment(organizationId: string, fullName: string, _prNumber: number, commentId: number, body: string, executionWindow?: ReviewExecutionWindow): Promise<void> {
   const auth = await credentials(organizationId);
-  await forgejoRequest(auth.host, auth.token, `/api/v1${repositoryPath(fullName)}/issues/comments/${positiveId(commentId)}`,
+  await request(auth, `/api/v1${repositoryPath(fullName)}/issues/comments/${positiveId(commentId)}`,
     { method: "PATCH", body: { body }, signal: reviewPublicationSignal(executionWindow) });
 }
 

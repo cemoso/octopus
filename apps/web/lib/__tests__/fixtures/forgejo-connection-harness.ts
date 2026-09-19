@@ -38,6 +38,7 @@ const client = {
       operations.push("deactivate"); return { count: 1 };
     },
   },
+  $queryRaw: async () => [],
   $transaction: async (run: (tx: typeof client) => unknown) => run(client),
 };
 mock.module("@octopus/db", () => ({ prisma: client }));
