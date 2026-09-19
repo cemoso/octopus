@@ -61,6 +61,7 @@ mock.module("@/lib/forgejo", () => ({ runWithForgejoRepository: async (_id: stri
   return { number, title: "Authoritative title", author: "author", url: "https://forge.example/team/repo/pulls/7", headSha: sha, baseSha: "b".repeat(40), state, draft, merged };
 } }));
 mock.module("@/lib/webhook-shared", () => ({ startReviewFlow: async (params: Record<string, unknown>) => {
+  if (params.automatic && reviewedHead === params.headSha) return { started: false, reason: "already_reviewed" };
   if (admissionPending) return { started: false, reason: "already_in_progress", message: "Admission pending" };
   await admissionDelay?.();
   if (admissionFailure) throw new Error("enqueue failed");

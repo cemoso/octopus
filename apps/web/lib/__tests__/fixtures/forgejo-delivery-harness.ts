@@ -9,11 +9,31 @@ const { prisma: actual, Prisma } = await import("@octopus/db");
 const phase = process.argv[2];
 const secret = "fixture-secret", sha = "a".repeat(40);
 let jobInserted = false;
+let completeFirst: (() => Promise<void>) | undefined;
+let admissionWrites = 0;
+let admissionReads = 0;
 const wrapped = new Proxy(actual, { get(target, key, receiver) {
   if (key !== "$transaction") return Reflect.get(target, key, receiver);
   return async (work: (tx: PrismaTypes.TransactionClient) => Promise<unknown>) => {
     const result = await actual.$transaction(async tx => {
       const client = new Proxy(tx, { get(target, key, receiver) {
+        if (key === "pullRequest") return new Proxy(tx.pullRequest, { get(delegate, method, receiver) {
+          if (method === "findUnique") return async (...args: Parameters<typeof tx.pullRequest.findUnique>) => {
+            admissionReads++;
+            if (phase === "automatic_metadata_race") {
+              const finish = completeFirst; completeFirst = undefined; await finish?.();
+            }
+            return tx.pullRequest.findUnique(...args);
+          };
+          if (method === "updateManyAndReturn") return async (...args: Parameters<typeof tx.pullRequest.updateManyAndReturn>) => {
+            admissionWrites++;
+            if (phase === "automatic_write_race") {
+              const finish = completeFirst; completeFirst = undefined; await finish?.();
+            }
+            return tx.pullRequest.updateManyAndReturn(...args);
+          };
+          return Reflect.get(delegate, method, receiver);
+        } });
         if (key !== "$queryRawUnsafe") return Reflect.get(target, key, receiver);
         return async (query: string, ...values: unknown[]) => {
           if (phase === "before_enqueue") throw new Error("simulated restart before enqueue");
@@ -48,12 +68,43 @@ try {
     id: "forgejo-delivery-test", organizationId: "forgejo-delivery-test", provider: "forgejo", externalId: "https://forge.example:42", name: "repo", fullName: "team/repo",
   } });
   const { POST } = await import("../../../app/api/forgejo/webhook/[integrationId]/route");
-  const raw = JSON.stringify({ action: "created", repository: { id: 42, full_name: "team/repo" }, issue: { number: 7, pull_request: {} }, comment: { id: 5, body: "/octopus review", user: { login: "member" } } });
+  const automatic = phase.startsWith("automatic_");
+  const raw = JSON.stringify(automatic
+    ? { action: "edited", repository: { id: 42, full_name: "team/repo" }, pull_request: { number: 7, head: { sha } }, changes: { title: { from: phase } } }
+    : { action: "created", repository: { id: 42, full_name: "team/repo" }, issue: { number: 7, pull_request: {} }, comment: { id: phase === "manual_rereview" ? 6 : 5, body: "/octopus review", user: { login: "member" } } });
   const deliver = () => POST(new Request("https://octopus.example/webhook", { method: "POST", body: raw, headers: {
-    "x-forgejo-event": "issue_comment", "x-forgejo-signature": createHmac("sha256", secret).update(raw).digest("hex"),
+    "x-forgejo-event": automatic ? "pull_request" : "issue_comment", "x-forgejo-signature": createHmac("sha256", secret).update(raw).digest("hex"),
   } }), { params: Promise.resolve({ integrationId: "forgejo-delivery-test" }) });
   const jobCount = async () => (await actual.$queryRaw<{ count: bigint }[]>`SELECT count(*) FROM pgboss.job WHERE name = 'process-review'`)[0].count;
-  if (phase === "replay") {
+  if (automatic) {
+    const before = await actual.pullRequest.findFirstOrThrow({ where: { repositoryId: "forgejo-delivery-test" } });
+    await actual.reviewAttempt.deleteMany({ where: { pullRequestId: before.id } });
+    await actual.pullRequest.update({ where: { id: before.id }, data: { status: phase === "automatic_metadata_race" ? "reviewing" : "failed", updatedAt: new Date(0) } });
+    completeFirst = async () => {
+      await actual.$transaction(async tx => {
+        await tx.reviewAttempt.create({ data: { id: phase, pullRequestId: before.id, headSha: sha, coverage: {}, reviewBody: "Completed first review" } });
+        if (phase === "automatic_metadata_race") await tx.pullRequest.update({ where: { id: before.id }, data: { status: "completed", reviewBody: "Completed first review" } });
+      });
+    };
+    assert.equal((await deliver()).status, 200);
+    assert.equal(completeFirst, undefined, "the first review must finish while the second delivery is in flight");
+    const after = await actual.pullRequest.findUniqueOrThrow({ where: { id: before.id } });
+    assert.equal(after.reviewRequestVersion, 1);
+    assert.equal(after.reviewBody, "Completed first review");
+    assert.equal(await jobCount(), 1n);
+    if (phase === "automatic_write_race") {
+      assert.equal(admissionWrites, 1, "the conditional write must reject a newly archived attempt");
+      assert.equal(admissionReads, 2, "the retry must recheck the completed attempt");
+    }
+  } else if (phase === "manual_rereview") {
+    const before = await actual.pullRequest.findFirstOrThrow({ where: { repositoryId: "forgejo-delivery-test" } });
+    await actual.pullRequest.update({ where: { id: before.id }, data: { status: "completed" } });
+    assert.equal((await deliver()).status, 200);
+    const after = await actual.pullRequest.findUniqueOrThrow({ where: { id: before.id } });
+    assert.equal(after.reviewRequestVersion, 2);
+    assert.equal(after.status, "pending");
+    assert.equal(await jobCount(), 2n);
+  } else if (phase === "replay") {
     const before = await actual.pullRequest.findFirstOrThrow({ where: { repositoryId: "forgejo-delivery-test" } });
     assert.equal(before.reviewRequestVersion, 1);
     await actual.pullRequest.update({ where: { id: before.id }, data: { status: "completed", reviewBody: "Completed first review" } });

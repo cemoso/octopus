@@ -64,6 +64,7 @@ type StartReviewParams = {
   prUrl: string;
   prAuthor: string;
   headSha: string | null;
+  automatic?: boolean;
   triggerCommentId: number;
   triggerCommentBody: string;
 };
@@ -192,7 +193,7 @@ async function startReviewFlowInternal(params: StartReviewParams, forgejoTransac
   } catch (error) {
     // Release only this admission. A provider retry must not be suppressed as
     // already in progress when the durable queue never accepted the job.
-    await prisma.pullRequest.updateMany({
+    if (provider === "forgejo") await prisma.pullRequest.updateMany({
       where: { id: pr.id, headSha: pr.headSha, reviewRequestVersion: pr.reviewRequestVersion, status: "pending" },
       data: { status: "failed", errorMessage: "Review could not be queued. Retry the request." },
     });

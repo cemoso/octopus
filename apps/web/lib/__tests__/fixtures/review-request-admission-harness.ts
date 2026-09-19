@@ -108,12 +108,20 @@ const admitBAndComplete = async () => {
 if (scenario === "enqueue_retry") {
   queueFailure = true;
   await assert.rejects(startReviewFlow({ ...params, headSha: B }), /Queue unavailable/);
-  assert.equal(current!.status, "failed");
   assert.equal(current!.reviewRequestVersion, 3);
   queueFailure = false;
-  assert.equal((await startReviewFlow({ ...params, headSha: B })).started, true);
-  assert.equal(current!.reviewRequestVersion, 4);
-  assert.equal(enqueued, 1);
+  if (provider === "forgejo") {
+    assert.equal(current!.status, "failed");
+    assert.equal((await startReviewFlow({ ...params, headSha: B })).started, true);
+    assert.equal(current!.reviewRequestVersion, 4);
+    assert.equal(enqueued, 1);
+  } else {
+    assert.equal(current!.status, "pending");
+    assert.equal(current!.errorMessage, null);
+    await preserve(B, "already_in_progress");
+    assert.equal(current!.reviewRequestVersion, 3);
+    assert.equal(enqueued, 0);
+  }
 } else if (scenario === "delayed") {
   await preserve(A);
   assert.equal(headReads, 1);

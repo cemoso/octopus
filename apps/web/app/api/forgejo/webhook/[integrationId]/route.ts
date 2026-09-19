@@ -108,13 +108,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ int
         ]);
       }
     } else if (details.state === "open" && !details.draft) {
-      const reviewed = automatic && await tx.reviewAttempt.findFirst({
-        where: { headSha: details.headSha, pullRequest: { repositoryId: repo.id, number } },
-        select: { id: true },
-      });
-      if (reviewed) return Response.json({ ok: true, ignored: true });
       const outcome = await startReviewFlow({
-        provider: "forgejo", organizationId: integration.organizationId, orgId: integration.organizationId,
+        provider: "forgejo", automatic, organizationId: integration.organizationId, orgId: integration.organizationId,
         repoId: repo.id, repoFullName: repo.fullName, prNumber: number,
         prTitle: details.title, prUrl: details.url, prAuthor: details.author,
         headSha: automatic ? payload.pull_request!.head.sha : details.headSha,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
 
 const scenarios = {
-  enqueue_retry: "allows retry after a failed durable enqueue without suppressing the request",
+  enqueue_retry: "scopes enqueue-failure recovery to Forgejo",
   retry_org_installation: "uses the organization GitHub installation for a legacy administrative retry",
   cli_org_installation: "uses the organization GitHub installation for a legacy CLI review",
   delayed: "rejects a delayed A request after B completed without clearing its report",

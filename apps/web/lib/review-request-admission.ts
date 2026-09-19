@@ -16,13 +16,14 @@ export type ReviewRequestParams = {
   prUrl: string;
   prAuthor: string;
   headSha: string | null;
+  automatic?: boolean;
   triggerCommentId: number | bigint | null;
   triggerCommentBody: string | null;
 };
 
 export type ReviewRequestRejection = {
   started: false;
-  reason: "stale_head" | "head_unavailable" | "already_in_progress" | "request_contended";
+  reason: "already_reviewed" | "stale_head" | "head_unavailable" | "already_in_progress" | "request_contended";
   message: string;
 };
 
@@ -53,6 +54,7 @@ export async function admitReviewRequest(params: ReviewRequestParams, client: Pr
 }
 
 async function admitReviewRequestInternal(params: ReviewRequestParams, client: Prisma.TransactionClient): Promise<AdmissionResult> {
+  const automatic = params.provider === "forgejo" && params.automatic === true;
   const where = { repositoryId_number: { repositoryId: params.repoId, number: params.prNumber } };
   for (let attempt = 0; attempt < 3; attempt++) {
     // Capture the DB state before the remote read. A competing request that
@@ -68,9 +70,13 @@ async function admitReviewRequestInternal(params: ReviewRequestParams, client: P
     if (params.headSha && params.headSha !== headSha) {
       return { started: false, reason: "stale_head", message: `PR #${params.prNumber} has moved to a different head` };
     }
+    if (automatic && existing && ((existing.headSha === headSha && existing.status === "completed")
+      || await client.reviewAttempt.findFirst({ where: { pullRequestId: existing.id, headSha }, select: { id: true } }))) {
+      return { started: false, reason: "already_reviewed", message: `PR #${params.prNumber} has already been reviewed at this head` };
+    }
     if (existing && existing.headSha === headSha
       && ["reviewing", "pending", "queued"].includes(existing.status)
-      && Date.now() - existing.updatedAt.getTime() <= 3 * 60 * 1000) {
+      && (automatic || Date.now() - existing.updatedAt.getTime() <= 3 * 60 * 1000)) {
       return { started: false, reason: "already_in_progress", message: `Review already in progress for PR #${params.prNumber}` };
     }
 
@@ -102,6 +108,7 @@ async function admitReviewRequestInternal(params: ReviewRequestParams, client: P
       where: {
         id: existing.id, headSha: existing.headSha, reviewRequestVersion: existing.reviewRequestVersion,
         status: existing.status, updatedAt: existing.updatedAt,
+        ...(automatic ? { reviewAttempts: { none: { headSha } } } : {}),
       },
       data: {
         ...data, reviewRequestVersion: { increment: 1 }, reviewBody: null,
