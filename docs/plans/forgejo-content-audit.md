@@ -62,7 +62,7 @@ For direct self-hosted Octopus webhooks on a private destination, Forgejo operat
 
 ## External content requiring separate follow-through
 
-- The organization profile at `octopusreview/.github`, `profile/README.md`, omitted Forgejo (baseline blob `2c701e1f14b57c3b0f26f9266e4a67d056f3d8b9`). [Draft PR #4](https://github.com/octopusreview/.github/pull/4), commit `53ab2bf`, adds Forgejo, the three-path chooser and Cloud processing disclosure while preserving the GitHub-only native agent setup. The one-file diff passed `git diff --check`. Keep this draft unmerged until Octopus v1.2.0 and the connector image are live, then verify the rendered public profile.
+- The organization profile is owned by `octopusreview/.github`, `profile/README.md`; see [PR #4](https://github.com/octopusreview/.github/pull/4) for its Forgejo content update.
 - Ads, social bios, pinned posts, sales templates and launch directories are not stored here. Their current content needs a separate account inventory. No campaigns or posts were changed.
 - Blog bodies are database-backed, so a source scan is not a complete editorial inventory. Preserve dated posts and authentic GitHub example screenshots. A new Forgejo announcement or screenshot should match the verified release and actual review behavior.
 
