@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-09-20
+
+### Improved
+- Forgejo's private Cloud setup now explains where to get and run the connector, with direct setup links, separate token instructions, copyable commands and clear checks for each step. Certificate and recovery guidance is grouped into expandable sections.
+
+### Fixed
+- Forgejo webhook instructions now name the actual event selections for pull request changes, new commits and review commands. Repository setup accounts for indexing that starts automatically and Auto Review already being enabled.
+
 ## [1.2.1] - 2026-09-20
 
 ### Fixed

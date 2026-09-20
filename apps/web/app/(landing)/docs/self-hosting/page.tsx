@@ -540,7 +540,7 @@ function Paragraph({ children }: { children: React.ReactNode }) {
 
 function Mono({ children }: { children: React.ReactNode }) {
   return (
-    <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-xs text-[#ccc]">
+    <code className="rounded bg-white/[0.06] px-1.5 py-0.5 text-xs text-[#ccc] [overflow-wrap:anywhere]">
       {children}
     </code>
   );
@@ -598,7 +598,7 @@ function EnvVar({
           </span>
         )}
       </div>
-      <span className="mt-1 block text-xs text-[#555]">
+      <span className="mt-1 block text-xs text-[#555] [overflow-wrap:anywhere]">
         {description || example}
       </span>
     </div>

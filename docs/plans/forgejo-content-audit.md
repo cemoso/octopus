@@ -1,6 +1,6 @@
 # Forgejo connection content audit
 
-Updated: 19 September 2026. Connector baseline: v1.1.0, commit `85d94b190b25a681a0c289af7a94744b8ee4b3c8`.
+Updated: 20 September 2026. Direct-integration baseline: v1.1.0, commit `85d94b190b25a681a0c289af7a94744b8ee4b3c8`.
 
 This audit covers the repository's current website, onboarding emails, help content and machine-readable descriptions. It tracks the v1.2.0 connector changes separately from the direct Forgejo integration shipped in v1.1.0. Source changes and local validation do not establish a deployed release or a completed review against a user's Forgejo installation.
 
@@ -44,13 +44,24 @@ For direct self-hosted Octopus webhooks on a private destination, Forgejo operat
 
 ## Release follow-through
 
-1. Deploy connector support, its versioned image and content together. Do not publish setup claims before the referenced connector is available.
-2. Apply the additive connector schema migration and guarded email migration. Changing seeds alone does not replace existing database templates. Customized email bodies need editorial review; migrations preserve them.
+For v1.2.2, the outer release executor owns the following steps. This is a web/docs patch with no new migrations or email-template changes; the setup commands retain the tested, published connector 1.2.0 image. Initial connector installation requirements belong to the [v1.2.0 release notes](../../CHANGELOG.md#120---2026-09-19).
+
+1. Wait for all CI and image checks, then deploy only the exact verified web image digest. Preserve existing engine workers and configuration.
+2. Keep the published connector command pin unchanged; the web version bump does not require a connector upgrade.
 3. Refresh the assistant's indexed documentation using the existing authorized `POST /api/admin/seed-docs` process after deployment. Source updates and generated LLM text do not refresh Qdrant by themselves.
-4. Check the live chooser, all three anchors, narrow layouts, Settings flow and rendered email previews. Do not send live customer emails to validate this change.
-5. Verify an authorized private Forgejo repository through actual indexing, a signed event, a completed review, comments and commit status. A successful webhook delivery, mocked AI review or TLS fixture establishes only its measured portion of that flow.
+4. Check the live chooser, all three anchors, narrow layouts, Settings flow and shared self-hosting page. Do not send live customer emails to validate this change.
+5. Verify live content and deployed provenance. The guide's end-to-end acceptance check remains an authorized private Forgejo repository completing indexing, a signed event, a review, comments and commit status; local browser QA and a successful webhook delivery alone do not establish that result.
 
 ## Validation recorded for this change
+
+- The v1.2.2 guide clarifies that Docker downloads the connector, links its exact published package and Docker installation instructions, separates the Forgejo token from the Octopus connector token, and provides numbered setup steps with copyable commands. It links directly to integration settings, repositories and review logs. HTTPS, local-network access and Cloud processing requirements stay visible; certificate and recovery details are expandable. Indexed help content follows the same setup flow and must be reseeded after deployment. Shared code blocks provide visible, keyboard-accessible copy controls and success/failure feedback.
+- Forgejo's webhook picker uses **Trigger on → Custom events… → Pull request events → Modification, Synchronized, Comments**; these UI labels differ from the `pull_request` and `issue_comment` wire events. The guide, integration card, indexed help and assistant prompt now use the picker labels. Confirmed against Forgejo v16.0.5's [webhook template](https://codeberg.org/forgejo/forgejo/src/tag/v16.0.5/templates/webhook/shared-settings.tmpl#L104-L147) and [English labels](https://codeberg.org/forgejo/forgejo/src/tag/v16.0.5/options/locale/locale_en-US.ini#L2329-L2373). The guide also accounts for organization permissions, automatically started indexing and the existing Auto Review default.
+- The release author's final local browser QA reports 21 passing checks at 1280, 390 and 320 CSS px across Integrations and the shared self-hosting page, including real clipboard writes, denied-copy feedback, keyboard focus, native details and links. Evidence and runnable scripts: `/Users/cem/.local/share/octopus/releases/v1.2.2/local-browser-qa`. Fresh Integrations navigation had no console errors. The unchanged self-hosting `EnvGenerator` hydration warning is recorded separately. This is supplied local evidence, not a deployment claim or a browser rerun during the documentation phase.
+- The documentation phase ran the configured web ESLint command against all seven changed TypeScript files successfully; no formatter or lint fixes were needed.
+
+### Earlier connector rollout evidence
+
+The following records describe the original connector rollout, not new v1.2.2 migrations, email work or browser checks.
 
 - Scoped ESLint passed for the edited landing, docs, assistant, dashboard and email files.
 - The email migration-chain test passed against disposable PostgreSQL: 2 tests, 72 assertions. It runs both Forgejo email migrations twice, checks upgrades from pre-Forgejo and v1.1.0 defaults, matches the latest seeds, and preserves customized and non-system bodies, disabled delivery, sender and subject. The database was stopped afterward.

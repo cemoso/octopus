@@ -144,7 +144,7 @@ export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: 
             </div>}
             {data?.webhookSecret && <div className="space-y-3 rounded-md border p-4">
               <p className="text-sm font-medium">Set up automatic reviews</p>
-              <p className="text-muted-foreground text-sm">After syncing repositories, open each repository’s Settings → Webhooks → Add Webhook → Forgejo. Use POST, application/json, the URL and secret below, and select Pull Request and Issue Comment events. Keep the webhook active.</p>
+              <p className="text-muted-foreground text-sm">After syncing repositories, open each repository’s Settings → Webhooks → Add Webhook → Forgejo. Use POST, application/json, and the URL and secret below. Under Trigger on, choose Custom events… and select Modification, Synchronized, and Comments in the Pull request events section. Keep Active checked.</p>
               {connector && <p className="text-muted-foreground text-sm">Forgejo sends this webhook outward to Octopus. The connector has no webhook port.</p>}
               <div className="space-y-1.5"><Label htmlFor="forgejo-webhook-url">Target URL</Label><Input id="forgejo-webhook-url" value={webhookUrl} readOnly onFocus={(event) => event.target.select()} /></div>
               <div className="space-y-1.5"><Label htmlFor="forgejo-webhook-secret">Webhook secret</Label><Input id="forgejo-webhook-secret" value={data.webhookSecret} readOnly onFocus={(event) => event.target.select()} /></div>
