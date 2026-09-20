@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import Link from "@/components/link";
 import { IconTerminal2 } from "@tabler/icons-react";
@@ -16,11 +16,16 @@ export const metadata = {
 const linkStyle =
   "text-white underline decoration-white/30 underline-offset-4 transition-colors hover:decoration-white";
 
-export default function AiAgentsPage() {
-  const skill = fs.readFileSync(
-    path.join(process.cwd(), "public", "skills", "octopus", "SKILL.md"),
-    "utf-8",
-  ).trim();
+export default async function AiAgentsPage() {
+  let skill: string | null = null;
+  try {
+    skill = (await readFile(
+      path.join(process.cwd(), "public", "skills", "octopus", "SKILL.md"),
+      "utf-8",
+    )).trim() || null;
+  } catch {
+    // Keep the guide usable if the packaged skill cannot be read.
+  }
 
   return (
     <article className="max-w-3xl">
@@ -80,18 +85,27 @@ export default function AiAgentsPage() {
           </li>
           <li className="min-w-0 rounded-xl border border-white/10 bg-white/[0.02] p-5">
             <h3 className="mb-2 font-semibold text-white">3. Add the Octopus skill</h3>
-            <p className="text-sm leading-relaxed text-[#a0a0a0]">
-              <Link href="/skills/octopus/SKILL.md" download="SKILL.md" className={linkStyle}>Download SKILL.md</Link> or
-              copy it below. Save it at the location shown for your tool, keeping
-              the filename <Mono>SKILL.md</Mono>. The skill gives your agent
-              instructions; the installed <Mono>octp</Mono> CLI performs the work.
-            </p>
-            <details className="mt-4 rounded-lg border border-white/10">
-              <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-white">View and copy the skill</summary>
-              <div className="min-w-0 px-4 pb-1">
-                <CodeBlock title="SKILL.md">{skill}</CodeBlock>
-              </div>
-            </details>
+            {skill ? (
+              <>
+                <p className="text-sm leading-relaxed text-[#a0a0a0]">
+                  <Link href="/skills/octopus/SKILL.md" download="SKILL.md" className={linkStyle}>Download SKILL.md</Link> or
+                  copy it below. Save it at the location shown for your tool, keeping
+                  the filename <Mono>SKILL.md</Mono>. The skill gives your agent
+                  instructions; the installed <Mono>octp</Mono> CLI performs the work.
+                </p>
+                <details className="mt-4 rounded-lg border border-white/10">
+                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-white">View and copy the skill</summary>
+                  <div className="min-w-0 px-4 pb-1">
+                    <CodeBlock title="SKILL.md">{skill}</CodeBlock>
+                  </div>
+                </details>
+              </>
+            ) : (
+              <p className="text-sm leading-relaxed text-[#a0a0a0]">
+                The skill file is temporarily unavailable. You can still use the{" "}
+                <Link href="#first-review" className={linkStyle}>CLI commands below</Link>.
+              </p>
+            )}
           </li>
         </ol>
         <p className="mt-4 text-sm leading-relaxed text-[#a0a0a0]">
