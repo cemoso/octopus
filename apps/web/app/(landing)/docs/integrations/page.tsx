@@ -13,6 +13,7 @@ import {
   IconServer,
 } from "@tabler/icons-react";
 import { docsPageJsonLd, jsonLd } from "@/lib/structured-data";
+import { CodeBlock } from "../self-hosting/code-block";
 
 export const metadata = {
   title: "Integrations — Octopus Docs",
@@ -171,7 +172,7 @@ export default function IntegrationsPage() {
             </a>
           ))}
         </nav>
-        <h3 className="mb-2 text-base font-semibold text-white">Before you connect</h3>
+        <h3 id="forgejo-token-requirements" className="mb-2 scroll-mt-24 text-base font-semibold text-white">Before you connect</h3>
         <P>
           Create a dedicated Forgejo account with admin access only to the
           repositories you want reviewed. It does not need instance administrator
@@ -193,72 +194,131 @@ export default function IntegrationsPage() {
           <ol className="mb-3 list-outside list-decimal space-y-2 pl-5 text-sm text-[#888]">
             <li>Open Octopus Cloud → Settings → Integrations → Forgejo and choose <strong className="text-[#ccc]">Public HTTPS instance</strong>.</li>
             <li>Enter the public HTTPS instance URL and the Forgejo personal access token. Connect and sync repositories. Octopus stores this token encrypted.</li>
-            <li>Add the <a href="#forgejo-webhooks" className="text-cyan-400 underline">signed repository webhooks</a> below and enable automatic reviews.</li>
+            <li>Add the <a href="#forgejo-webhooks" className="text-cyan-400 underline">signed repository webhooks</a>, then <a href="#forgejo-connector-step-7" className="text-cyan-400 underline">prepare your repository and enable reviews</a>.</li>
           </ol>
         </section>
 
-        <section id="forgejo-cloud-private" className="my-6 scroll-mt-24">
-          <h3 className="mb-2 text-base font-semibold text-white">2. Octopus Cloud + private LAN/VPN</h3>
-          <P>
-            Run the connector on a machine that can resolve and reach your private
-            HTTPS Forgejo instance. The connector and Forgejo both need outbound
-            HTTPS access to <code>octopus-review.ai</code> on port 443: the connector
-            handles API requests, while Forgejo sends signed webhooks directly to
-            Cloud. You do not need a public Forgejo address, a tunnel or an inbound
-            port on the connector. This setup requires internet access.
-          </P>
-          <ol className="mb-3 list-outside list-decimal space-y-2 pl-5 text-sm text-[#888]">
-            <li>In Octopus Cloud → Settings → Integrations → Forgejo, choose <strong className="text-[#ccc]">Private network connector</strong> and enter the exact HTTPS Forgejo origin, including its port if needed.</li>
-            <li>Create the connector credential and save it when shown. This credential pairs the connector with your Octopus organization. Keep the separate Forgejo personal access token on the connector machine.</li>
-            <li>On that machine, create <code>connector.env</code> with the following values. Replace the example Forgejo origin and both credential placeholders.</li>
-          </ol>
-          <pre className="mb-3 overflow-x-auto rounded-lg border border-white/10 bg-black/30 p-4 text-xs text-[#bbb]"><code>{`OCTOPUS_URL=https://octopus-review.ai
+        <section id="forgejo-cloud-private" className="my-10 scroll-mt-24">
+          <h3 className="mb-3 text-xl font-semibold text-white">2. Octopus Cloud + private LAN/VPN</h3>
+          <div className="mb-6 rounded-xl border border-cyan-400/20 bg-cyan-400/[0.04] p-5 sm:p-6">
+            <h4 className="text-base font-semibold text-white">Where is the connector?</h4>
+            <p className="mt-2 text-sm leading-6 text-[#ccc]">
+              The Forgejo connector is a small Docker container. Run it on an
+              always-on machine in the same LAN or VPN as Forgejo. Docker downloads
+              the connector image automatically when you run the command in <a href="#forgejo-connector-step-4" className="text-cyan-400 underline underline-offset-4">step 4</a>.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-x-5 gap-y-3 text-sm">
+              <a href="https://github.com/orgs/octopusreview/packages/container/octopus-selfhost/1269975499" className="text-cyan-400 underline underline-offset-4">View connector image</a>
+              <a href="https://docs.docker.com/get-started/get-docker/" className="text-cyan-400 underline underline-offset-4">Install Docker</a>
+              <a href="https://github.com/octopusreview/octopus/tree/v1.2.0/packages/forgejo-connector" className="text-cyan-400 underline underline-offset-4">Connector source</a>
+            </div>
+          </div>
+
+          <div className="mb-6 rounded-xl border border-white/10 p-5 sm:p-6">
+            <h4 className="text-base font-semibold text-white">Have these ready</h4>
+            <ul className="mt-3 list-outside list-disc space-y-3 pl-5 text-sm leading-6 text-[#bbb]">
+              <li><strong className="text-white">Owner or admin access in your Octopus organization.</strong> You need this to create and manage the connector.</li>
+              <li><strong className="text-white">Docker on the connector machine.</strong> The container must be able to reach Forgejo through your LAN/VPN routes and DNS. Access from your laptop&apos;s browser alone is not enough.</li>
+              <li><strong className="text-white">A verified HTTPS Forgejo address.</strong> Use its hostname or LAN/VPN IP, including a port if needed, without a path. HTTP, redirects, localhost, loopback, link-local and metadata addresses are blocked. An internal certificate authority needs the <a href="#forgejo-connector-tls" className="text-cyan-400 underline underline-offset-4">trusted CA setup in step 4</a>.</li>
+              <li><strong className="text-white">Outbound internet access.</strong> Both Forgejo and the connector need HTTPS access to <code className="break-words">octopus-review.ai</code> on port 443. Forgejo sends webhooks directly to Cloud. You do not need a tunnel, a public Forgejo address or inbound ports on the connector.</li>
+            </ul>
+            <p className="mt-4 border-t border-white/10 pt-4 text-sm leading-6 text-[#bbb]">
+              Your Forgejo token stays on the connector machine. Code, diffs and
+              review context still travel to Octopus Cloud and your configured AI
+              services. This keeps Forgejo private; review processing happens in Cloud.
+            </p>
+          </div>
+
+          <ol role="list" className="space-y-5">
+            <ForgejoSetupStep number={1} location="In Forgejo" title="Create the Forgejo access token">
+              <p>Sign in with a dedicated account that administers only the repositories you want reviewed. It does not need instance administrator access.</p>
+              <p>Open that account&apos;s <strong className="text-white">Settings → Applications</strong> and generate a personal access token with <code>read:user</code>, <code>write:repository</code> and <code>write:issue</code>.</p>
+              <p>For private repositories, choose <strong className="text-white">All (public, private, and limited)</strong>; limit access through the account&apos;s repository permissions. <a href="#forgejo-token-requirements" className="text-cyan-400 underline underline-offset-4">Full token requirements</a>.</p>
+              <p className="rounded-lg bg-white/[0.04] p-3"><strong className="text-white">Keep this token locally.</strong> It becomes <code>FORGEJO_TOKEN</code> in step 3. You do not paste it into Octopus Cloud.</p>
+            </ForgejoSetupStep>
+
+            <ForgejoSetupStep number={2} location="In Octopus Cloud" title="Create the connector token">
+              <a href="/settings/integrations#forgejo" className="inline-flex min-h-10 items-center rounded-lg bg-cyan-400 px-4 py-2 font-medium text-black transition-colors hover:bg-cyan-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400">Open Forgejo settings</a>
+              <p>In <strong className="text-white">Settings → Integrations → Forgejo</strong>, select <strong className="text-white">Private network connector</strong>. Enter your exact HTTPS Forgejo address and click <strong className="text-white">Create connector</strong>.</p>
+              <p>Click <strong className="text-white">Copy connector token</strong> and save it securely; it is shown only once. This separate token pairs your local connector with Octopus and becomes <code className="break-all">OCTOPUS_CONNECTOR_TOKEN</code> below.</p>
+            </ForgejoSetupStep>
+
+            <ForgejoSetupStep number={3} location="On the connector machine" title="Create your configuration file">
+              <p>Create a file named <code>connector.env</code> and paste this template. Replace the example address and both token placeholders.</p>
+              <CodeBlock title="connector.env">{`OCTOPUS_URL=https://octopus-review.ai
 OCTOPUS_CONNECTOR_TOKEN=YOUR_CONNECTOR_CREDENTIAL
 FORGEJO_URL=https://forgejo.internal.example
-FORGEJO_TOKEN=YOUR_FORGEJO_PERSONAL_ACCESS_TOKEN`}</code></pre>
-          <P>Restrict the file to your account, then start the connector. The container needs the same VPN routes and DNS as Forgejo; access from your laptop alone does not establish access from Docker.</P>
-          <pre className="mb-3 overflow-x-auto rounded-lg border border-white/10 bg-black/30 p-4 text-xs text-[#bbb]"><code>{String.raw`chmod 600 connector.env
+FORGEJO_TOKEN=YOUR_FORGEJO_PERSONAL_ACCESS_TOKEN`}</CodeBlock>
+              <dl className="space-y-3 rounded-lg bg-white/[0.04] p-3">
+                <div><dt className="font-medium text-white"><code className="break-all">OCTOPUS_CONNECTOR_TOKEN</code></dt><dd>The one-time token from Octopus in step 2.</dd></div>
+                <div><dt className="font-medium text-white"><code>FORGEJO_TOKEN</code></dt><dd>The personal access token from Forgejo in step 1.</dd></div>
+              </dl>
+              <p>Keep this file private and out of your Git repositories.</p>
+            </ForgejoSetupStep>
+
+            <ForgejoSetupStep number={4} location="On the connector machine" title="Start the connector with Docker">
+              <p>Open a terminal in the folder containing <code>connector.env</code> and run this command. It downloads the connector and starts it in the background. Keep the container running for indexing and reviews.</p>
+              <p>If Forgejo uses an internal certificate authority, use the trusted CA command below instead.</p>
+              <CodeBlock title="Terminal — start the connector">{String.raw`chmod 600 connector.env
 docker run -d --name octopus-forgejo-connector \
   --restart unless-stopped --stop-timeout 120 --read-only \
   --env-file connector.env \
-  ghcr.io/octopusreview/octopus-selfhost:forgejo-connector-1.2.0`}</code></pre>
-          <P>
-            Forgejo must use verified HTTPS. For an internal certificate authority,
-            add <code>NODE_EXTRA_CA_CERTS=/certs/forgejo-ca.pem</code> to the environment
-            file and mount the trusted PEM file when creating the container with
-            <code> --mount type=bind,src=/absolute/path/forgejo-ca.pem,dst=/certs/forgejo-ca.pem,readonly</code>.
-            For a native process, use the certificate file&apos;s local path instead.
-            Keep TLS verification enabled. Use Forgejo&apos;s LAN/VPN hostname or
-            address; HTTP, redirects, localhost, loopback, link-local and cloud
-            metadata addresses are not supported.
-          </P>
-          <ol start={4} className="mb-3 list-outside list-decimal space-y-2 pl-5 text-sm text-[#888]">
-            <li>Return to Octopus and refresh the connector status. When it is online, sync repositories.</li>
-            <li>In each Forgejo repository, add the <a href="#forgejo-webhooks" className="text-cyan-400 underline">signed webhook</a> using the Cloud URL and secret shown in Octopus. The webhook targets Cloud directly, not the connector.</li>
-            <li>Enable automatic reviews, open a non-draft test PR and follow it in Review Logs. Check that a completed review, comments and the final commit status appear on Forgejo.</li>
+  ghcr.io/octopusreview/octopus-selfhost:forgejo-connector-1.2.0`}</CodeBlock>
+              <details id="forgejo-connector-tls" className="scroll-mt-24 rounded-lg border border-white/10">
+                <summary className="cursor-pointer rounded-lg px-4 py-3 font-medium text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400">Using an internal certificate authority?</summary>
+                <div className="space-y-3 border-t border-white/10 p-4">
+                  <p>Before starting the container, add this line to <code>connector.env</code>:</p>
+                  <CodeBlock title="Add to connector.env">{"NODE_EXTRA_CA_CERTS=/certs/forgejo-ca.pem"}</CodeBlock>
+                  <p>Use the command below, replacing <code className="break-all">/absolute/path/forgejo-ca.pem</code> with the trusted PEM certificate file on your machine. The file is mounted read-only. Keep TLS certificate verification enabled.</p>
+                  <CodeBlock title="Terminal — start with your trusted CA">{String.raw`chmod 600 connector.env
+docker run -d --name octopus-forgejo-connector \
+  --restart unless-stopped --stop-timeout 120 --read-only \
+  --env-file connector.env \
+  --mount type=bind,src=/absolute/path/forgejo-ca.pem,dst=/certs/forgejo-ca.pem,readonly \
+  ghcr.io/octopusreview/octopus-selfhost:forgejo-connector-1.2.0`}</CodeBlock>
+                </div>
+              </details>
+            </ForgejoSetupStep>
+
+            <ForgejoSetupStep number={5} location="Back in Octopus Cloud" title="Check the connection and sync repositories">
+              <p>Return to <a href="/settings/integrations#forgejo" className="text-cyan-400 underline underline-offset-4">Forgejo settings</a> and click <strong className="text-white">Refresh status</strong>. When the status reads <strong className="text-white">Connector online</strong>, click <strong className="text-white">Sync repositories</strong>.</p>
+              <p>Only repositories the Forgejo account administers will appear. If the status stays <strong className="text-white">Waiting for connector</strong> or <strong className="text-white">Connector offline</strong>, check that its container can reach both Forgejo and Octopus Cloud before continuing.</p>
+            </ForgejoSetupStep>
+
+            <ForgejoSetupStep number={6} location="In each Forgejo repository" title="Add the signed webhook">
+              <p>Open the repository&apos;s <strong className="text-white">Settings → Webhooks → Add Webhook → Forgejo</strong>. Copy the webhook URL and secret shown in <a href="/settings/integrations#forgejo" className="text-cyan-400 underline underline-offset-4">Octopus Forgejo settings</a>.</p>
+              <ul className="list-outside list-disc space-y-2 pl-5">
+                <li>Use <strong className="text-white">POST</strong> and <code>application/json</code>.</li>
+                <li>Under <strong className="text-white">Trigger on</strong>, choose <strong className="text-white">Custom events…</strong>.</li>
+                <li>Under <strong className="text-white">Pull request events</strong>, select <strong className="text-white">Modification</strong> and <strong className="text-white">Synchronized</strong> to review new pull requests and pushed commits.</li>
+                <li>In that same group, select <strong className="text-white">Comments</strong> for <code>@octopus</code> or <code>/octopus</code> PR commands. Keep <strong className="text-white">Active</strong> checked and save the webhook.</li>
+              </ul>
+              <p>The webhook goes directly from Forgejo to Octopus Cloud. <a href="#forgejo-webhooks" className="text-cyan-400 underline underline-offset-4">Webhook and review-event details</a>.</p>
+            </ForgejoSetupStep>
+
+            <ForgejoSetupStep number={7} location="In Octopus Cloud" title="Prepare your repository and enable reviews">
+              <ol className="list-outside list-decimal space-y-3 pl-5">
+                <li>Open <a href="/repositories" className="text-cyan-400 underline underline-offset-4">Repositories</a> and click your Forgejo repository.</li>
+                <li>Indexing may start automatically after sync. If it has not started, click <strong className="text-white">Create Index</strong>. Wait for indexing to finish.</li>
+                <li>Click <strong className="text-white">Run Analysis</strong> and wait for it to complete.</li>
+                <li>Confirm <strong className="text-white">Auto Review</strong> is on in the same repository panel; enable it if needed. The switch is unavailable until indexing and analysis finish.</li>
+              </ol>
+              <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/[0.04] p-4">
+                <p className="font-medium text-white">Try your first review</p>
+                <p className="mt-1">Open a non-draft pull request in Forgejo and follow it in <a href="/review-logs" className="text-cyan-400 underline underline-offset-4">Review Logs</a>. Check that the review completes and its comments and final commit status appear on Forgejo. A successful webhook test alone does not confirm the full review flow.</p>
+              </div>
+            </ForgejoSetupStep>
           </ol>
-          <P>
-            Keep the connector running for indexing, reviews and comment publication.
-            If it goes offline, restore its network access and refresh its status.
-            To rotate its credential, generate a replacement in Octopus, update
-            <code> connector.env</code> and restart the connector with the new value.
-            For Docker, stop and remove the existing container, then run the
-            command above again. A plain <code>docker restart</code> does not reload
-            an environment file. The old credential stops working. Disconnecting deactivates the
-            repositories; remove their webhooks and revoke the Forgejo token too.
-          </P>
-          <P>
-            If a write may have reached Forgejo but its result was lost, Octopus
-            pauses the connector. Check the affected PR for comments or statuses
-            before choosing <strong className="text-[#ccc]">Resume after checking Forgejo</strong>.
-            Octopus does not automatically replay that uncertain write.
-          </P>
-          <P>
-            Your Forgejo token stays on the connector machine. Code, diffs and
-            review context travel to Octopus Cloud and the configured AI services.
-            The connector keeps the Forgejo service private; it does not keep
-            review processing on your network.
-          </P>
+
+          <details className="mt-6 rounded-xl border border-white/10 text-sm leading-6 text-[#bbb]">
+            <summary className="cursor-pointer rounded-xl p-5 font-medium text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400">Reconnect, rotate a token, or remove the connector</summary>
+            <div className="space-y-4 border-t border-white/10 p-5">
+              <p><strong className="text-white">Offline:</strong> restore the container&apos;s network access and click <strong className="text-white">Refresh status</strong>. Keep the connector running for indexing, reviews and comment publication.</p>
+              <p><strong className="text-white">Rotate the connector token:</strong> generate a replacement in Octopus, update <code>connector.env</code>, then stop and remove the existing Docker container and run the matching command from step 4 again. A plain <code>docker restart</code> does not reload the environment file. The old connector token stops working.</p>
+              <p><strong className="text-white">Paused after an uncertain write:</strong> a comment or status may have reached Forgejo even if its result was lost. Check the affected PR before choosing <strong className="text-white">Resume after checking Forgejo</strong>. Octopus does not automatically replay that write.</p>
+              <p><strong className="text-white">Disconnect:</strong> disconnecting in Octopus deactivates the repositories. Remove their webhooks, stop the local connector and revoke the Forgejo personal access token too.</p>
+            </div>
+          </details>
         </section>
 
         <section id="forgejo-self-hosted" className="my-6 scroll-mt-24">
@@ -273,6 +333,7 @@ docker run -d --name octopus-forgejo-connector \
             <li>Follow the <a href="/docs/self-hosting#forgejo" className="text-cyan-400 underline">self-hosted network, DNS and certificate setup</a> on both web and review workers.</li>
             <li>In your Octopus Settings → Integrations → Forgejo, enter the private HTTPS origin and personal access token, then click <strong className="text-[#ccc]">Connect Forgejo</strong> to connect and sync repositories.</li>
             <li>Add signed webhooks targeting your own Octopus deployment. If the target is private, allow its exact host in Forgejo&apos;s <code>[webhook] ALLOWED_HOST_LIST</code>, keeping existing entries.</li>
+            <li>In your own Octopus deployment, open Repositories and select the repository. Wait for indexing, or click Create Index if it has not started. Then click Run Analysis and confirm Auto Review is on once analysis completes.</li>
           </ol>
           <P>Your Octopus deployment and configured AI services determine where reviews are processed. Use local AI services when processing must stay on your network.</P>
         </section>
@@ -282,10 +343,10 @@ docker run -d --name octopus-forgejo-connector \
           <P>
             In each synced Forgejo repository, open Settings → Webhooks → Add
             Webhook → Forgejo. Use POST, <code>application/json</code>, and the
-            target URL and secret shown in Octopus. Select Pull Request events
-            and keep the webhook active. Select Issue Comment events too if you
-            want to request reviews with <code>@octopus</code> or <code>/octopus</code>{" "}
-            in PR comments. A successful Test Delivery checks transport; a real
+            target URL and secret shown in Octopus. Under Trigger on, choose
+            Custom events… → Pull request events, then select Modification and
+            Synchronized. Select Comments in that same group for <code>@octopus</code> or <code>/octopus</code>{" "}
+            PR commands. Keep Active checked and save the webhook. A successful Test Delivery checks transport; a real
             pull request checks the complete review flow.
           </P>
           <P>
@@ -415,6 +476,31 @@ docker run -d --name octopus-forgejo-connector \
 /* ------------------------------------------------------------------ */
 /* Sub-components                                                      */
 /* ------------------------------------------------------------------ */
+
+function ForgejoSetupStep({
+  number,
+  location,
+  title,
+  children,
+}: {
+  number: number;
+  location: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li id={`forgejo-connector-step-${number}`} className="min-w-0 scroll-mt-24 rounded-xl border border-white/10 bg-white/[0.02] p-5 sm:p-6">
+      <div className="mb-4 flex items-start gap-3">
+        <span aria-hidden="true" className="flex size-8 shrink-0 items-center justify-center rounded-full border border-cyan-400/30 bg-cyan-400/10 text-sm font-semibold text-cyan-400">{number}</span>
+        <div className="min-w-0">
+          <p className="mb-1 text-xs font-medium text-[#aaa]">{location}</p>
+          <h4 className="text-base font-semibold leading-6 text-white">{title}</h4>
+        </div>
+      </div>
+      <div className="min-w-0 space-y-3 text-sm leading-6 text-[#bbb]">{children}</div>
+    </li>
+  );
+}
 
 function IntegrationSection({
   icon,
