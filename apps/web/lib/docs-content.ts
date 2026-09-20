@@ -152,8 +152,10 @@ octp chat — Start an interactive chat session about your codebase.`,
       {
         heading: "Pull Request Commands",
         text: `octp review --pr <number> — Review a specific pull request.
-You can also pass a full PR URL: octp review --pr https://github.com/org/repo/pull/142
-The CLI streams the review in real-time and posts findings to the PR.`,
+You can also pass a full GitHub, GitLab, or Bitbucket PR URL: octp review --pr https://github.com/org/repo/pull/142
+For Forgejo, use the PR number from its connected repository checkout; native CLI 0.6.0 does not accept Forgejo full PR URLs.
+This requests an asynchronous server-side review for a connected repository. A successful response means queued, not completed. Follow Review Logs and the resulting comments on the PR.
+For a staged local diff, use octp review --staged --no-index --format json. It returns findings in the terminal; it does not post PR comments. --no-index prevents new indexing but can still use existing indexed context. Code and review metadata go to Octopus and its configured AI services; credits or provider budget apply. Check truncated in local JSON output before claiming complete coverage.`,
       },
       {
         heading: "Dependency Analysis",
@@ -175,9 +177,10 @@ The local agent monitors your project and provides real-time assistance.`,
       },
       {
         heading: "Skills",
-        text: `octp skills list — List available automation skills.
-octp skills install <name> — Install a skill for Claude Code or Codex.
-Skills are pre-built automation workflows like "Split and Ship" and "Octopus Fix".`,
+        text: `octp skills list — List available automation command files.
+octp skills install octopus-fix — Install this Claude Code command into the current project's .claude/commands directory.
+octp skills install --all — Install all available command files there.
+The native CLI does not support --claude or --codex install flags. For Codex, OpenCode, Hermes Agent, OpenClaw, Cursor, or a Claude Code skill, use the shared SKILL.md and per-tool setup at https://octopus-review.ai/docs/cli/ai-agents.`,
       },
       {
         heading: "Configuration",
@@ -186,6 +189,58 @@ octp config set <key> <value> — Set a configuration value.
 octp usage — View token and credit usage.
 octp logout — End your session.
 Multiple profiles are supported for switching between accounts.`,
+      },
+    ],
+  },
+
+  {
+    page: "cli/ai-agents",
+    title: "AI Coding Agents",
+    sections: [
+      {
+        heading: "Install the CLI and shared skill",
+        text: `Use Octopus with Claude Code, Codex, OpenCode, Hermes Agent by Nous Research, OpenClaw, and Cursor through the native octp CLI and a shared skill. These are CLI/skill setups; do not invent a published Codex, OpenCode, Hermes, or OpenClaw plugin.
+Follow https://octopus-review.ai/docs/cli to install and run octp login yourself. Install and authenticate in the environment where the agent actually runs commands, including its remote host, container, sandbox, or node. Ask the agent to run octp --version and octp whoami there and confirm the intended organization. These checks do not start a review. Never paste tokens into chat or skill files.
+Download https://octopus-review.ai/skills/octopus/SKILL.md and save it in the location for your tool. This skill is separate from the Claude command files installed by octp skills install. Full guide: https://octopus-review.ai/docs/cli/ai-agents.`,
+      },
+      {
+        heading: "Agent skill locations and activation",
+        text: `Claude Code: save .claude/skills/octopus/SKILL.md in the project; start a new session and use /octopus. The separately packaged MCP plugin has its own setup at https://octopus-review.ai/docs/cli/claude-code-integration.
+Codex: save .agents/skills/octopus/SKILL.md in the project and invoke $octopus or ask Codex to use the skill.
+OpenCode: save .agents/skills/octopus/SKILL.md (or .opencode/skills/octopus/SKILL.md); start in that project and ask it to use the octopus skill.
+Hermes Agent by Nous Research: save .agents/skills/octopus/SKILL.md; review the project's skills and run hermes skills trust from its root before starting Hermes. Use /skills to check discovery, then /octopus. The CLI and login must exist inside the configured terminal backend, including Docker or SSH.
+OpenClaw: save .agents/skills/octopus/SKILL.md in the configured agent workspace, or skills/octopus/SKILL.md. Run openclaw skills info octopus to check discovery, then use /octopus in a new session. The configured workspace and execution host/node/sandbox may differ from your shell's current checkout.
+Cursor: save .agents/skills/octopus/SKILL.md in the project, check Customize > Skills, then use /octopus in Agent chat. Remote agents need their own available CLI and login.
+Each tool's ordinary terminal permissions and trust controls still apply.`,
+      },
+      {
+        heading: "Choose the review scope",
+        text: `For exactly the staged diff, run octp review --staged --no-index --format json from the intended repository. Untracked files are excluded. Default octp review --no-index --format json can include committed changes since upstream plus unstaged tracked changes, and may omit staged-only changes; inspect the intended scope first. --no-index avoids new repository indexing but can use already indexed context. Local JSON's truncated:true means incomplete coverage.
+For a connected repository's PR, octp review --pr 42 (or a full GitHub, GitLab, or Bitbucket PR URL) queues a server-side review. For Forgejo use the PR number from its connected checkout; the native CLI 0.6.0 URL parser does not accept Forgejo PR URLs. Confirm the final result in https://octopus-review.ai/review-logs and on the PR before reporting completion.
+Reviews send code/diffs and metadata to the configured Octopus server and AI services and use credits or provider budget, separately from the coding agent subscription. Present findings first; editing files, committing, pushing, and posting comments follow the user's authorization and repository instructions.`,
+      },
+    ],
+  },
+  {
+    page: "cli/claude-code-integration",
+    title: "Claude Code Integration",
+    sections: [
+      {
+        heading: "Install the current Claude plugin",
+        text: `The current Octopus MCP plugin is octopus-review in the publisher's octopus-review marketplace. In a terminal run:
+claude plugin marketplace add octopusreview/octopus-plugin
+claude plugin install octopus-review@octopus-review
+Inside Claude Code the equivalents start with /plugin marketplace add and /plugin install. This is the publisher's marketplace, not a claim of inclusion in Anthropic's official catalog. Prerequisites: current Claude Code, Node.js 18 or later with npx, Git, and outbound access to GitHub, the npm registry and Octopus Cloud. The plugin does not need the Octopus CLI. Guide: https://octopus-review.ai/docs/cli/claude-code-integration.`,
+      },
+      {
+        heading: "Configure and verify the Claude plugin",
+        text: `Create an organization API token in https://octopus-review.ai/settings/api-tokens. Inside Claude Code run /plugin configure octopus-review@octopus-review and enter it in the sensitive api_token field. Keep tokens out of chat and Git. Restart Claude Code, open /mcp to check that octopus connects, and ask it to call octopus_status without starting a review. Confirm the intended organization.
+For tracked working-tree and staged changes, ask the plugin to review the current repository. It uses git diff HEAD; untracked files are excluded, and the Octopus API limit is 500 KiB. The plugin shows brief findings summaries; use the native CLI for structured local review results. Reviews send code to Octopus and configured AI services and use organization credits or provider budget. For a connected repository, asking it to review PR 42 queues a server-side review; verify completion in Review Logs and the PR comments. Type /octopus-review: and select the review command for slash-command use.
+Installation and component discovery were checked with Claude Code 2.1.276; this is not evidence of an authenticated customer review. For the native CLI or a configured self-hosted Octopus server, follow https://octopus-review.ai/docs/cli/ai-agents instead.`,
+      },
+      {
+        heading: "Legacy plugin instructions",
+        text: `claude plugin install octopus fails in a fresh configuration because its marketplace has not been added. The older octopusreview/claude-plugin repository declares the separate octopus@octopus plugin and still contains instructions calling the obsolete octopus executable. Adding that old marketplace can make installation succeed without making those review commands current. Recommend the current octopus-review@octopus-review plugin or the shared native octp skill. Do not recommend an unqualified /review command or npm @octp/cli as the current native installation.`,
       },
     ],
   },
@@ -483,7 +538,7 @@ Webhook: An HTTP callback from GitHub, GitLab, Bitbucket, or Forgejo that notifi
     sections: [
       {
         heading: "Overview",
-        text: `Skills are pre-built automation workflows that you can install and run with Claude Code or Codex. They automate common development tasks using Octopus as the backbone.
+        text: `The downloadable workflow command files on /docs/skills target Claude Code. The native CLI installs them under the project's .claude/commands directory, not as Codex plugins. For a shared Octopus review skill covering Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw and Cursor, follow https://octopus-review.ai/docs/cli/ai-agents and download /skills/octopus/SKILL.md.
 Features: Smart categorization of changes, automatic PR creation, full traceability from issue to PR.`,
       },
       {

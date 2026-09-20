@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] - 2026-09-20
+
+### Added
+- Setup guides for Codex, OpenCode, Hermes Agent, OpenClaw, Cursor and Claude Code, with a shared downloadable Octopus skill and checks for the agent's actual execution environment.
+- A footer banner inviting visitors to star Octopus on GitHub and support the project.
+
+### Fixed
+- Corrected Claude plugin marketplace, installation and token setup instructions. CLI skill commands now match the published native binary, and review requests are clearly distinguished from completed reviews.
+- Removed the footer's "Powered by Claude" attribution.
+
 ## [1.2.2] - 2026-09-20
 
 ### Improved

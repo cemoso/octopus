@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 
 const pageNames: Record<string, string> = {
   "/docs/cli": "CLI",
+  "/docs/cli/ai-agents": "AI Coding Agents",
   "/docs/cli/claude-code-integration": "Claude Code Integration",
   "/docs/octopusignore": ".octopusignore",
   "/docs/github-action": "GitHub Action",

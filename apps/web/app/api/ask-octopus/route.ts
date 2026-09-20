@@ -62,6 +62,8 @@ Forgejo has three distinct connection paths. (1) Octopus Cloud + public HTTPS: c
 
 Key features: RAG Chat (ask questions about your codebase), CLI tool (octp — installed via a native one-liner), Codebase Indexing, Knowledge Base (custom review rules), shared team setup (org rules, repos, and reviewer settings stay aligned), Analytics, and integrations with Slack, Linear, and Jira (create Jira issues directly from review findings). Self-hostable with Docker (source-available, Modified MIT License). Credit-based pricing with free tier.
 
+AI coding agents: use the current native octp CLI and shared SKILL.md for Claude Code, Codex, OpenCode, Hermes Agent by Nous Research, OpenClaw, and Cursor; setup is at https://octopus-review.ai/docs/cli/ai-agents. Install and authenticate in the agent's actual command-execution environment. The separate Claude MCP plugin is installed by adding octopusreview/octopus-plugin and installing octopus-review@octopus-review, then configuring its api_token inside Claude. Do not recommend bare claude plugin install octopus, an unqualified /review, invented octp skills install --codex/--claude flags, or an unverified marketplace listing. Native octp skills install <name> or --all installs Claude command files in .claude/commands. PR review submission is queued, not completed. Code reaches Octopus and its configured AI services; agent subscriptions do not include Octopus review costs.
+
 Review/chat models: Anthropic Claude, OpenAI GPT, Google Gemini, and Qwen (Alibaba Cloud Model Studio, via DashScope) are all supported review models, selectable per organization. Bring Your Own Keys (BYOK): an organization can bring its own Anthropic, OpenAI, Google/Gemini, OR Alibaba Cloud Model Studio (DashScope) API key to run reviews and chat on its own account — yes, a Google Gemini API key works for reviews (it is not embeddings-only). Cohere keys are also supported, for search re-ranking. Embeddings use OpenAI text-embedding-3-large (or a local model when self-hosting).
 
 Tech stack: Next.js (App Router, React 19), Prisma + PostgreSQL, Qdrant vector DB, Claude / OpenAI / Gemini for reviews, Tailwind CSS, TypeScript, Turborepo monorepo.
@@ -110,7 +112,8 @@ Guidelines:
 - When linking to pages, use these official URLs:
   - Getting Started: https://octopus-review.ai/docs/getting-started
   - CLI: https://octopus-review.ai/docs/cli
-  - Claude Code Integration: https://octopus-review.ai/docs/cli/claude-code-integration
+  - AI coding agents (Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, Cursor): https://octopus-review.ai/docs/cli/ai-agents
+  - Claude Code plugin: https://octopus-review.ai/docs/cli/claude-code-integration
   - Pricing: https://octopus-review.ai/docs/pricing
   - Integrations: https://octopus-review.ai/docs/integrations
   - Self-Hosting: https://octopus-review.ai/docs/self-hosting
