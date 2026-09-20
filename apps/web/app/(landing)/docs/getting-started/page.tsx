@@ -239,11 +239,11 @@ export default function GettingStartedPage() {
       {/* Step 4: CLI */}
       <Section title="4. Use the CLI as an AI-Powered Dev Tool">
         <Paragraph>
-          The Octopus CLI is more than a command-line interface. It gives AI
-          coding tools like Claude Code, Cursor, and Copilot direct access to
-          your codebase context. Use it to review PRs, index repos, chat with
-          your code, and manage your knowledge base from the terminal or from
-          inside any AI-powered editor.
+          Coding agents can use the Octopus CLI through their terminal tools.
+          Follow the <Link href="/docs/cli/ai-agents" className="text-cyan-400 underline underline-offset-4">AI coding agents guide</Link> for
+          Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, and Cursor.
+          Install and authenticate the CLI in the environment where your agent
+          executes commands, then check the connection before requesting a review.
         </Paragraph>
         <div className="mb-4 space-y-2">
           <CommandRow

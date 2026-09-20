@@ -156,15 +156,40 @@ octp setup-token --no-open`}</CodeBlock>
         />
       </Section>
 
+      <Section title="Review Local Changes">
+        <Paragraph>
+          Run these from your Git repository. The first command reviews branch commits
+          and tracked working changes; use the second for staged changes. Untracked
+          files are not included.
+        </Paragraph>
+        <CodeBlock>{`octp review --no-index --format json
+octp review --staged --no-index --format json`}</CodeBlock>
+        <Paragraph>
+          Reviews send the selected diff to your configured Octopus server and use
+          your organisation&apos;s review budget. <Mono>--no-index</Mono> skips new
+          working-tree indexing; existing repository context can still be used.
+          If the output reports <Mono>truncated: true</Mono>, split the changes
+          before treating the review as complete.
+        </Paragraph>
+      </Section>
+
       {/* PR commands */}
       <Section title="Pull Request Commands">
         <CommandCard
           command="octp review --pr <pr>"
-          description="Trigger an AI review on a pull request. Accepts a PR number or full URL."
+          description="Trigger an AI review on a pull request. Accepts a PR number or full GitHub, GitLab, or Bitbucket PR URL."
         />
         <Paragraph>Examples:</Paragraph>
         <CodeBlock>{`octp review --pr 42
 octp review --pr https://github.com/owner/repo/pull/42`}</CodeBlock>
+        <Paragraph>
+          For Forgejo, run the command from the connected repository checkout and
+          use its PR number; native CLI 0.6.0 does not accept Forgejo PR URLs.
+          This queues a review that posts comments on the pull request. A successful
+          command confirms the request was accepted. Follow completion in{" "}
+          <Link href="/review-logs" className="text-white underline">Review Logs</Link>
+          {" "}and on the pull request.
+        </Paragraph>
       </Section>
 
       {/* Dependency Analysis */}
@@ -264,27 +289,27 @@ octp agent serve --verbose`}</CodeBlock>
         </div>
       </Section>
 
-      {/* Claude Code Integration */}
-      <Section title="Claude Code Integration">
+      {/* AI agent integration */}
+      <Section title="Use with Your AI Agent">
         <Paragraph>
-          Use Octopus directly inside Claude Code with the official plugin.
-          Review PRs, auto-fix findings, and chat with your codebase without
-          leaving the terminal.
+          Claude Code, Codex, OpenCode, Hermes, OpenClaw, and Cursor can use the
+          native Octopus CLI through their shell tools. Follow the setup guide
+          for your agent, including an optional Octopus skill and a connection check.
         </Paragraph>
         <Link
-          href="/docs/cli/claude-code-integration"
+          href="/docs/cli/ai-agents"
           className="mb-3 inline-flex items-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.04] px-4 py-2.5 text-sm text-white transition-colors hover:bg-white/[0.08]"
         >
-          View Claude Code Integration docs →
+          Set up your AI agent →
         </Link>
       </Section>
 
       {/* Skills */}
       <Section title="Skills">
         <Paragraph>
-          Install and manage Octopus skills for AI coding agents like Claude
-          Code and Codex. Skills are reusable automation workflows that run
-          inside your AI editor. See the{" "}
+          The <Mono>octp skills</Mono> commands install the existing Claude Code
+          command library into <Mono>.claude/commands</Mono> in your current
+          project. Sign in first, then run them from the project root. See the{" "}
           <Link
             href="/docs/skills"
             className="text-white underline decoration-white/30 underline-offset-2 transition-colors hover:decoration-white"
@@ -304,30 +329,22 @@ octp agent serve --verbose`}</CodeBlock>
   octopus-fix  Check open PRs for review comments, apply fixes, and push updates`}</CodeBlock>
 
         <CommandCard
-          command="octp skills install"
-          description="Install Octopus skills for AI coding agents. By default installs for both Claude Code and Codex."
+          command="octp skills install <name>"
+          description="Install a named command into this project's .claude/commands directory."
         />
-        <CodeBlock>{`# Install for both Claude Code and Codex
-octp skills install
+        <CodeBlock>{`# Install one command
+octp skills install octopus-fix
 
-# Install only for Claude Code
-octp skills install --claude
-
-# Install only for Codex
-octp skills install --codex`}</CodeBlock>
+# Install the whole command library
+octp skills install --all`}</CodeBlock>
         <Paragraph>
-          Once installed, you can use the skills as slash commands:
+          Use <Mono>/octopus-fix</Mono> in Claude Code after installation. For
+          Codex and other agents, use the separate{" "}
+          <Link href="/docs/cli/ai-agents" className="text-white underline">
+            AI agent setup guide
+          </Link>
+          .
         </Paragraph>
-        <div className="mb-3 space-y-1.5">
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-2.5">
-            <span className="text-sm text-[#888]">Claude Code: </span>
-            <Mono>/octopus-fix</Mono>
-          </div>
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-2.5">
-            <span className="text-sm text-[#888]">Codex: </span>
-            <span className="text-sm text-[#888]">Automatically available as a skill</span>
-          </div>
-        </div>
       </Section>
 
       {/* Config & Usage */}

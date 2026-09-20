@@ -20,8 +20,8 @@ Octopus is a source-available (Modified MIT) AI code review platform. It connect
 - Forgejo: choose Cloud + public HTTPS (direct), Cloud + private LAN/VPN (local outbound connector), or self-hosted Octopus + private LAN/VPN (direct). Setup chooser: https://octopus-review.ai/docs/integrations#forgejo
 - GitHub Action for CI-triggered reviews: https://octopus-review.ai/docs/github-action
 - CLI `octp` for local and terminal workflows: https://octopus-review.ai/docs/cli
-- Claude Code integration (review from the agent): https://octopus-review.ai/docs/cli/claude-code-integration
-- MCP plugin for Claude Code and Cursor: https://github.com/octopusreview/octopus-plugin
+- AI coding agents: Claude Code, Codex, OpenCode, Hermes Agent, OpenClaw, and Cursor can use the native octp CLI and the shared Octopus skill. Setup and execution-environment requirements: https://octopus-review.ai/docs/cli/ai-agents
+- Claude Code MCP plugin: add the octopusreview/octopus-plugin marketplace, install octopus-review@octopus-review, and configure its organization API token. Guide: https://octopus-review.ai/docs/cli/claude-code-integration
 - Slack (ask questions about your codebase), Linear and Jira (create issues from findings): https://octopus-review.ai/docs/integrations
 - Self-hosting with Docker Compose: https://octopus-review.ai/docs/self-hosting
 
@@ -39,6 +39,8 @@ Usage-based. Free credits on signup, no subscription. Octopus Cloud bills AI usa
 - FAQ: https://octopus-review.ai/docs/faq
 - Integrations: https://octopus-review.ai/docs/integrations
 - CLI: https://octopus-review.ai/docs/cli
+- AI coding agents: https://octopus-review.ai/docs/cli/ai-agents
+- Claude Code plugin: https://octopus-review.ai/docs/cli/claude-code-integration
 - GitHub Action: https://octopus-review.ai/docs/github-action
 - Self-hosting: https://octopus-review.ai/docs/self-hosting
 - Security overview: https://octopus-review.ai/docs/security-overview
