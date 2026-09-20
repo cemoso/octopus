@@ -264,7 +264,7 @@ export default async function LandingPage() {
                   <IconCloud className="size-6" />
                 </div>
                 <h3 className="mt-5 text-xl font-semibold text-white">Cloud</h3>
-                <p className="mt-1.5 text-sm text-[#888]">Hosted for you. Nothing to run or maintain.</p>
+                <p className="mt-1.5 text-sm text-[#888]">Octopus is hosted for you. Private Forgejo instances use a local connector.</p>
                 <ul className="mt-6 space-y-3 text-sm text-[#bbb]">
                   {[
                     "Reviews for GitHub, GitLab, Bitbucket and Forgejo",
