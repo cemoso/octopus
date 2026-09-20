@@ -7,7 +7,6 @@ import { LandingDesktopNav } from "@/components/landing-desktop-nav";
 import { FaqList } from "@/components/FaqList";
 import { Section, SectionHeader } from "@/components/landing-section";
 import {
-  IconSparkles,
   IconBug,
   IconShieldCheck,
   IconMessageCircle,

@@ -158,9 +158,10 @@ octp setup-token --no-open`}</CodeBlock>
 
       <Section title="Review Local Changes">
         <Paragraph>
-          Run these from your Git repository. The first command reviews branch commits
-          and tracked working changes; use the second for staged changes. Untracked
-          files are not included.
+          Run these from your Git repository. The first command can include commits
+          since the upstream branch and unstaged tracked changes, but may omit
+          staged-only changes. Inspect the intended diff first; use the second
+          command for staged changes. Untracked files are not included.
         </Paragraph>
         <CodeBlock>{`octp review --no-index --format json
 octp review --staged --no-index --format json`}</CodeBlock>
