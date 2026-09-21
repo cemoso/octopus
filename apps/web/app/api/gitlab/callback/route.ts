@@ -6,6 +6,7 @@ import { prisma } from "@octopus/db";
 import { hasOrgPermission } from "@/lib/org-permissions";
 import { auth } from "@/lib/auth";
 import { syncOrgRepos } from "@/lib/repo-sync";
+import { withWebhookSetupLock } from "@/lib/integration-setup-lock";
 import { parseIntegrationSetupStatus } from "@/lib/integration-setup";
 import { decryptJson, encryptString } from "@/lib/crypto";
 
@@ -172,46 +173,57 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Keep existing project hooks valid when refreshing authorization.
-  const existing = await prisma.gitlabIntegration.findUnique({ where: { organizationId: orgId }, select: { webhookSecret: true } });
-  const webhookSecret = existing?.webhookSecret || crypto.randomBytes(32).toString("hex");
+  let saved: boolean;
+  try {
+    saved = await withWebhookSetupLock(`binding:gitlab:${orgId}`, async (tx) => {
+      const existing = await tx.gitlabIntegration.findUnique({ where: { organizationId: orgId } });
+      if (existing && (existing.gitlabHost !== gitlabHost || existing.namespacePath !== namespacePath)) return false;
+      const webhookSecret = existing ? existing.webhookSecret : crypto.randomBytes(32).toString("hex");
 
-  // Persist OAuth creds (encrypted) only for self-hosted (non-env) flow,
-  // so refresh can use them later.
-  const persistOauthClientId = clientSecret ? clientId : null;
-  const persistOauthClientSecretEnc = clientSecret ? encryptString(clientSecret) : null;
-  const accessTokenEnc = encryptString(accessToken);
-  const refreshTokenEnc = encryptString(refreshToken);
+      const persistOauthClientId = clientSecret ? clientId : null;
+      const persistOauthClientSecretEnc = clientSecret ? encryptString(clientSecret) : null;
+      const accessTokenEnc = encryptString(accessToken);
+      const refreshTokenEnc = encryptString(refreshToken);
 
-  await prisma.gitlabIntegration.upsert({
-    where: { organizationId: orgId },
-    create: {
-      gitlabHost,
-      namespacePath,
-      namespaceName,
-      oauthClientId: persistOauthClientId,
-      oauthClientSecretEnc: persistOauthClientSecretEnc,
-      accessToken: accessTokenEnc,
-      refreshToken: refreshTokenEnc,
-      tokenExpiresAt,
-      scopes,
-      webhookSecret,
-      organizationId: orgId,
-    },
-    update: {
-      gitlabHost,
-      namespacePath,
-      namespaceName,
-      oauthClientId: persistOauthClientId,
-      oauthClientSecretEnc: persistOauthClientSecretEnc,
-      accessToken: accessTokenEnc,
-      refreshToken: refreshTokenEnc,
-      tokenExpiresAt,
-      scopes,
-      webhookSecret,
-      setupStatus: parseIntegrationSetupStatus(null),
-    },
-  });
+      await tx.gitlabIntegration.upsert({
+        where: { organizationId: orgId },
+        create: {
+          gitlabHost,
+          namespacePath,
+          namespaceName,
+          oauthClientId: persistOauthClientId,
+          oauthClientSecretEnc: persistOauthClientSecretEnc,
+          accessToken: accessTokenEnc,
+          refreshToken: refreshTokenEnc,
+          tokenExpiresAt,
+          scopes,
+          webhookSecret,
+          organizationId: orgId,
+        },
+        update: {
+          gitlabHost,
+          namespacePath,
+          namespaceName,
+          oauthClientId: persistOauthClientId,
+          oauthClientSecretEnc: persistOauthClientSecretEnc,
+          accessToken: accessTokenEnc,
+          refreshToken: refreshTokenEnc,
+          tokenExpiresAt,
+          scopes,
+          webhookSecret,
+          setupStatus: parseIntegrationSetupStatus(null),
+        },
+      });
+      if (!existing) await tx.repository.updateMany({
+        where: { organizationId: orgId, provider: "gitlab" },
+        data: { webhookSetupStatus: { status: "unknown" }, isActive: false },
+      });
+      return true;
+    });
+  } catch {
+    return NextResponse.redirect(new URL("/settings/integrations?error=connection_busy", baseUrl));
+  }
+  if (!saved) return NextResponse.redirect(new URL("/settings/integrations?error=connection_replacement", baseUrl));
 
   let setupFailed = false;
   try {

@@ -13,6 +13,12 @@ const { GitlabIntegrationCard } = await import("@/app/(app)/settings/integration
 const render = (provider: "github" | "bitbucket" | "gitlab" | "forgejo", value: unknown, canManage = true) =>
   renderToStaticMarkup(<IntegrationSetupPanel provider={provider} setupStatus={parseIntegrationSetupStatus(value)} canManage={canManage} />);
 
+const { IntegrationOAuthErrorBanner } = await import("@/app/(app)/settings/integrations/integration-oauth-error-banner");
+const replacement = renderToStaticMarkup(<IntegrationOAuthErrorBanner error="connection_replacement" />);
+assert.ok(replacement.includes('role="alert"'));
+assert.ok(replacement.includes("disconnect the current provider"));
+assert.ok(replacement.includes("owner or admin"));
+
 const legacy = render("bitbucket", null);
 assert.equal((legacy.match(/Not checked/g) ?? []).length, 2);
 assert.ok(legacy.includes("Retry setup"));

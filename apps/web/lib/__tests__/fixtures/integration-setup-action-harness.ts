@@ -81,10 +81,10 @@ process.env.BETTER_AUTH_URL = "https://octopus.example";
 const syncCount = calls.length;
 assert.deepEqual(await getIntegrationWebhookDetails("bitbucket"), { details: {
   url: "https://octopus.example/api/bitbucket/webhook", secret: "stored-signing-secret",
-  description: "Octopus Review (org_current)", hookId: "saved-hook-id",
+  description: "Octopus Review (org_current) [integration_1]", hookId: "saved-hook-id",
 } });
 assert.deepEqual(await getIntegrationWebhookDetails("gitlab"), { details: {
-  url: "https://octopus.example/api/gitlab/webhook?octopus_org=org_current", secret: "stored-signing-secret",
+  url: "https://octopus.example/api/gitlab/webhook?octopus_org=org_current&octopus_connection=integration_1", secret: "stored-signing-secret",
 } });
 assert.equal(calls.length, syncCount, "Reading recovery details must not sync or change provider hooks");
 assert.deepEqual(await getIntegrationWebhookDetails("github" as "gitlab"), { error: "Choose Bitbucket or GitLab." });

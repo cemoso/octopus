@@ -102,7 +102,7 @@ function WebhookRecoveryDetails({ provider }: { provider: "bitbucket" | "gitlab"
         {details.hookId && <p className="break-all text-muted-foreground">Saved webhook ID: <code>{details.hookId}</code></p>}
         <div className="space-y-1.5"><Label htmlFor={`${provider}-webhook-url`}>Callback URL</Label><Input id={`${provider}-webhook-url`} value={details.url} readOnly onFocus={event => event.target.select()} /></div>
         {details.description && <div className="space-y-1.5"><Label htmlFor={`${provider}-webhook-description`}>Webhook description</Label><Input id={`${provider}-webhook-description`} value={details.description} readOnly onFocus={event => event.target.select()} /></div>}
-        <div className="space-y-1.5"><Label htmlFor={`${provider}-webhook-secret`}>Existing webhook secret</Label><Input id={`${provider}-webhook-secret`} type={revealed ? "text" : "password"} autoComplete="off" value={details.secret} readOnly onFocus={event => event.target.select()} /></div>
+        <div className="space-y-1.5"><Label htmlFor={`${provider}-webhook-secret`}>Current connection secret</Label><Input id={`${provider}-webhook-secret`} type={revealed ? "text" : "password"} autoComplete="off" value={details.secret} readOnly onFocus={event => event.target.select()} /></div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" aria-pressed={revealed} onClick={() => setRevealed(!revealed)}>{revealed ? "Hide secret" : "Reveal secret"}</Button>
           <Button variant="outline" size="sm" onClick={async () => {
@@ -111,9 +111,9 @@ function WebhookRecoveryDetails({ provider }: { provider: "bitbucket" | "gitlab"
           }}>Copy secret</Button>
         </div>
         <p className="text-muted-foreground">{provider === "bitbucket"
-          ? "In the workspace webhook settings, use this URL, description and existing secret. Enable pull request created, updated and comment-created events, and keep the webhook active."
-          : "In each affected project’s webhook settings, use this URL and re-enter the existing secret token when changing the URL. Enable merge request and comment events, keep SSL verification enabled, and enable the webhook."}</p>
-        <p className="text-muted-foreground">Save your changes, then select Retry setup above. A successful configuration check still needs a pull request event to confirm delivery.</p>
+          ? "In the workspace webhook settings, use this URL, description and current connection secret. Enable pull request created, updated and comment-created events, and keep the webhook active."
+          : "In each affected project’s webhook settings, use this URL and re-enter the current connection secret token when changing the URL. Enable merge request and comment events, keep SSL verification enabled, and enable the webhook."}</p>
+        <p className="text-muted-foreground">The URL or description identifies this connection generation. After disconnecting and reconnecting, reload these details and save both the current secret and marker together. Save your changes, then select Retry setup above. A successful configuration check still needs a pull request event to confirm delivery.</p>
       </>}
       {feedback?.error && <p role="alert" className="text-destructive">{feedback.error}</p>}
       {feedback?.message && <p role="status" className="text-muted-foreground">{feedback.message}</p>}

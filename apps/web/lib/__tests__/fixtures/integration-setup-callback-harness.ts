@@ -14,11 +14,15 @@ mock.module("@/lib/integration-oauth-state", () => ({ integrationOAuthStateCooki
 mock.module("@/lib/crypto", () => ({ encryptString: (value: string) => `encrypted:${value}`, decryptJson: () => ({
   nonce: "nonce", orgId: "org", namespacePath: "group", gitlabHost: "https://gitlab.example.test", clientId: "fixture", clientSecret: null, issuedAt: Date.now(),
 }) }));
-let existing: { webhookSecret: string; webhookUuid: string; workspaceSlug: string } | null = { webhookSecret: "existing-webhook-secret", webhookUuid: "existing-hook", workspaceSlug: "workspace" };
+const original = { id: "generation1", webhookSecret: "existing-webhook-secret", webhookUuid: "existing-hook", workspaceSlug: "workspace", gitlabHost: "https://gitlab.example.test", namespacePath: "group" };
+let existing: typeof original | null = { ...original };
 let role = "owner";
 const writes: Array<{ create: Record<string, unknown>; update: Record<string, unknown> }> = [];
 const integration = { findUnique: async () => existing, upsert: async (args: typeof writes[number]) => { writes.push(args); return {}; } };
-mock.module("@octopus/db", () => ({ prisma: { organizationMember: { findFirst: async () => ({ role }) }, bitbucketIntegration: integration, gitlabIntegration: integration } }));
+const resets: unknown[] = [];
+const db = { organizationMember: { findFirst: async () => ({ role }) }, bitbucketIntegration: integration, gitlabIntegration: integration,
+  repository: { updateMany: async (args: unknown) => { resets.push(args); } }, $queryRaw: async () => [{ acquired: true }] };
+mock.module("@octopus/db", () => ({ prisma: { ...db, $transaction: async (run: (tx: typeof db) => Promise<unknown>) => run(db) } }));
 let syncError: string | null = null;
 let throwSync = false;
 const syncCalls: Array<{ source: string; providers: string[] }> = [];
@@ -38,6 +42,7 @@ globalThis.fetch = (async (input: string | URL | Request) => {
 const { GET: bitbucket } = await import("../../../app/api/bitbucket/callback/route");
 const { GET: gitlab } = await import("../../../app/api/gitlab/callback/route");
 for (const [provider, callback] of [["bitbucket", bitbucket], ["gitlab", gitlab]] as const) {
+  existing = { ...original };
   const state = Buffer.from(JSON.stringify({ nonce: "nonce" })).toString("base64url");
   const url = new URL(`https://octopus.example.test/api/${provider}/callback?code=fixture&state=${state}`);
   const request = Object.assign(new Request(url), { nextUrl: url }) as never;
@@ -60,6 +65,18 @@ for (const [provider, callback] of [["bitbucket", bitbucket], ["gitlab", gitlab]
   const rejected = new URL((await callback(request)).headers.get("location")!);
   assert.equal(rejected.searchParams.get("setup"), "attention");
   assert(!rejected.toString().includes("private setup error"));
+  for (const replacement of [{ gitlabHost: "https://other.test", workspaceSlug: "other" }, { namespacePath: "other", workspaceSlug: "other" }]) {
+    existing = { ...original, ...replacement };
+    const count = writes.length;
+    const rejectedBinding = new URL((await callback(request)).headers.get("location")!);
+    assert.equal(rejectedBinding.searchParams.get("error"), "connection_replacement");
+    assert.equal(writes.length, count);
+  }
+  existing = null;
+  await callback(request);
+  assert.notEqual(writes.at(-1)?.create.webhookSecret, original.webhookSecret);
+  assert.deepEqual(resets.at(-1), { where: { organizationId: "org", provider }, data: { webhookSetupStatus: { status: "unknown" }, isActive: false } });
+  existing = { ...original };
   const writeCount = writes.length;
   role = "member";
   await callback(request);

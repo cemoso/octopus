@@ -6,6 +6,7 @@ import { prisma } from "@octopus/db";
 import { hasOrgPermission } from "@/lib/org-permissions";
 import { auth } from "@/lib/auth";
 import { syncOrgRepos } from "@/lib/repo-sync";
+import { withWebhookSetupLock } from "@/lib/integration-setup-lock";
 import { parseIntegrationSetupStatus } from "@/lib/integration-setup";
 import { encryptString } from "@/lib/crypto";
 import {
@@ -150,38 +151,49 @@ export async function GET(request: NextRequest) {
   const workspaceData = await workspaceRes.json();
   const workspaceName = (workspaceData.name as string) || workspaceSlug;
 
-  // Reauthorization must not silently rotate the secret on existing hooks.
-  const existing = await prisma.bitbucketIntegration.findUnique({ where: { organizationId: orgId },
-    select: { webhookSecret: true, webhookUuid: true, workspaceSlug: true } });
-  const webhookSecret = existing?.webhookSecret || crypto.randomBytes(32).toString("hex");
+  let saved: boolean;
+  try {
+    saved = await withWebhookSetupLock(`binding:bitbucket:${orgId}`, async (tx) => {
+      const existing = await tx.bitbucketIntegration.findUnique({ where: { organizationId: orgId } });
+      if (existing && (existing.workspaceSlug !== workspaceSlug)) return false;
+      const webhookSecret = existing ? existing.webhookSecret : crypto.randomBytes(32).toString("hex");
 
-  // Upsert BitbucketIntegration (tokens encrypted at rest, see lib/crypto.ts)
-  const accessTokenEnc = encryptString(accessToken);
-  const refreshTokenEnc = encryptString(refreshToken);
-  await prisma.bitbucketIntegration.upsert({
-    where: { organizationId: orgId },
-    create: {
-      workspaceSlug,
-      workspaceName,
-      accessToken: accessTokenEnc,
-      refreshToken: refreshTokenEnc,
-      tokenExpiresAt,
-      scopes,
-      webhookSecret,
-      organizationId: orgId,
-    },
-    update: {
-      workspaceSlug,
-      workspaceName,
-      accessToken: accessTokenEnc,
-      refreshToken: refreshTokenEnc,
-      tokenExpiresAt,
-      scopes,
-      webhookSecret,
-      webhookUuid: existing?.workspaceSlug === workspaceSlug ? existing.webhookUuid : null,
-      setupStatus: parseIntegrationSetupStatus(null),
-    },
-  });
+      const accessTokenEnc = encryptString(accessToken);
+      const refreshTokenEnc = encryptString(refreshToken);
+      await tx.bitbucketIntegration.upsert({
+        where: { organizationId: orgId },
+        create: {
+          workspaceSlug,
+          workspaceName,
+          accessToken: accessTokenEnc,
+          refreshToken: refreshTokenEnc,
+          tokenExpiresAt,
+          scopes,
+          webhookSecret,
+          organizationId: orgId,
+        },
+        update: {
+          workspaceSlug,
+          workspaceName,
+          accessToken: accessTokenEnc,
+          refreshToken: refreshTokenEnc,
+          tokenExpiresAt,
+          scopes,
+          webhookSecret,
+          webhookUuid: existing?.workspaceSlug === workspaceSlug ? existing.webhookUuid : null,
+          setupStatus: parseIntegrationSetupStatus(null),
+        },
+      });
+      if (!existing) await tx.repository.updateMany({
+        where: { organizationId: orgId, provider: "bitbucket" },
+        data: { webhookSetupStatus: { status: "unknown" }, isActive: false },
+      });
+      return true;
+    });
+  } catch {
+    return NextResponse.redirect(new URL("/settings/integrations?error=connection_busy", baseUrl));
+  }
+  if (!saved) return NextResponse.redirect(new URL("/settings/integrations?error=connection_replacement", baseUrl));
 
   // Authorization succeeded; setup has a separate durable outcome.
   let setupFailed = false;

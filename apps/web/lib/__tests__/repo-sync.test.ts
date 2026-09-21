@@ -27,7 +27,7 @@ const persistSetup = mock(async (args: Loose) => { setupUpdates.push(args); retu
 const transaction = mock(async (callback: (tx: unknown) => Promise<unknown>): Promise<unknown> => callback(prisma));
 const prisma = {
   $transaction: transaction,
-  $queryRaw: mock(async () => []),
+  $queryRaw: mock(async () => [{ acquired: true }]),
   organization: { findUnique: mock(async () => orgRow), updateMany: persistSetup },
   repository: {
     findMany: mock(async (args: Loose) =>
@@ -353,12 +353,12 @@ describe("syncOrgRepos", () => {
 
   it("persists GitLab per-project readiness when another project's webhook fails", async () => {
     gitlab = { id: "gl1", gitlabHost: "https://gitlab.example.test", namespacePath: "acme", webhookSecret: "fixture-secret" };
-    existingRows.gitlab = [{ externalId: "1", dismissedAt: null, webhookSetupStatus: { hookId: "99", hookScope: "https://gitlab.example.test:acme/good" } }];
+    existingRows.gitlab = [{ externalId: "1", dismissedAt: null, webhookSetupStatus: { hookId: "99", hookScope: "gl1:https://gitlab.example.test:acme/good" } }];
     glProjects = [{ id: 1, name: "good", path_with_namespace: "acme/good" }, { id: 2, name: "bad", path_with_namespace: "acme/bad" }];
     glFailedProjects.add("acme/bad");
     const result = await syncOrgRepos("org_1", { source: "manual", providers: ["gitlab"] });
     expect(result.error).toContain("1 of 2 GitLab project webhooks need attention");
-    expect(createProjectWebhook.mock.calls[0][4]).toBe("99");
+    expect(createProjectWebhook.mock.calls[0][4]).toMatchObject({ id: "gl1" });
     expect(updateManys.filter(u => u.data.webhookSetupStatus).map(u => [u.where.externalId, u.data.webhookSetupStatus.status])).toEqual([["1", "ready"], ["2", "failed"]]);
     expect(setupUpdates.at(-1)?.data.setupStatus).toMatchObject({ sync: { status: "ready" }, webhook: { status: "failed" } });
   });
@@ -371,9 +371,9 @@ describe("syncOrgRepos", () => {
     ];
     glProjects = [{ id: 1, name: "good", path_with_namespace: "acme/good" }, { id: 2, name: "moved", path_with_namespace: "acme/moved" }];
     await syncOrgRepos("org_1", { source: "manual", providers: ["gitlab"] });
-    expect(createProjectWebhook.mock.calls.map(call => call[4])).toEqual([null, null]);
+    expect(createProjectWebhook.mock.calls.map(call => call[4].id)).toEqual(["gl1", "gl1"]);
     expect(updateManys.filter(u => u.data.webhookSetupStatus).map(u => u.data.webhookSetupStatus.hookScope))
-      .toEqual(["https://gitlab.example.test:acme/good", "https://gitlab.example.test:acme/moved"]);
+      .toEqual(["gl1:https://gitlab.example.test:acme/good", "gl1:https://gitlab.example.test:acme/moved"]);
   });
 
   it("does not apply a listing to a replacement Bitbucket or GitLab connection", async () => {

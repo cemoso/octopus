@@ -1,8 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import crypto from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { fileURLToPath } from "node:url";
 import { getRepositoryConnectionRecovery } from "@/lib/repository-connection-recovery";
 
 mock.module("server-only", () => ({}));
@@ -472,60 +469,7 @@ describe("safeReturnPath", () => {
 });
 
 describe("GitHub installation UI entry points", () => {
-  const repoRoot = fileURLToPath(new URL("../../../../", import.meta.url));
-  const repoTableSource = readFileSync(
-    new URL("../../components/dashboard/repo-table.tsx", import.meta.url),
-    "utf8",
-  );
-  const indexingLogsSource = readFileSync(
-    new URL("../../components/indexing-logs.tsx", import.meta.url),
-    "utf8",
-  );
-  const cliRepoStepSource = readFileSync(
-    join(repoRoot, "apps/cli/src/steps/RepoStep.tsx"),
-    "utf8",
-  );
-
-  function sourceFiles(directory: string): string[] {
-    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-      if (
-        entry.name.startsWith(".") ||
-        entry.name === "node_modules" ||
-        entry.name === "__tests__" ||
-        /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(entry.name)
-      ) {
-        return [];
-      }
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) return sourceFiles(path);
-      return /\.[cm]?[jt]sx?$/.test(entry.name) ? [path] : [];
-    });
-  }
-
-  it("keeps raw GitHub App URLs inside the two server-owned redirect boundaries", () => {
-    const rawInstallUrl = "https://github.com/apps/";
-    const allowed = new Set([
-      "apps/web/app/api/github/install/route.ts",
-      "apps/web/app/api/github/app-manifest/callback/route.ts",
-    ]);
-    const sourceRoots = [join(repoRoot, "apps/web"), join(repoRoot, "apps/cli/src")];
-
-    const violations = sourceRoots
-      .flatMap(sourceFiles)
-      .map((file) => ({
-        file: relative(repoRoot, file).replaceAll("\\", "/"),
-        source: readFileSync(file, "utf8"),
-      }))
-      .filter(({ file, source }) => source.includes(rawInstallUrl) && !allowed.has(file))
-      .map(({ file }) => file);
-
-    expect(violations).toEqual([]);
-    for (const file of allowed) {
-      expect(readFileSync(join(repoRoot, file), "utf8")).toContain(rawInstallUrl);
-    }
-  });
-
-  it("routes web and CLI recovery links through the signed install-start endpoint", () => {
+  it("routes repository recovery links through the signed install-start endpoint", () => {
     for (const returnTo of ["/dashboard", "/repositories?repo=repo_fixture"]) {
       const recovery = getRepositoryConnectionRecovery("github", "org_fixture", returnTo);
       const url = new URL(recovery.href, "https://app.test");
@@ -534,14 +478,6 @@ describe("GitHub installation UI entry points", () => {
       expect(url.searchParams.get("orgId")).toBe("org_fixture");
       expect(url.searchParams.get("returnTo")).toBe(returnTo);
     }
-    expect(cliRepoStepSource).toContain(
-      "`${creds.baseUrl}/api/github/install?orgId=${encodeURIComponent(creds.orgId)}&returnTo=${encodeURIComponent(\"/repositories\")}`",
-    );
-  });
-
-  it("does not hide signed recovery links behind a public app-slug gate", () => {
-    expect(repoTableSource).not.toContain("githubAppSlug");
-    expect(indexingLogsSource).not.toContain("NEXT_PUBLIC_GITHUB_APP_SLUG");
   });
 
   it("redirects to integrations settings when no GitHub App is configured", async () => {

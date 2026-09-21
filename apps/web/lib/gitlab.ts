@@ -570,7 +570,6 @@ export async function createProjectWebhook(
   projectPath: string,
   callbackUrl: string,
   secret: string,
-  knownHookId?: string | null,
   expectedBinding?: { id: string; gitlabHost: string; namespacePath: string },
 ): Promise<number> {
   const integration = await getIntegration(organizationId);
@@ -593,9 +592,10 @@ export async function createProjectWebhook(
   // Ownership marker only; the receiver still authenticates the secret header.
   const ownedUrl = new URL(callbackUrl);
   ownedUrl.searchParams.set("octopus_org", organizationId);
+  ownedUrl.searchParams.set("octopus_connection", integration.id);
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  return withWebhookSetupLock(`gitlab:${host}:${projectPath}`, async () => {
-    checkBinding(await prisma.gitlabIntegration.findUnique({ where: { organizationId } }));
+  return withWebhookSetupLock([`binding:gitlab:${organizationId}`, `gitlab:${host}:${projectPath}`], async (tx) => {
+    checkBinding(await tx.gitlabIntegration.findUnique({ where: { organizationId } }));
     const deadline = AbortSignal.timeout(45_000);
     type Hook = { id: number; url: string; merge_requests_events?: boolean; note_events?: boolean; enable_ssl_verification?: boolean; alert_status?: string; disabled_until?: string | null; token_present?: boolean };
     const hooks: Hook[] = [];
@@ -608,19 +608,26 @@ export async function createProjectWebhook(
       hooks.push(...data);
       if (!response.headers.get("x-next-page") && data.length < 100) break;
     }
-    const owned = hooks.find(h => String(h.id) === knownHookId || h.url === ownedUrl.toString());
+    const owned = hooks.find(h => h.url === ownedUrl.toString());
     if (owned) {
-      if (![callbackUrl, ownedUrl.toString()].includes(owned.url) || !owned.merge_requests_events || !owned.note_events
+      if (!owned.merge_requests_events || !owned.note_events
         || owned.enable_ssl_verification === false || owned.token_present === false
         || (owned.alert_status && owned.alert_status !== "executable") || owned.disabled_until) {
         throw new WebhookSetupError("The existing Octopus GitLab webhook needs attention. Check its URL, secret token, merge-request/comment events, TLS verification and enabled state in project settings, then retry setup.");
       }
       return owned.id;
     }
-    if (hooks.some(h => h.url === callbackUrl)) {
-      throw new WebhookSetupError(`An existing GitLab webhook has no saved ownership evidence. Open “Repair an existing webhook” only after confirming it belongs to this organization. Verify its events, add ?octopus_org=${encodeURIComponent(organizationId)} to its Octopus callback URL and re-enter the same secret token before retrying. No duplicate was created.`);
+    if (hooks.some(h => {
+      try {
+        const url = new URL(h.url);
+        const callback = new URL(callbackUrl);
+        return url.origin === callback.origin && url.pathname === callback.pathname
+          && (!url.searchParams.get("octopus_org") || url.searchParams.get("octopus_org") === organizationId);
+      } catch { return false; }
+    })) {
+      throw new WebhookSetupError(`An existing GitLab webhook has no saved ownership evidence. Open “Repair an existing webhook” only after confirming it belongs to this organization. Use the current saved secret token and exact connection-specific callback URL from those details, verify its events, then retry. No duplicate was created.`);
     }
-    checkBinding(await prisma.gitlabIntegration.findUnique({ where: { organizationId } }));
+    checkBinding(await tx.gitlabIntegration.findUnique({ where: { organizationId } }));
     const response = await fetch(endpoint, {
       method: "POST", headers, signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]),
       body: JSON.stringify({ url: ownedUrl.toString(), token: secret, merge_requests_events: true, note_events: true, push_events: false, enable_ssl_verification: true }),

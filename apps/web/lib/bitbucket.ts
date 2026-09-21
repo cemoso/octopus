@@ -439,7 +439,6 @@ export async function createWebhook(
   workspaceSlug: string,
   callbackUrl: string,
   secret: string,
-  knownHookId?: string | null,
   expectedBinding?: { id: string; workspaceSlug: string },
 ): Promise<string> {
   const integration = await getIntegration(organizationId);
@@ -458,11 +457,11 @@ export async function createWebhook(
   }
   const token = decryptStringMaybeLegacy(integration.accessToken);
   const endpoint = `${BITBUCKET_API}/workspaces/${encodeURIComponent(workspaceSlug)}/hooks`;
-  const description = `Octopus Review (${organizationId})`;
+  const description = `Octopus Review (${organizationId}) [${integration.id}]`;
   const events = ["pullrequest:created", "pullrequest:updated", "pullrequest:comment_created"];
   const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
-  return withWebhookSetupLock(`bitbucket:${workspaceSlug}`, async () => {
-    checkBinding(await prisma.bitbucketIntegration.findUnique({ where: { organizationId } }));
+  return withWebhookSetupLock([`binding:bitbucket:${organizationId}`, `bitbucket:${workspaceSlug}`], async (tx) => {
+    checkBinding(await tx.bitbucketIntegration.findUnique({ where: { organizationId } }));
     const deadline = AbortSignal.timeout(45_000); // Finish before the setup lock's transaction expires.
     type Hook = { uuid: string; url: string; description?: string; active?: boolean; events?: string[]; secret_set?: boolean };
     const hooks: Hook[] = [];
@@ -476,17 +475,17 @@ export async function createWebhook(
       // Construct pagination locally: never send credentials to a provider-supplied next URL.
       if (!data.next) break;
     }
-    const owned = hooks.find(h => h.uuid === knownHookId || h.description === description);
+    const owned = hooks.find(h => h.description === description);
     if (owned) {
       if (owned.url !== callbackUrl || !owned.active || owned.secret_set === false || !events.every(e => owned.events?.includes(e))) {
         throw new WebhookSetupError("The existing Octopus Bitbucket webhook needs attention. Check its callback URL, secret, enabled state and pull-request events in workspace settings, then retry setup.");
       }
       return owned.uuid;
     }
-    if (hooks.some(h => h.url === callbackUrl && !/^Octopus Review \([^()\s]+\)$/.test(h.description ?? ""))) {
-      throw new WebhookSetupError(`An existing Octopus Bitbucket webhook has no saved ownership evidence. Open “Repair an existing webhook” only after confirming it belongs to this organization. Verify its secret and events, then set its description to ${description} and retry setup. No duplicate was created.`);
+    if (hooks.some(h => h.url === callbackUrl && (h.description?.startsWith(`Octopus Review (${organizationId})`) || !/^Octopus Review \([^()\s]+\)(?: \[[^\]\s]+\])?$/.test(h.description ?? "")))) {
+      throw new WebhookSetupError(`An existing Octopus Bitbucket webhook has no saved ownership evidence. Open “Repair an existing webhook” only after confirming it belongs to this organization. Use the current saved secret and exact connection-specific description from those details, verify its events, then retry setup. No duplicate was created.`);
     }
-    checkBinding(await prisma.bitbucketIntegration.findUnique({ where: { organizationId } }));
+    checkBinding(await tx.bitbucketIntegration.findUnique({ where: { organizationId } }));
     const response = await fetch(endpoint, {
       method: "POST", headers, signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]),
       body: JSON.stringify({ description, url: callbackUrl, active: true, secret, events }),

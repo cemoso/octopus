@@ -1,4 +1,5 @@
 import "server-only";
+import { acquireWebhookSetupLock } from "@/lib/integration-setup-lock";
 import { prisma } from "@octopus/db";
 import { listInstallationRepos, GithubRateLimitError } from "@/lib/github";
 import { listWorkspaceRepos, createWebhook } from "@/lib/bitbucket";
@@ -228,12 +229,13 @@ export async function syncOrgRepos(
       try {
         if (!bitbucket.webhookSecret) throw new WebhookSetupError("Bitbucket webhook secret is missing. Reconnect Bitbucket, then retry setup.");
         hookId = await createWebhook(organizationId, bitbucket.workspaceSlug,
-          `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/bitbucket/webhook`, bitbucket.webhookSecret, bitbucket.webhookUuid, bitbucket);
+          `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/bitbucket/webhook`, bitbucket.webhookSecret, bitbucket);
       } catch (error) {
         hookError = webhookError(error, "Could not check Bitbucket webhook setup. Retry setup after checking access and connectivity.");
       }
       const synced: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
       await prisma.$transaction(async (tx) => {
+        await acquireWebhookSetupLock(tx, `binding:bitbucket:${organizationId}`);
         await tx.$queryRaw`SELECT "id" FROM "bitbucket_integrations" WHERE "id" = ${bitbucket.id} FOR UPDATE`;
         const current = await tx.bitbucketIntegration.findUnique({ where: { organizationId } });
         if (!current || current.id !== bitbucket.id || current.workspaceSlug !== bitbucket.workspaceSlug || current.webhookSecret !== bitbucket.webhookSecret) throw new Error("Bitbucket connection changed during sync");
@@ -282,12 +284,12 @@ export async function syncOrgRepos(
         if (existing.get(externalId)?.dismissedAt) continue;
         const previous = parseRepositoryWebhookSetup(existing.get(externalId)?.webhookSetupStatus);
         // Numeric project/hook IDs can collide after reconnecting another GitLab host.
-        const hookScope = `${gitlab.gitlabHost}:${project.path_with_namespace}`;
+        const hookScope = `${gitlab.id}:${gitlab.gitlabHost}:${project.path_with_namespace}`;
         const knownHookId = previous.hookScope === hookScope ? previous.hookId : null;
         try {
           if (!gitlab.webhookSecret) throw new WebhookSetupError("GitLab webhook secret is missing. Reconnect GitLab, then retry setup.");
           const id = await createProjectWebhook(organizationId, project.path_with_namespace,
-            `${appUrl}/api/gitlab/webhook`, gitlab.webhookSecret, knownHookId, gitlab);
+            `${appUrl}/api/gitlab/webhook`, gitlab.webhookSecret, gitlab);
           hooks.set(externalId, { status: "ready", checkedAt: new Date().toISOString(), error: null, hookId: String(id), hookScope });
         } catch (error) {
           hooks.set(externalId, { status: "failed", checkedAt: new Date().toISOString(), hookId: knownHookId, hookScope,
@@ -298,6 +300,7 @@ export async function syncOrgRepos(
       const hookError = failures.length ? `${failures.length} of ${hooks.size} GitLab project webhooks need attention. ${failures[0].error}` : null;
       const synced: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
       await prisma.$transaction(async (tx) => {
+        await acquireWebhookSetupLock(tx, `binding:gitlab:${organizationId}`);
         await tx.$queryRaw`SELECT "id" FROM "gitlab_integrations" WHERE "id" = ${gitlab.id} FOR UPDATE`;
         const current = await tx.gitlabIntegration.findUnique({ where: { organizationId } });
         if (!current || current.id !== gitlab.id || current.gitlabHost !== gitlab.gitlabHost || current.namespacePath !== gitlab.namespacePath || current.webhookSecret !== gitlab.webhookSecret) throw new Error("GitLab connection changed during sync");
