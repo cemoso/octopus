@@ -10,6 +10,15 @@ export async function updateCurrentReview(pullRequestId: string, headSha: string
   return prisma.pullRequest.updateMany({ where: { id: pullRequestId, headSha, reviewRequestVersion, ...(expectedReviewBody !== undefined ? { reviewBody: expectedReviewBody } : {}) }, data });
 }
 
+/** Call only after the final report has been published successfully. Never infer this from an archived result. */
+export async function recordFirstReviewCompletion(pullRequestId: string, headSha: string | null, reviewRequestVersion: number | undefined, reviewBody: string) {
+  if (!headSha || !isReviewRequestVersion(reviewRequestVersion)) return;
+  await prisma.pullRequest.updateMany({
+    where: { id: pullRequestId, headSha, reviewRequestVersion, reviewBody, status: "completed", firstReviewCompletedAt: null },
+    data: { firstReviewCompletedAt: new Date() },
+  });
+}
+
 export async function createReviewAttemptComment(
   pullRequestId: string,
   headSha: string | null,

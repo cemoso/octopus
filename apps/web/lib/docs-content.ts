@@ -91,16 +91,15 @@ Works With Your Tools: GitHub, GitLab, Bitbucket, Forgejo, Slack, Linear, Jira. 
       {
         heading: "1. Connect Your Repository",
         text: `Start by connecting your GitHub, GitLab, Bitbucket, or Forgejo account from the dashboard. Octopus uses the GitHub App, GitLab/Bitbucket OAuth, or a Forgejo personal access token to access repositories.
-GitHub: Install the GitHub App, select repositories, and you're ready to go.
+GitHub: Install the GitHub App and select repositories.
 GitLab: Connect via OAuth and Octopus automatically manages webhooks for merge requests.
 Bitbucket: Connect via OAuth and Octopus automatically manages webhooks.
 Forgejo: Choose Cloud + public HTTPS (direct), Cloud + private LAN/VPN (local connector), or self-hosted Octopus + private LAN/VPN (direct). Use the matching personal access token and signed webhook steps at /docs/integrations#forgejo.
-Once connected, Octopus indexes your codebase. It chunks your code, creates embeddings, and builds a searchable representation of your entire project.`,
+For repository readiness, automatic preparation and the first-review milestone, follow /docs/getting-started. For separate authorization, sync and webhook checks and safe recovery, see /docs/integrations#setup-checks.`,
       },
       {
         heading: "2. Your First Review",
-        text: `Open a pull request on any connected repository. Octopus automatically picks it up via webhook, analyzes the diff against your full codebase context, and posts findings as inline comments.
-The review pipeline: Webhook receives PR event → Octopus fetches the diff → AI analyzes changes with codebase context → Findings posted as inline PR comments.`,
+        text: `Follow the authoritative first-review instructions at /docs/getting-started and the repository-specific guide at /dashboard.`,
       },
       {
         heading: "3. Understanding Findings",
@@ -313,7 +312,7 @@ Authentication uses OAuth Bearer tokens; clone is handled via the GitLab API so 
         heading: "Bitbucket",
         text: `Connect Bitbucket via OAuth from the Octopus dashboard.
 Features: PR reviews via webhook, inline comments, automatic webhook management.
-Octopus manages the webhook lifecycle — no manual setup needed.`,
+Workspace webhook setup checks and recovery, including existing hooks with ambiguous ownership: /docs/integrations#setup-checks.`,
       },
       {
         heading: "Forgejo connection options",
@@ -331,7 +330,7 @@ All modes use a dedicated Forgejo account with repository admin access, not inst
 3. On that machine, create a protected connector.env file with OCTOPUS_URL=https://octopus-review.ai, OCTOPUS_CONNECTOR_TOKEN, FORGEJO_URL and FORGEJO_TOKEN (chmod 600). Start the connector with docker run using --env-file connector.env, --restart unless-stopped, --stop-timeout 120 and --read-only; publish no ports. Copyable commands: /docs/integrations#forgejo-cloud-private. Container DNS/VPN routes must reach Forgejo, not just the host browser. Verified HTTPS is required; localhost, loopback, link-local, metadata addresses, redirects and HTTP are blocked. For an internal CA, set NODE_EXTRA_CA_CERTS to a mounted trusted PEM file and keep certificate verification enabled.
 4. Return to Octopus Settings > Integrations > Forgejo, click Refresh status and wait for Connector online, then click Sync repositories.
 5. In each Forgejo repository, open Settings > Webhooks > Add Webhook > Forgejo. Copy Target URL and Webhook secret from Octopus; use POST and application/json. Under Trigger on choose Custom events… > Pull request events, selecting Modification and Synchronized. Also select Comments in that same group for PR commands. Keep Active checked and save the webhook. Forgejo sends these webhooks directly to Octopus Cloud.
-6. Open /repositories in Octopus and select the repository. Indexing may begin automatically after sync; if it has not started, click Create Index. Once indexing finishes, click Run Analysis. When analysis is complete, confirm Auto Review is enabled, turning it on if needed. Open a non-draft test pull request in Forgejo and check /review-logs in Octopus, then the review comments and commit status in Forgejo. Keep the connector running for indexing and reviews.
+6. Follow /docs/integrations#forgejo-cloud-private for repository readiness and your first PR, with automatic preparation. Keep the connector running for indexing and reviews.
 Rotating the connector credential invalidates the old one; update the local configuration and restart. Docker users must recreate the container with the env file; docker restart does not reload it. An uncertain write result pauses the connector; inspect Forgejo before selecting Resume after checking Forgejo. The uncertain write is not automatically replayed. Consumed response payloads are cleared immediately; payload-free publication recovery metadata stays until acknowledgement, with renewable 60-second leases capped at two hours. Failed or expired metadata is eligible for deletion after five minutes; the reconciliation hold remains until an administrator resumes the connector. Disconnecting deactivates repositories. Remove webhooks and revoke the Forgejo token too. This connection needs internet access and does not keep Cloud review processing on your network. Full setup: /docs/integrations#forgejo-cloud-private.`,
       },
       {

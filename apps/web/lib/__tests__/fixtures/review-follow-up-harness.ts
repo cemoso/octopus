@@ -5,6 +5,9 @@ import { assertReviewProcessingActive, type ReviewExecutionWindow } from "@/lib/
 import type { ReviewCoverage } from "@/lib/review-coverage";
 mock.module("server-only", () => ({}));
 const directCommentFailure = process.argv.includes("--direct-forgejo-comment-failure");
+const preserveAutoReview = process.argv.includes("--preserve-auto-review");
+const firstCompletion = process.argv.includes("--first-review-completion");
+let completionFailure: "summary" | "check" | null = null;
 const reviewUpdates: unknown[] = [];
 let nativeFailure = false;
 let forgejoConnector = false;
@@ -53,10 +56,12 @@ const org = { id: "org", defaultReviewConfig: {}, reviewLanguage: "en" };
 const repo = {
   id: "repo", fullName: "fixture/repo", organization: org, reviewConfig: {},
   provider: "github", installationId: 1, indexStatus: "indexed", defaultBranch: "main",
+  organizationId: "org", autoReview: false,
 };
 const pr = {
   id: "pr", repository: repo, number: 1, title: "Handle missing values", author: "fixture",
-  headSha: "a".repeat(40), reviewRequestVersion: 2, status: "pending", reviewBody: null, reviewCoverage: null,
+  headSha: "a".repeat(40), reviewRequestVersion: 2, status: "pending", reviewBody: null as string | null, reviewCoverage: null,
+  firstReviewCompletedAt: null as Date | null,
 };
 mock.module("@octopus/db", () => ({ prisma: {
   reviewAttempt: { findFirst: async (query: unknown) => {
@@ -64,10 +69,26 @@ mock.module("@octopus/db", () => ({ prisma: {
     if (lookupFailure) throw new Error("fixture lookup failure");
     return prior ? { coverage: prior } : null;
   } },
-  repository: { findUnique: async () => repo },
+  repository: {
+    findUnique: async () => repo,
+    updateMany: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(repo, data); return { count: 1 }; },
+    update: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(repo, data); return repo; },
+  },
   systemConfig: { findUnique: async () => null },
   reviewIssue: { findMany: async () => [] },
-  pullRequest: { findUnique: async () => pr, updateMany: async (query: unknown) => { reviewUpdates.push(query); return { count: 1 }; } },
+  pullRequest: { findUnique: async () => pr, updateMany: async (query: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+    reviewUpdates.push(query);
+    if (firstCompletion) {
+      const { where, data } = query;
+      if ((where.headSha !== undefined && where.headSha !== pr.headSha)
+        || (where.reviewRequestVersion !== undefined && where.reviewRequestVersion !== pr.reviewRequestVersion)
+        || (where.reviewBody !== undefined && where.reviewBody !== pr.reviewBody)
+        || (typeof where.status === "string" && where.status !== pr.status)
+        || (where.firstReviewCompletedAt === null && pr.firstReviewCompletedAt !== null)) return { count: 0 };
+      Object.assign(pr, data);
+    }
+    return { count: 1 };
+  } },
 } }));
 mock.module("@/lib/embeddings", () => ({ createEmbeddings: async (texts: string[]) => texts.map(() => [1, 0, 0]) }));
 mock.module("@/lib/qdrant", () => ({
@@ -116,6 +137,11 @@ const summaries: string[] = [];
 const published: { body: string; comments: unknown[] }[] = [];
 const checkConclusions: string[] = [];
 mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async (target: { body: string; headSha: string; reviewRequestVersion: number; expectedReviewBody?: string; executionWindow?: ReviewExecutionWindow }) => {
+  if (firstCompletion && pr.status === "completed" && completionFailure === "summary") {
+    completionFailure = null;
+    assert.equal(pr.firstReviewCompletedAt, null, "Archiving the result must not complete onboarding before publication");
+    throw new Error("Fixture final summary publication failed");
+  }
   if (target.expectedReviewBody !== undefined) {
     assert.equal(target.expectedReviewBody, archived.at(-1)?.body);
     assert.equal(target.headSha, pr.headSha);
@@ -129,14 +155,16 @@ mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async
 } }));
 const realReviewAttempt = await import("@/lib/review-attempt");
 mock.module("@/lib/review-attempt", () => ({
+  recordFirstReviewCompletion: realReviewAttempt.recordFirstReviewCompletion,
   withForgejoReviewPublication: directCommentFailure ? realReviewAttempt.withForgejoReviewPublication : async (_id: string, _head: string, _version: number, publish: () => Promise<void>) => publish(),
   createReviewAttemptComment: directCommentFailure ? realReviewAttempt.createReviewAttemptComment : async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
-  updateCurrentReview: directCommentFailure ? realReviewAttempt.updateCurrentReview : async () => ({ count: 1 }),
+  updateCurrentReview: directCommentFailure || firstCompletion ? realReviewAttempt.updateCurrentReview : async () => ({ count: 1 }),
   saveReviewAttempt: async (_id: string, _pr: string, _coverage: unknown, _body: string, findings: { title: string }[]) => {
     archived.push({ id: _id, findings, coverage: structuredClone(_coverage), body: _body });
+    if (firstCompletion) Object.assign(pr, { status: "completed", reviewBody: _body });
     if (adaptiveStage === "after-save" && (_coverage as ReviewCoverage).assessment?.state === "completed") adaptiveAbort.abort();
     if ((_coverage as ReviewCoverage).assessment?.state === "completed") completedSnapshot = JSON.stringify(archived.at(-1));
-    return !!adaptiveStage;
+    return firstCompletion || !!adaptiveStage;
   },
 }));
 mock.module("@/lib/github", () => ({
@@ -156,6 +184,7 @@ mock.module("@/lib/github", () => ({
   },
   createCheckRun: async () => 789,
   updateCheckRun: async (_installation: number, _owner: string, _repo: string, _id: number, conclusion: string, _output: unknown, window?: ReviewExecutionWindow) => {
+    if (firstCompletion && completionFailure === "check") { completionFailure = null; throw new Error("Fixture final check publication failed"); }
     if (window && adaptiveStage === "check-send") await fetch("https://synthetic.invalid/check", { signal: window.signal });
     checkConclusions.push(conclusion);
   },
@@ -216,7 +245,10 @@ mock.module("@/lib/queue", () => ({
 mock.module("@/lib/cost", () => ({ getOrgSpendLimitStatus: async () => ({ blocked: false }), shouldGuardConcurrency: async () => false }));
 mock.module("@/lib/pubby", () => ({ pubby: { trigger: async (_channel: string, _name: string, data: { status?: string }) => { events.push(data); } } }));
 mock.module("@/lib/events", () => ({ eventBus: { emit: (event: { type: string }) => { events.push(event); } } }));
-mock.module("@/lib/indexer", () => ({ indexRepository: async () => { throw new Error("unexpected indexing"); } }));
+mock.module("@/lib/indexer", () => ({ indexRepository: async () => {
+  if (!preserveAutoReview) throw new Error("unexpected indexing");
+  return { indexedFiles: 1, totalFiles: 1, totalChunks: 1, totalVectors: 1, durationMs: 1, contributorCount: 0, contributors: [] };
+} }));
 mock.module("@/lib/review-repository-preparation", () => ({
   ensureRepositoryAnalysis: async (_repo: string, _org: string, onStart: () => Promise<void>) => {
     if (repo.provider === "forgejo") {
@@ -256,6 +288,42 @@ ${JSON.stringify([finding])}
 const { prepareReviewInput } = await import("@/lib/review-coverage");
 const { canRestrictReviewToFollowUp } = await import("@/lib/review-follow-up");
 const { processReview } = await import("@/lib/reviewer");
+if (firstCompletion) {
+  const errors = console.error;
+  console.error = () => {};
+  try {
+    completionFailure = "summary";
+    await processReview("pr");
+    assert.equal(archived.length, 1, "The failure happens after the actual reviewer archives its result");
+    assert.equal(pr.firstReviewCompletedAt, null, "Failed final publication cannot complete onboarding");
+    pr.status = "pending";
+    completionFailure = "check";
+    await processReview("pr");
+    assert.equal(pr.firstReviewCompletedAt, null, "A failed required native check cannot complete onboarding");
+    pr.status = "pending";
+    await processReview("pr");
+    assert.ok(pr.firstReviewCompletedAt instanceof Date, "The actual reviewer records successful publication");
+    const first = pr.firstReviewCompletedAt.getTime();
+    pr.status = "pending";
+    completionFailure = "check";
+    await processReview("pr");
+    assert.equal(pr.firstReviewCompletedAt.getTime(), first, "A later failed request preserves the achievement");
+    pr.status = "pending";
+    await processReview("pr");
+    assert.equal(pr.firstReviewCompletedAt.getTime(), first, "Later successful requests preserve the first timestamp");
+  } finally { console.error = errors; }
+  console.log("PASS first review completion follows final publication and survives reruns");
+  process.exit(0);
+}
+if (preserveAutoReview) {
+  repo.indexStatus = "pending";
+  await processReview("pr");
+  assert.equal(repo.indexStatus, "indexed", "the real reviewer must exercise automatic preparation");
+  assert.equal(repo.autoReview, false, "a one-off review must not enable automatic reviews");
+  assert.equal(archived.at(-1)?.coverage.assessment?.state, "completed");
+  console.log("PASS one-off review preparation preserves disabled automatic reviews");
+  process.exit(0);
+}
 if (directCommentFailure) {
   repo.provider = "forgejo";
   const errors = console.error;

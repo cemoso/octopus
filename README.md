@@ -37,7 +37,7 @@ To set up through the dashboard instead:
 
 1. [Sign in](https://octopus-review.ai/login) with Google, GitHub, Microsoft or an email magic link.
 2. Create your organization, connect GitHub, GitLab, Bitbucket or Forgejo, and choose the repositories to review.
-3. Open a pull request or merge request. Read the review in your code host and address the findings there.
+3. Follow the dashboard guide: confirm repository readiness, open a pull request or merge request, then wait for the first successfully published review. See the [first-review instructions](https://octopus-review.ai/docs/getting-started).
 
 Forgejo has three connection options:
 

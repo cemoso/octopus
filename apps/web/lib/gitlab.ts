@@ -5,6 +5,8 @@ import { reviewFilePriority, type ReviewInput, type ReviewFileInput } from "@/li
 import { prisma } from "@octopus/db";
 import { truncateDiff, MAX_FETCH_DIFF_CHARS } from "@/lib/diff-truncate";
 import { decryptString, encryptString, decryptStringMaybeLegacy } from "@/lib/crypto";
+import { withWebhookSetupLock } from "@/lib/integration-setup-lock";
+import { WebhookSetupError } from "@/lib/integration-setup";
 
 // ── Token Management ──
 
@@ -568,36 +570,73 @@ export async function createProjectWebhook(
   projectPath: string,
   callbackUrl: string,
   secret: string,
-): Promise<number | null> {
-  const token = await getAccessToken(organizationId);
-  const host = await getHost(organizationId);
-  const res = await fetch(
-    `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/hooks`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        url: callbackUrl,
-        token: secret,
-        merge_requests_events: true,
-        note_events: true,
-        push_events: false,
-        enable_ssl_verification: true,
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    const errBody = await res.text();
-    console.error(`[gitlab] Failed to create webhook on ${projectPath}: ${res.status} ${errBody}`);
-    return null;
+  expectedBinding?: { id: string; gitlabHost: string; namespacePath: string },
+): Promise<number> {
+  const integration = await getIntegration(organizationId);
+  const binding = expectedBinding ?? integration;
+  const checkBinding = (current: typeof integration | null) => {
+    if (!current || current.id !== binding.id || current.gitlabHost !== binding.gitlabHost
+      || current.namespacePath !== binding.namespacePath || current.webhookSecret !== secret) {
+      throw new WebhookSetupError("GitLab connection changed during setup. Retry setup for the current connection.");
+    }
+  };
+  checkBinding(integration);
+  // Use the token and host from the same verified binding. Listing already refreshes
+  // tokens; rereading either separately could target a newly reconnected instance.
+  if (integration.tokenExpiresAt.getTime() - Date.now() < 60_000) {
+    throw new WebhookSetupError("GitLab authorization expired during setup. Retry setup to refresh it.");
   }
-
-  const data = await res.json();
-  return (data.id as number) ?? null;
+  const token = decryptStringMaybeLegacy(integration.accessToken);
+  const host = integration.gitlabHost;
+  const endpoint = `${apiBase(host)}/projects/${encodeURIComponent(projectPath)}/hooks`;
+  // Ownership marker only; the receiver still authenticates the secret header.
+  const ownedUrl = new URL(callbackUrl);
+  ownedUrl.searchParams.set("octopus_org", organizationId);
+  ownedUrl.searchParams.set("octopus_connection", integration.id);
+  const headers = { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+  return withWebhookSetupLock([`binding:gitlab:${organizationId}`, `gitlab:${host}:${projectPath}`], async (tx) => {
+    checkBinding(await tx.gitlabIntegration.findUnique({ where: { organizationId } }));
+    const deadline = AbortSignal.timeout(45_000);
+    type Hook = { id: number; url: string; merge_requests_events?: boolean; note_events?: boolean; enable_ssl_verification?: boolean; alert_status?: string; disabled_until?: string | null; token_present?: boolean };
+    const hooks: Hook[] = [];
+    for (let page = 1; ; page++) {
+      if (page > 20) throw new WebhookSetupError("GitLab has too many project webhooks to check safely. Check the project's webhook settings.");
+      const response = await fetch(`${endpoint}?per_page=100&page=${page}`, { headers, signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]) });
+      if (!response.ok) throw new WebhookSetupError("Could not check GitLab project webhooks. Confirm Maintainer access and the API scope, then retry setup.");
+      const data = await response.json() as Hook[];
+      if (!Array.isArray(data)) throw new WebhookSetupError("GitLab returned an invalid webhook list. Retry setup.");
+      hooks.push(...data);
+      if (!response.headers.get("x-next-page") && data.length < 100) break;
+    }
+    const owned = hooks.find(h => h.url === ownedUrl.toString());
+    if (owned) {
+      if (!owned.merge_requests_events || !owned.note_events
+        || owned.enable_ssl_verification === false || owned.token_present === false
+        || (owned.alert_status && owned.alert_status !== "executable") || owned.disabled_until) {
+        throw new WebhookSetupError("The existing Octopus GitLab webhook needs attention. Check its URL, secret token, merge-request/comment events, TLS verification and enabled state in project settings, then retry setup.");
+      }
+      return owned.id;
+    }
+    if (hooks.some(h => {
+      try {
+        const url = new URL(h.url);
+        const callback = new URL(callbackUrl);
+        return url.origin === callback.origin && url.pathname === callback.pathname
+          && (!url.searchParams.get("octopus_org") || url.searchParams.get("octopus_org") === organizationId);
+      } catch { return false; }
+    })) {
+      throw new WebhookSetupError(`An existing GitLab webhook has no saved ownership evidence. Open “Repair an existing webhook” only after confirming it belongs to this organization. Use the current saved secret token and exact connection-specific callback URL from those details, verify its events, then retry. No duplicate was created.`);
+    }
+    checkBinding(await tx.gitlabIntegration.findUnique({ where: { organizationId } }));
+    const response = await fetch(endpoint, {
+      method: "POST", headers, signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]),
+      body: JSON.stringify({ url: ownedUrl.toString(), token: secret, merge_requests_events: true, note_events: true, push_events: false, enable_ssl_verification: true }),
+    });
+    if (!response.ok) throw new WebhookSetupError("Could not create the GitLab project webhook. Confirm Maintainer access and the API scope, then retry setup.");
+    const data = await response.json() as { id?: number };
+    if (!Number.isSafeInteger(data.id) || !data.id) throw new WebhookSetupError("GitLab did not confirm the new webhook. Retry setup to check whether it was created.");
+    return data.id;
+  });
 }
 
 export async function deleteProjectWebhook(

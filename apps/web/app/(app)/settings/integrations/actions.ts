@@ -1,6 +1,7 @@
 "use server";
 
 import "server-only";
+import { withWebhookSetupLock } from "@/lib/integration-setup-lock";
 import { randomBytes } from "node:crypto";
 import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -35,6 +36,67 @@ async function getAdminOrg() {
   }
 
   return { orgId: member.organizationId };
+}
+
+/** Check only the selected provider; authorization is retained if setup fails. */
+export async function retryIntegrationSetup(provider: "github" | "bitbucket" | "gitlab" | "forgejo"): Promise<{ error?: string; synced?: number }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  if (!["github", "bitbucket", "gitlab", "forgejo"].includes(provider)) {
+    return { error: "Choose a supported code provider." };
+  }
+  try {
+    const where = { organizationId: ctx.orgId };
+    const connected = provider === "github"
+      ? (await prisma.organization.findUnique({ where: { id: ctx.orgId }, select: { githubInstallationId: true } }))?.githubInstallationId
+      : provider === "bitbucket"
+        ? await prisma.bitbucketIntegration.findUnique({ where, select: { id: true } })
+        : provider === "gitlab"
+          ? await prisma.gitlabIntegration.findUnique({ where, select: { id: true } })
+          : await prisma.forgejoIntegration.findUnique({ where, select: { id: true } });
+    if (!connected) return { error: "Connect this provider before checking setup." };
+    const { syncOrgRepos } = await import("@/lib/repo-sync");
+    const result = await syncOrgRepos(ctx.orgId, { source: "manual", providers: [provider] });
+    return { synced: result.synced, ...(result.error ? { error: result.error } : {}) };
+  } catch {
+    return { error: "Setup could not be completed. Check the provider connection and try again. Your authorization has been kept." };
+  } finally {
+    revalidatePath("/settings/integrations");
+    revalidatePath("/repositories");
+    revalidatePath("/dashboard");
+  }
+}
+
+/** Retrieve the existing signing secret only after an administrator asks for it. */
+export async function getIntegrationWebhookDetails(provider: "bitbucket" | "gitlab"): Promise<{
+  error?: string;
+  details?: { url: string; secret: string; description?: string; hookId?: string | null };
+}> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  if (provider !== "bitbucket" && provider !== "gitlab") return { error: "Choose Bitbucket or GitLab." };
+  try {
+    const appUrl = process.env.BETTER_AUTH_URL;
+    if (!appUrl) return { error: "The Octopus application URL is not configured. Ask the instance administrator to set BETTER_AUTH_URL before repairing webhooks." };
+    if (provider === "bitbucket") {
+      const integration = await prisma.bitbucketIntegration.findUnique({
+        where: { organizationId: ctx.orgId }, select: { id: true, webhookSecret: true, webhookUuid: true },
+      });
+      if (!integration?.webhookSecret) return { error: "No saved Bitbucket webhook secret was found. Reconnect Bitbucket before retrying setup." };
+      return { details: { url: `${appUrl}/api/bitbucket/webhook`, secret: integration.webhookSecret,
+        description: `Octopus Review (${ctx.orgId}) [${integration.id}]`, hookId: integration.webhookUuid } };
+    }
+    const integration = await prisma.gitlabIntegration.findUnique({
+      where: { organizationId: ctx.orgId }, select: { id: true, webhookSecret: true },
+    });
+    if (!integration?.webhookSecret) return { error: "No saved GitLab webhook secret was found. Reconnect GitLab before retrying setup." };
+    const url = new URL(`${appUrl}/api/gitlab/webhook`);
+    url.searchParams.set("octopus_org", ctx.orgId);
+    url.searchParams.set("octopus_connection", integration.id);
+    return { details: { url: url.toString(), secret: integration.webhookSecret } };
+  } catch {
+    return { error: "Webhook details could not be loaded. Try again in a moment." };
+  }
 }
 
 // ── Forgejo Actions ──
@@ -152,7 +214,7 @@ export async function syncForgejo(): Promise<{ error?: string; synced?: number }
     revalidatePath("/settings/integrations");
     revalidatePath("/dashboard");
     revalidatePath("/repositories");
-    return { synced: result.synced };
+    return { synced: result.synced, ...(result.error ? { error: result.error } : {}) };
   } catch {
     revalidatePath("/settings/integrations");
     revalidatePath("/dashboard");
@@ -373,28 +435,17 @@ export async function disconnectGitlab(): Promise<{ error?: string }> {
   const ctx = await getAdminOrg();
   if (!ctx) return { error: "Insufficient permissions." };
 
-  const integration = await prisma.gitlabIntegration.findUnique({
-    where: { organizationId: ctx.orgId },
-    select: { id: true },
-  });
-
-  if (!integration) return { error: "No GitLab integration found." };
-
-  // We don't track per-project hook IDs, so webhooks are left as-is on
-  // GitLab and will simply 401 against the rotated secret. That's safe and
-  // matches the "minimal" Bitbucket-style disconnect flow.
-
-  await prisma.gitlabIntegration.delete({
-    where: { id: integration.id },
-  });
-
-  await prisma.repository.updateMany({
-    where: {
-      organizationId: ctx.orgId,
-      provider: "gitlab",
-    },
-    data: { isActive: false },
-  });
+  try {
+    await withWebhookSetupLock(`binding:gitlab:${ctx.orgId}`, async (tx) => {
+      await tx.gitlabIntegration.deleteMany({ where: { organizationId: ctx.orgId } });
+      await tx.repository.updateMany({
+        where: { organizationId: ctx.orgId, provider: "gitlab" },
+        data: { isActive: false, webhookSetupStatus: { status: "unknown" } },
+      });
+    });
+  } catch {
+    return { error: "Connection setup is running or the disconnect failed. Retry shortly." };
+  }
 
   revalidatePath("/settings/integrations");
   return {};
@@ -406,36 +457,17 @@ export async function disconnectBitbucket(): Promise<{ error?: string }> {
   const ctx = await getAdminOrg();
   if (!ctx) return { error: "Insufficient permissions." };
 
-  const integration = await prisma.bitbucketIntegration.findUnique({
-    where: { organizationId: ctx.orgId },
-    select: { id: true, workspaceSlug: true, webhookUuid: true },
-  });
-
-  if (!integration) return { error: "No Bitbucket integration found." };
-
-  // Delete webhook (best-effort)
-  if (integration.webhookUuid) {
-    try {
-      const { deleteWebhook } = await import("@/lib/bitbucket");
-      await deleteWebhook(ctx.orgId, integration.workspaceSlug, integration.webhookUuid);
-    } catch (err) {
-      console.error("[bitbucket] Webhook cleanup failed:", err);
-    }
+  try {
+    await withWebhookSetupLock(`binding:bitbucket:${ctx.orgId}`, async (tx) => {
+      await tx.bitbucketIntegration.deleteMany({ where: { organizationId: ctx.orgId } });
+      await tx.repository.updateMany({
+        where: { organizationId: ctx.orgId, provider: "bitbucket" },
+        data: { isActive: false, webhookSetupStatus: { status: "unknown" } },
+      });
+    });
+  } catch {
+    return { error: "Connection setup is running or the disconnect failed. Retry shortly." };
   }
-
-  // Delete integration
-  await prisma.bitbucketIntegration.delete({
-    where: { id: integration.id },
-  });
-
-  // Deactivate all Bitbucket repos for this org
-  await prisma.repository.updateMany({
-    where: {
-      organizationId: ctx.orgId,
-      provider: "bitbucket",
-    },
-    data: { isActive: false },
-  });
 
   revalidatePath("/settings/integrations");
   return {};

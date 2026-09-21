@@ -54,10 +54,12 @@ const db = {
       return [{ ...current, id: "pr", headSha: currentHead, reviewRequestVersion: currentVersion, number: 1, createdAt: new Date("2026-09-11T00:00:00Z") }];
     },
     findUnique: async () => ({ ...current, id: "pr", headSha: currentHead, reviewRequestVersion: currentVersion, number: 1, updatedAt: currentUpdatedAt, repository: { id: "repo", provider: "github", fullName: "owner/repo", installationId: 123, organization: { id: "owner-org" } } }),
-    updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string; reviewRequestVersion?: number; reviewBody?: string } }) => {
+    updateMany: async ({ data, where }: { data: Record<string, unknown>; where: { headSha?: string; reviewRequestVersion?: number; reviewBody?: string; status?: string; firstReviewCompletedAt?: null } }) => {
       if (where.reviewRequestVersion !== undefined && where.reviewRequestVersion !== currentVersion) return { count: 0 };
       if (where.headSha && where.headSha !== currentHead) return { count: 0 };
       if (where.reviewBody !== undefined && current.reviewBody !== where.reviewBody) return { count: 0 };
+      if (where.status !== undefined && current.status !== where.status) return { count: 0 };
+      if (where.firstReviewCompletedAt === null && current.firstReviewCompletedAt != null) return { count: 0 };
       current = { ...current, ...structuredClone(data) };
       return { count: 1 };
     },
@@ -114,7 +116,7 @@ mock.module("@/lib/api-auth", () => ({ authenticateApiToken: async (request: Req
   return null;
 } }));
 
-const { saveReviewAttempt, updateCurrentReview, createReviewAttemptComment } = await import("../../review-attempt");
+const { saveReviewAttempt, updateCurrentReview, createReviewAttemptComment, recordFirstReviewCompletion } = await import("../../review-attempt");
 const { unknownReviewCoverage, prepareReviewInput } = await import("../../review-coverage");
 const { GET } = await import("../../../app/api/review-attempts/[id]/route");
 const { NextRequest } = await import("next/server");
@@ -313,6 +315,7 @@ for (const [prId, candidateCoverage, candidateBody] of [
 }
 
 const failedJob = { pullRequestId: "pr", ...origin, headSha: currentHead, reviewRequestVersion: currentVersion, attemptId: "ffffffff-ffff-4fff-8fff-ffffffffffff", reviewBody: "", error: "model failure" };
+current.firstReviewCompletedAt = null;
 allowPublication = false;
 await assert.rejects(handleLargeReviewResult(failedJob), /Delayed result published/);
 const failureArchive = structuredClone(rows.get(failedJob.attemptId));
@@ -321,6 +324,7 @@ assert.equal(current.status, "completed");
 allowPublication = true;
 await handleLargeReviewResult(failedJob);
 assert.equal(current.status, "failed");
+assert.equal(current.firstReviewCompletedAt, null, "Publishing a large-review error is not a completed review");
 assert.equal(current.errorMessage, "model failure");
 assert.deepEqual(rows.get(failedJob.attemptId), failureArchive);
 const publicationCount = published.length;
@@ -401,16 +405,19 @@ assert.equal(published.length, beforeArchiveFailure.comments);
 assert.deepEqual(current, beforeArchiveFailure.current);
 
 const interruptedSuccess = { ...archiveFailureJob, attemptId: "13131313-1313-4313-8313-131313131313" };
+current.firstReviewCompletedAt = null;
 failCheck = true;
 await assert.rejects(handleLargeReviewResult(interruptedSuccess), /Transient check failure/);
 const savedSuccess = structuredClone(rows.get(interruptedSuccess.attemptId));
 assert.ok(savedSuccess);
+assert.equal(current.firstReviewCompletedAt, null, "An archived result with a failed check is not successful delivery");
 assert.equal(published.length, beforeArchiveFailure.comments);
 failCheck = false;
 allowPublication = false;
 await assert.rejects(handleLargeReviewResult(interruptedSuccess), /Delayed result published/);
 assert.equal(deliveries.get(interruptedSuccess.attemptId)?.leaseToken, null);
 assert.equal(deliveries.get(interruptedSuccess.attemptId)?.completedAt, null);
+assert.equal(current.firstReviewCompletedAt, null, "A failed main-comment publication is not successful delivery");
 allowPublication = true;
 failSummary = true;
 const summaryErrors: unknown[][] = [];
@@ -423,11 +430,27 @@ assert.match(String(summaryErrors[0][1]), /Transient summary failure/);
 assert.equal(published.length, beforeArchiveFailure.comments + 1);
 assert.equal(deliveries.get(interruptedSuccess.attemptId)?.mainCommentId, 456n);
 assert.equal(deliveries.get(interruptedSuccess.attemptId)?.summaryPublished, false);
+assert.equal(current.firstReviewCompletedAt, null, "The main comment alone cannot complete the large-review workflow");
 failSummary = false;
 await handleLargeReviewResult(interruptedSuccess);
 assert.equal(published.length, beforeArchiveFailure.comments + 2);
 assert.ok(deliveries.get(interruptedSuccess.attemptId)?.completedAt);
+assert.ok(current.firstReviewCompletedAt instanceof Date, "Successful large-review publication records its first completion");
+const firstCompletionAt = (current.firstReviewCompletedAt as Date).getTime();
 assert.deepEqual(rows.get(interruptedSuccess.attemptId), savedSuccess);
+assert.equal((current.firstReviewCompletedAt as Date).getTime(), firstCompletionAt);
+await updateCurrentReview("pr", currentHead, currentVersion, { status: "failed" });
+assert.equal((current.firstReviewCompletedAt as Date).getTime(), firstCompletionAt, "Later failures retain the first successful review");
+await updateCurrentReview("pr", currentHead, currentVersion, { status: "completed" });
+await recordFirstReviewCompletion("pr", currentHead, currentVersion, String(current.reviewBody));
+assert.equal((current.firstReviewCompletedAt as Date).getTime(), firstCompletionAt, "Later success cannot replace the first timestamp");
+
+current.firstReviewCompletedAt = null;
+await recordFirstReviewCompletion("pr", "stale-head", currentVersion, String(current.reviewBody));
+await recordFirstReviewCompletion("pr", currentHead, currentVersion - 1, String(current.reviewBody));
+await recordFirstReviewCompletion("pr", currentHead, currentVersion, "superseded report");
+assert.equal(current.firstReviewCompletedAt, null, "Stale head, request and report cannot mark a replacement request complete");
+current.firstReviewCompletedAt = new Date(firstCompletionAt);
 await handleLargeReviewResult(interruptedSuccess);
 assert.equal(published.length, beforeArchiveFailure.comments + 2);
 assert.deepEqual(rows.get(interruptedSuccess.attemptId), savedSuccess);

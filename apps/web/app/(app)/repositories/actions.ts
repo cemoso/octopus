@@ -808,7 +808,7 @@ export async function toggleAutoReview(
     },
   });
 
-  if (!repo || repo.organization.members.length === 0) return {};
+  if (!repo || repo.organization.members.length === 0) return { error: "Repository not found." };
 
   // Previously ungated (any member) — inconsistent with every sibling repo
   // action; auto-review on/off is review configuration.

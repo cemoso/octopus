@@ -103,4 +103,9 @@ assert.equal(indexCalls.at(-1)?.[6], "forgejo", "Forgejo jobs must not use GitHu
 cancelled = true;
 await processRepositoryIndex(job);
 assert.equal(claims.at(-1)?.data.indexStatus, "pending", "cancelled work must release its claim");
+const priorQueries = queries.length;
+await enqueuePendingRepositoryIndexes("org-1", undefined, ["bitbucket", "gitlab", "unrecognized"]);
+assert.equal(queries.length, priorQueries, "provider-scoped setup must not expand the indexing allowlist");
+await enqueuePendingRepositoryIndexes("org-1", undefined, ["forgejo", "bitbucket"]);
+assert.deepEqual(queries.at(-1)?.where.provider, { in: ["forgejo"] }, "a retry must not index a different provider");
 console.log("Repository queue, tenant, claim, empty snapshot, failure, retry and cancellation checks passed");

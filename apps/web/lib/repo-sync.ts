@@ -1,7 +1,8 @@
 import "server-only";
+import { acquireWebhookSetupLock } from "@/lib/integration-setup-lock";
 import { prisma } from "@octopus/db";
 import { listInstallationRepos, GithubRateLimitError } from "@/lib/github";
-import { listWorkspaceRepos } from "@/lib/bitbucket";
+import { listWorkspaceRepos, createWebhook } from "@/lib/bitbucket";
 import { listNamespaceProjects, createProjectWebhook } from "@/lib/gitlab";
 import { listUserRepos } from "@/lib/forgejo";
 import { grantDeferredWelcomeCredit } from "@/lib/org-create";
@@ -10,6 +11,7 @@ import { grantDeferredWelcomeCredit } from "@/lib/org-create";
 import * as realtime from "@/lib/pubby";
 import { writeAuditLog } from "@/lib/audit";
 import { enqueuePendingRepositoryIndexes } from "@/lib/repository-index-job";
+import { parseRepositoryWebhookSetup, WebhookSetupError, type IntegrationSetupStatus, type RepositoryWebhookSetup } from "@/lib/integration-setup";
 
 /**
  * Org-scoped repository sync shared by the manual Sync button, the GitHub
@@ -44,6 +46,29 @@ export interface RepoSyncResult {
   createdRepos: DiscoveredRepo[];
   /** Providers that had an integration to sync; empty means nothing is linked. */
   providers: RepoSyncProvider[];
+}
+
+function setupStatus(syncError: string | null, webhook: IntegrationSetupStatus["webhook"]): IntegrationSetupStatus {
+  return { sync: { status: syncError ? "failed" : "ready", checkedAt: new Date().toISOString(), error: syncError }, webhook };
+}
+
+function uncheckedWebhook(status: "unknown" | "manual" = "unknown"): IntegrationSetupStatus["webhook"] {
+  return { status, checkedAt: null, error: null };
+}
+
+function reportError(result: RepoSyncResult, message: string) {
+  result.error = result.error ? `${result.error} ${message}` : message;
+}
+
+function webhookError(error: unknown, fallback: string): string {
+  return error instanceof WebhookSetupError ? error.message : fallback;
+}
+
+function mergeCounts(result: RepoSyncResult, synced: RepoSyncResult) {
+  result.synced += synced.synced;
+  result.created += synced.created;
+  result.removed += synced.removed;
+  result.createdRepos.push(...synced.createdRepos);
 }
 
 /** externalId → dismissedAt for the org's existing rows of one provider. */
@@ -124,7 +149,7 @@ async function deactivateMissing(
 
 export async function syncOrgRepos(
   organizationId: string,
-  opts: { source: RepoSyncSource },
+  opts: { source: RepoSyncSource; providers?: RepoSyncProvider[] },
 ): Promise<RepoSyncResult> {
   const result: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
 
@@ -138,8 +163,9 @@ export async function syncOrgRepos(
   // Repo-level installation ids are legacy data; only the manual button still
   // widens to them so existing users keep today's behaviour.
   const installationIds = new Set<number>();
-  if (org?.githubInstallationId) installationIds.add(org.githubInstallationId);
-  if (opts.source === "manual") {
+  const selected = (provider: RepoSyncProvider) => !opts.providers || opts.providers.includes(provider);
+  if (selected("github") && org?.githubInstallationId) installationIds.add(org.githubInstallationId);
+  if (selected("github") && opts.source === "manual") {
     const repoInstallations = await prisma.repository.findMany({
       where: { organizationId, installationId: { not: null } },
       select: { installationId: true },
@@ -170,9 +196,13 @@ export async function syncOrgRepos(
       } catch (err) {
         // The sweep stops on a rate limit (cursor resumes next tick); a person
         // clicking Sync still gets the other providers synced.
-        if (err instanceof GithubRateLimitError && opts.source !== "manual") throw err;
         listingFailed = true;
         console.error(`[repo-sync] Failed to list repos for installation ${installationId}:`, err);
+        if (err instanceof GithubRateLimitError && opts.source !== "manual") {
+          await prisma.organization.updateMany({ where: { id: organizationId, githubInstallationId: org?.githubInstallationId },
+            data: { githubSetupStatus: setupStatus("GitHub repository sync was rate limited. Retry shortly.", uncheckedWebhook()) } });
+          throw err;
+        }
       }
     }
     // Deactivate only rows the listing actually covered: rows tied to a legacy
@@ -180,73 +210,125 @@ export async function syncOrgRepos(
     if (!listingFailed) {
       result.removed += await deactivateMissing(organizationId, "github", present, [...installationIds]);
     }
+    const error = listingFailed ? "GitHub repository sync failed. Check the App installation and repository access, then retry setup." : null;
+    if (error) reportError(result, error);
+    await prisma.organization.updateMany({ where: { id: organizationId, githubInstallationId: org?.githubInstallationId },
+      data: { githubSetupStatus: setupStatus(error, uncheckedWebhook()) } });
   }
 
   // ── Bitbucket ──
-  const bitbucket = await prisma.bitbucketIntegration.findUnique({
+  const bitbucket = selected("bitbucket") ? await prisma.bitbucketIntegration.findUnique({
     where: { organizationId },
-    select: { workspaceSlug: true },
-  });
+  }) : null;
   if (bitbucket) {
     result.providers.push("bitbucket");
     try {
       const repos = await listWorkspaceRepos(organizationId, bitbucket.workspaceSlug);
-      const existing = await loadExisting(organizationId, "bitbucket");
-      const present: string[] = [];
-      for (const repo of repos) {
-        present.push(repo.uuid);
-        await upsertRepo(organizationId, "bitbucket", existing, result, {
-          externalId: repo.uuid,
-          name: repo.name,
-          fullName: repo.full_name,
-          defaultBranch: repo.mainbranch?.name ?? "main",
-        });
+      let hookId: string | null = null;
+      let hookError: string | null = null;
+      try {
+        if (!bitbucket.webhookSecret) throw new WebhookSetupError("Bitbucket webhook secret is missing. Reconnect Bitbucket, then retry setup.");
+        hookId = await createWebhook(organizationId, bitbucket.workspaceSlug,
+          `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/api/bitbucket/webhook`, bitbucket.webhookSecret, bitbucket);
+      } catch (error) {
+        hookError = webhookError(error, "Could not check Bitbucket webhook setup. Retry setup after checking access and connectivity.");
       }
-      result.removed += await deactivateMissing(organizationId, "bitbucket", present);
+      const synced: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
+      await prisma.$transaction(async (tx) => {
+        await acquireWebhookSetupLock(tx, `binding:bitbucket:${organizationId}`);
+        await tx.$queryRaw`SELECT "id" FROM "bitbucket_integrations" WHERE "id" = ${bitbucket.id} FOR UPDATE`;
+        const current = await tx.bitbucketIntegration.findUnique({ where: { organizationId } });
+        if (!current || current.id !== bitbucket.id || current.workspaceSlug !== bitbucket.workspaceSlug || current.webhookSecret !== bitbucket.webhookSecret) throw new Error("Bitbucket connection changed during sync");
+        const existing = await loadExisting(organizationId, "bitbucket", tx);
+        const present: string[] = [];
+        for (const repo of repos) {
+          present.push(repo.uuid);
+          await upsertRepo(organizationId, "bitbucket", existing, synced, {
+            externalId: repo.uuid, name: repo.name, fullName: repo.full_name, defaultBranch: repo.mainbranch?.name ?? "main",
+          }, tx);
+        }
+        synced.removed += await deactivateMissing(organizationId, "bitbucket", present, undefined, tx);
+        await tx.bitbucketIntegration.update({ where: { id: bitbucket.id }, data: {
+          ...(hookId ? { webhookUuid: hookId } : {}),
+          setupStatus: setupStatus(null, { status: hookError ? "failed" : "ready", checkedAt: new Date().toISOString(), error: hookError }),
+        } });
+      }, { timeout: 60_000 });
+      mergeCounts(result, synced);
+      if (hookError) reportError(result, hookError);
     } catch (err) {
       console.error("[repo-sync] Failed to sync Bitbucket repos:", err);
+      const error = "Bitbucket repository sync failed. Check workspace access and reconnect if needed, then retry setup.";
+      reportError(result, error);
+      await prisma.bitbucketIntegration.updateMany({ where: { id: bitbucket.id, workspaceSlug: bitbucket.workspaceSlug, webhookSecret: bitbucket.webhookSecret },
+        data: { setupStatus: setupStatus(error, uncheckedWebhook()) } });
     }
   }
 
   // ── GitLab ──
   // Group hooks are Premium-only, so every project carries its own hook (same
   // per-org secret). New projects therefore need a row AND a hook.
-  const gitlab = await prisma.gitlabIntegration.findUnique({
+  const gitlab = selected("gitlab") ? await prisma.gitlabIntegration.findUnique({
     where: { organizationId },
-    select: { namespacePath: true, webhookSecret: true },
-  });
+  }) : null;
   if (gitlab) {
     result.providers.push("gitlab");
     try {
       const projects = await listNamespaceProjects(organizationId, gitlab.namespacePath);
-      const existing = await loadExisting(organizationId, "gitlab");
-      const present: string[] = [];
+      const existingRows = await prisma.repository.findMany({ where: { organizationId, provider: "gitlab" },
+        select: { externalId: true, dismissedAt: true, webhookSetupStatus: true } });
+      const existing = new Map(existingRows.map(row => [row.externalId, row]));
       const appUrl = process.env.BETTER_AUTH_URL || "http://localhost:3000";
+      const hooks = new Map<string, RepositoryWebhookSetup>();
       for (const project of projects) {
         const externalId = String(project.id);
-        present.push(externalId);
-        const outcome = await upsertRepo(organizationId, "gitlab", existing, result, {
-          externalId,
-          name: project.name,
-          fullName: project.path_with_namespace,
-          defaultBranch: project.default_branch ?? "main",
-        });
-        if (outcome === "created" && gitlab.webhookSecret) {
-          try {
-            await createProjectWebhook(
-              organizationId,
-              project.path_with_namespace,
-              `${appUrl}/api/gitlab/webhook`,
-              gitlab.webhookSecret,
-            );
-          } catch (err) {
-            console.warn(`[repo-sync] Hook creation failed for ${project.path_with_namespace}:`, err);
-          }
+        if (existing.get(externalId)?.dismissedAt) continue;
+        const previous = parseRepositoryWebhookSetup(existing.get(externalId)?.webhookSetupStatus);
+        // Numeric project/hook IDs can collide after reconnecting another GitLab host.
+        const hookScope = `${gitlab.id}:${gitlab.gitlabHost}:${project.path_with_namespace}`;
+        const knownHookId = previous.hookScope === hookScope ? previous.hookId : null;
+        try {
+          if (!gitlab.webhookSecret) throw new WebhookSetupError("GitLab webhook secret is missing. Reconnect GitLab, then retry setup.");
+          const id = await createProjectWebhook(organizationId, project.path_with_namespace,
+            `${appUrl}/api/gitlab/webhook`, gitlab.webhookSecret, gitlab);
+          hooks.set(externalId, { status: "ready", checkedAt: new Date().toISOString(), error: null, hookId: String(id), hookScope });
+        } catch (error) {
+          hooks.set(externalId, { status: "failed", checkedAt: new Date().toISOString(), hookId: knownHookId, hookScope,
+            error: webhookError(error, "Could not check this GitLab project's webhook. Check project access and connectivity, then retry setup.") });
         }
       }
-      result.removed += await deactivateMissing(organizationId, "gitlab", present);
+      const failures = [...hooks.values()].filter(h => h.status === "failed");
+      const hookError = failures.length ? `${failures.length} of ${hooks.size} GitLab project webhooks need attention. ${failures[0].error}` : null;
+      const synced: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
+      await prisma.$transaction(async (tx) => {
+        await acquireWebhookSetupLock(tx, `binding:gitlab:${organizationId}`);
+        await tx.$queryRaw`SELECT "id" FROM "gitlab_integrations" WHERE "id" = ${gitlab.id} FOR UPDATE`;
+        const current = await tx.gitlabIntegration.findUnique({ where: { organizationId } });
+        if (!current || current.id !== gitlab.id || current.gitlabHost !== gitlab.gitlabHost || current.namespacePath !== gitlab.namespacePath || current.webhookSecret !== gitlab.webhookSecret) throw new Error("GitLab connection changed during sync");
+        const dismissed = await loadExisting(organizationId, "gitlab", tx);
+        const present: string[] = [];
+        for (const project of projects) {
+          const externalId = String(project.id);
+          present.push(externalId);
+          const outcome = await upsertRepo(organizationId, "gitlab", dismissed, synced, {
+            externalId, name: project.name, fullName: project.path_with_namespace, defaultBranch: project.default_branch ?? "main",
+          }, tx);
+          const hook = hooks.get(externalId);
+          if (outcome !== "dismissed" && hook) await tx.repository.updateMany({
+            where: { organizationId, provider: "gitlab", externalId, dismissedAt: null }, data: { webhookSetupStatus: hook },
+          });
+        }
+        synced.removed += await deactivateMissing(organizationId, "gitlab", present, undefined, tx);
+        await tx.gitlabIntegration.update({ where: { id: gitlab.id }, data: { setupStatus: setupStatus(null,
+          { status: hookError ? "failed" : hooks.size ? "ready" : "unknown", checkedAt: new Date().toISOString(), error: hookError }) } });
+      }, { timeout: 60_000 });
+      mergeCounts(result, synced);
+      if (hookError) reportError(result, hookError);
     } catch (err) {
       console.error("[repo-sync] Failed to sync GitLab projects:", err);
+      const error = "GitLab repository sync failed. Check namespace access and reconnect if needed, then retry setup.";
+      reportError(result, error);
+      await prisma.gitlabIntegration.updateMany({ where: { id: gitlab.id, gitlabHost: gitlab.gitlabHost, namespacePath: gitlab.namespacePath, webhookSecret: gitlab.webhookSecret },
+        data: { setupStatus: setupStatus(error, uncheckedWebhook()) } });
     }
   }
 
@@ -254,19 +336,16 @@ export async function syncOrgRepos(
   if (result.synced > 0) await grantDeferredWelcomeCredit(organizationId);
 
   notifyDiscovered(organizationId, opts.source, result.createdRepos);
-  await enqueuePendingRepositoryIndexes(organizationId)
+  if (selected("github")) await enqueuePendingRepositoryIndexes(organizationId, undefined, ["github"])
     .catch((err) => console.error("[repo-sync] Could not queue indexing; next sync will retry:", err));
 
-  const forgejo = await syncForgejoRepos(organizationId, opts).catch((err) => {
+  const forgejo = selected("forgejo") ? await syncForgejoRepos(organizationId, opts).catch((err) => {
     console.error("[repo-sync] Failed to sync Forgejo repos:", err);
-    result.error = "Forgejo repository sync failed. Check its token permissions and instance availability in Settings → Integrations.";
+    reportError(result, "Forgejo repository sync failed. Check its token permissions and instance availability in Settings → Integrations.");
     return null;
-  });
+  }) : null;
   if (forgejo) {
-    result.synced += forgejo.synced;
-    result.created += forgejo.created;
-    result.removed += forgejo.removed;
-    result.createdRepos.push(...forgejo.createdRepos);
+    mergeCounts(result, forgejo);
     result.providers.push(...forgejo.providers);
   }
 
@@ -281,35 +360,43 @@ export async function syncForgejoRepos(
   const integration = await prisma.forgejoIntegration.findUnique({ where: { organizationId } });
   const result: RepoSyncResult = { synced: 0, created: 0, removed: 0, createdRepos: [], providers: [] };
   if (!integration) return result;
-  const repos = await listUserRepos(organizationId);
-  await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integration.id} FOR UPDATE`;
-    const current = await tx.forgejoIntegration.findUnique({ where: { organizationId }, include: { organization: { select: { bannedAt: true, deletedAt: true } } } });
-    if (!current || current.organization.bannedAt || current.organization.deletedAt || current.connectorError
-      || current.id !== integration.id || current.accessTokenEnc !== integration.accessTokenEnc
-      || current.connectorTokenHash !== integration.connectorTokenHash || current.username !== integration.username) {
-      throw new Error("Forgejo connection changed during sync. Try syncing again.");
-    }
-    result.providers.push("forgejo");
-    const existing = await loadExisting(organizationId, "forgejo", tx);
-    const present: string[] = [];
-    for (const repo of repos) {
-      if (!repo.permissions?.admin || repo.archived) continue;
-      const externalId = `${integration.forgejoHost}:${repo.id}`;
-      present.push(externalId);
-      await upsertRepo(organizationId, "forgejo", existing, result, {
-        externalId,
-        name: repo.name,
-        fullName: repo.full_name,
-        defaultBranch: repo.default_branch || "main",
-      }, tx);
-    }
-    result.removed += await deactivateMissing(organizationId, "forgejo", present, undefined, tx);
-  });
-  notifyDiscovered(organizationId, opts.source, result.createdRepos);
-  await enqueuePendingRepositoryIndexes(organizationId)
-    .catch((err) => console.error("[repo-sync] Could not queue Forgejo indexing:", err));
-  return result;
+  try {
+    const repos = await listUserRepos(organizationId);
+    await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "forgejo_integrations" WHERE "id" = ${integration.id} FOR UPDATE`;
+      const current = await tx.forgejoIntegration.findUnique({ where: { organizationId }, include: { organization: { select: { bannedAt: true, deletedAt: true } } } });
+      if (!current || current.organization.bannedAt || current.organization.deletedAt || current.connectorError
+        || current.id !== integration.id || current.accessTokenEnc !== integration.accessTokenEnc
+        || current.connectorTokenHash !== integration.connectorTokenHash || current.username !== integration.username) {
+        throw new Error("Forgejo connection changed during sync. Try syncing again.");
+      }
+      result.providers.push("forgejo");
+      const existing = await loadExisting(organizationId, "forgejo", tx);
+      const present: string[] = [];
+      for (const repo of repos) {
+        if (!repo.permissions?.admin || repo.archived) continue;
+        const externalId = `${integration.forgejoHost}:${repo.id}`;
+        present.push(externalId);
+        await upsertRepo(organizationId, "forgejo", existing, result, {
+          externalId,
+          name: repo.name,
+          fullName: repo.full_name,
+          defaultBranch: repo.default_branch || "main",
+        }, tx);
+      }
+      result.removed += await deactivateMissing(organizationId, "forgejo", present, undefined, tx);
+      await tx.forgejoIntegration.update({ where: { id: integration.id }, data: { setupStatus: setupStatus(null, uncheckedWebhook("manual")) } });
+    });
+    notifyDiscovered(organizationId, opts.source, result.createdRepos);
+    await enqueuePendingRepositoryIndexes(organizationId, undefined, ["forgejo"])
+      .catch((err) => console.error("[repo-sync] Could not queue Forgejo indexing:", err));
+    return result;
+  } catch (error) {
+    await prisma.forgejoIntegration.updateMany({ where: { id: integration.id, forgejoHost: integration.forgejoHost, accessTokenEnc: integration.accessTokenEnc,
+      connectorTokenHash: integration.connectorTokenHash, username: integration.username },
+      data: { setupStatus: setupStatus("Forgejo repository sync failed. Check its token permissions and instance or connector availability, then retry setup.", uncheckedWebhook("manual")) } });
+    throw error;
+  }
 }
 
 /** One audit row + one realtime event per run that created repositories. */

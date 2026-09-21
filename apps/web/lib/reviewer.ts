@@ -62,7 +62,7 @@ import { createCoveredReviewRequest } from "@/lib/review-request";
 import { canRestrictReviewToFollowUp } from "@/lib/review-follow-up";
 import { prepareRecoveredReviewPresentation, prepareReviewPresentation, mapReviewPresentation, enforceReviewFindingsIntegrity, finalizeReviewPresentation } from "@/lib/review-presentation";
 import { executeCoveredReview, executeFindingsRecovery, recordNoModelAssessment, markReviewAssessmentIncomplete } from "@/lib/review-assessment";
-import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, withForgejoReviewPublication } from "@/lib/review-attempt";
+import { saveReviewAttempt, createReviewAttemptComment, updateCurrentReview, withForgejoReviewPublication, recordFirstReviewCompletion } from "@/lib/review-attempt";
 import { publishReviewSummary } from "@/lib/review-summary-comment";
 import type { ReviewComment } from "@/lib/github";
 import { eventBus } from "@/lib/events";
@@ -1077,11 +1077,6 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
 
         console.log(`[reviewer] Indexing complete: ${indexStats.indexedFiles} files, ${indexStats.totalVectors} vectors`);
 
-        await prisma.repository.update({
-          where: { id: repo.id },
-          data: { autoReview: true },
-        });
-
         await pubby.trigger(`presence-org-${org.id}`, "repo-indexed", {
           repoId: repo.id,
           fullName: repo.fullName,
@@ -1099,7 +1094,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
           durationMs: indexStats.durationMs,
         });
 
-        console.log(`[reviewer] Phase 0 complete -- ${repo.fullName} indexed, auto-review enabled`);
+        console.log(`[reviewer] Phase 0 complete -- ${repo.fullName} indexed`);
       }
     }
 
@@ -1349,6 +1344,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
       if (pr.headSha && usesProjectApi) {
         await projectProvider.setCommitStatus(org.id, projectPath, pr.headSha, result.conclusion === "success" ? "success" : "failed", COMMIT_STATUS_NAME, result.summary);
       }
+      await recordFirstReviewCompletion(pr.id, pr.headSha, pr.reviewRequestVersion, body);
       await emitReviewStatus(org.id, { ...baseEvent, status: "completed", step: "completed", detail: result.summary });
       return;
     }
@@ -2538,6 +2534,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
       console.error("[reviewer] Failed to store diagrams in vector DB:", err);
     }
 
+    await recordFirstReviewCompletion(pr.id, pr.headSha, pr.reviewRequestVersion, effectiveReviewBody);
     if (!await emitReviewStatus(org.id, {
       ...baseEvent,
       status: "completed",

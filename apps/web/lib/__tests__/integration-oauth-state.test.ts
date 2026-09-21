@@ -1,5 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 
+mock.module("server-only", () => ({}));
+
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-integration-oauth-state";
 process.env.BETTER_AUTH_URL ??= "https://app.test";
 process.env.LINEAR_CLIENT_ID ??= "linear-client";

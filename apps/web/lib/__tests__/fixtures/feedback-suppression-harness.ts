@@ -96,6 +96,7 @@ mock.module("@/lib/review-summary-comment", () => ({ publishReviewSummary: async
   return 123;
 } }));
 mock.module("@/lib/review-attempt", () => ({
+  recordFirstReviewCompletion: async () => { throw new Error("Fixture must stop before completion"); },
   withForgejoReviewPublication: async () => { throw new Error("Unexpected Forgejo publication"); },
   createReviewAttemptComment: async (_id: string, _head: string, _version: number, create: () => Promise<number>) => create(),
   updateCurrentReview: async () => ({ count: 1 }),

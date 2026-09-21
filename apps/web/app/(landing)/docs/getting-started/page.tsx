@@ -119,12 +119,12 @@ export default function GettingStartedPage() {
           <ProviderCard
             icon={<IconBrandGithub className="size-5" />}
             name="GitHub"
-            description="Install the GitHub App, select repositories, and you're ready to go."
+            description="Install the GitHub App and select repositories."
           />
           <ProviderCard
             icon={<IconBrandGitlab className="size-5" />}
             name="GitLab"
-            description="Connect via OAuth (gitlab.com or self-managed); Octopus reviews every merge request."
+            description="Connect via OAuth on gitlab.com or a self-managed instance."
           />
           <ProviderCard
             icon={<IconBrandBitbucket className="size-5" />}
@@ -138,18 +138,34 @@ export default function GettingStartedPage() {
           />
         </div>
         <Paragraph>
-          Once connected, Octopus indexes your codebase. It chunks your code,
-          creates embeddings, and builds a searchable representation of your
-          entire project. This is what makes reviews context-aware.
+          In the dashboard&apos;s first-review guide, choose a repository and confirm
+          its readiness. Check repository sync and webhook setup in Settings →
+          Integrations; authorization alone does not confirm event delivery. See the{" "}
+          <Link href="/docs/integrations#setup-checks" className="text-white underline">
+            setup checks and recovery instructions
+          </Link>.
         </Paragraph>
       </Section>
 
       {/* Step 2: First review */}
       <Section title="2. Your First Review">
         <Paragraph>
-          Open a pull request on any connected repository. Octopus automatically
-          picks it up via webhook, analyzes the diff against your full codebase,
-          and posts its findings as inline review comments within minutes.
+          Confirm Auto Review is enabled for the selected repository, then open a
+          non-draft pull request or update an existing one. Connecting alone does
+          not trigger reviews of already-open PRs. Follow progress in Review Logs.
+        </Paragraph>
+        <Paragraph>
+          Indexing and analysis run automatically when a review starts; manual
+          preparation is optional. Permitted users can change Auto Review during
+          preparation, and indexing preserves that saved setting. Preparation
+          progress and errors appear in the repository panel and dashboard guide.
+        </Paragraph>
+        <Paragraph>
+          The first-review milestone completes after successful final publication,
+          not merely after preparation or saving a report. It remains complete if
+          a later rerun fails. Older reviews without a publication receipt do not
+          complete this milestone. Completion confirms the review workflow finished;
+          consult the report for coverage, and check optional notifications separately.
         </Paragraph>
         <div className="mb-4 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
           <h4 className="mb-3 text-sm font-medium text-white">

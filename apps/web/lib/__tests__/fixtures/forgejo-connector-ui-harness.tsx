@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 mock.module("next/navigation", () => ({ useRouter: () => ({ refresh() {} }) }));
 mock.module("@/app/(app)/settings/integrations/actions", () => ({
   connectForgejo() {}, createForgejoConnector() {}, disconnectForgejo() {}, rotateForgejoConnector() {}, resumeForgejoConnector() {}, syncForgejo() {},
+  retryIntegrationSetup() {},
+  getIntegrationWebhookDetails() {},
 }));
 const { ForgejoIntegrationCard } = await import("@/app/(app)/settings/integrations/forgejo-integration-card");
 const render = (selfHosted: boolean, data: Parameters<typeof ForgejoIntegrationCard>[0]["data"] = null) =>
