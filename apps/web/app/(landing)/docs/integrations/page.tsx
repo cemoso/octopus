@@ -54,6 +54,15 @@ export default function IntegrationsPage() {
         </p>
       </div>
 
+      <section id="setup-checks" className="mb-10 scroll-mt-24">
+        <h2 className="mb-3 text-xl font-semibold text-white">Setup checks and recovery</h2>
+        <P>Settings → Integrations shows authorization, repository sync and webhook configuration separately. Not checked means there is no setup evidence yet. A configured webhook does not prove that a PR event has reached Octopus; follow the <a href="/docs/getting-started" className="text-cyan-400 underline">first-review guide</a> to confirm the review completes. Forgejo webhooks remain manually configured and unconfirmed until a successful review.</P>
+        <P>An organization owner or admin can use Retry setup or Check setup for the affected provider. The check preserves credentials and checks existing repositories as well as newly discovered ones. GitLab uses project webhooks; Bitbucket uses a workspace webhook.</P>
+        <P>If an existing GitLab or Bitbucket webhook has ambiguous ownership, Octopus leaves it unchanged and does not create a duplicate. Open Repair an existing webhook in the integration card only after identifying it from your saved hook ID or team records. A matching callback URL alone is not proof of ownership. Leave unclear hooks untouched and ask the person who configured them.</P>
+        <P>For a confirmed hook, use the current connection secret and exact callback URL shown in the repair details, plus the description for Bitbucket. Follow the event and TLS instructions there, save the provider settings, then run the setup check again. After disconnecting and reconnecting, reload the details and save the current secret and connection marker together; an old hook does not establish readiness for a new connection.</P>
+        <P>Reauthorizing the same GitLab host and namespace or Bitbucket workspace preserves its signing secret. To replace that binding, an owner or admin must explicitly disconnect and reconnect; the new connection has a distinct signing secret. Disconnecting leaves remote hooks in place. Remove obsolete hooks you own in the provider settings, or repair them for the new connection using the steps above.</P>
+      </section>
+
       {/* GitHub */}
       <IntegrationSection
         icon={<IconBrandGithub className="size-5" />}
@@ -132,7 +141,7 @@ export default function IntegrationsPage() {
         description="Connect your Bitbucket workspace for automated PR reviews with OAuth-based authentication."
         setup={[
           "Connect Bitbucket from the settings page via OAuth",
-          "Webhooks are created automatically for selected repositories",
+          "Octopus checks or creates the workspace webhook during repository sync; see setup checks above for recovery",
           "Reviews are posted as PR comments with inline code feedback",
         ]}
       >
