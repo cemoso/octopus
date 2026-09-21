@@ -113,6 +113,8 @@ model Organization {
   avatarUrl            String?
   // Signed webhook tenant authority; one GitHub installation maps to one org.
   githubInstallationId Int?     @unique
+  // Last observed repository sync; null means setup has not been checked.
+  githubSetupStatus Json?
   needsPermissionGrant Boolean  @default(false)
   openaiApiKey         String?
   anthropicApiKey      String?
@@ -304,6 +306,8 @@ model Repository {
   isActive      Boolean  @default(true)
   autoReview    Boolean  @default(true)
   installationId Int?
+  // GitLab project-hook setup evidence, separate from OAuth and delivery.
+  webhookSetupStatus Json?
   indexStatus    String   @default("pending") // pending | indexing | indexed | failed
   indexedAt      DateTime?
   indexedFiles   Int      @default(0)
@@ -412,6 +416,8 @@ model PullRequest {
   reviewBody         String?
   reviewCoverage     Json?
   errorMessage       String?
+  // First successfully published review; preserved when later requests run or fail.
+  firstReviewCompletedAt DateTime?
   mergedAt           DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -648,6 +654,7 @@ model BitbucketIntegration {
   scopes         String?
   webhookUuid    String?
   webhookSecret  String?
+  setupStatus    Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -674,6 +681,7 @@ model GitlabIntegration {
   tokenExpiresAt DateTime
   scopes         String?
   webhookSecret  String?
+  setupStatus    Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -693,6 +701,7 @@ model ForgejoIntegration {
   connectorLastSeenAt DateTime?
   connectorError String?
   webhookSecret String
+  setupStatus Json?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

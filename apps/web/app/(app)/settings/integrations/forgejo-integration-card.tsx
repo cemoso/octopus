@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { connectForgejo, createForgejoConnector, disconnectForgejo, rotateForgejoConnector, resumeForgejoConnector, syncForgejo } from "./actions";
+import { IntegrationSetupPanel } from "./integration-setup-panel";
+import type { IntegrationSetupStatus } from "@/lib/integration-setup";
 
 type ForgejoData = {
   id: string;
@@ -18,6 +20,7 @@ type ForgejoData = {
   connectionMode: "direct" | "connector";
   connectorLastSeenAt: string | null;
   connectorError: string | null;
+  setupStatus?: IntegrationSetupStatus;
 } | null;
 type ActionResult = { error?: string; synced?: number; connectorToken?: string };
 
@@ -45,9 +48,9 @@ export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: 
     const timer = setInterval(() => { setNow(Date.now()); router.refresh(); }, 10_000);
     return () => clearInterval(timer);
   }, [connector, router]);
-  const online = !!data?.connectorLastSeenAt && now - Date.parse(data.connectorLastSeenAt) < 30_000;
+  const online = !!data?.connectorLastSeenAt && now - Date.parse(data.connectorLastSeenAt) < 90_000;
   const ready = !!data && (!connector || (online && !!data.username && !data.connectorError));
-  const status = !connector ? "Connected" : data?.connectorError ? "Paused" : online ? "Connector online" : data?.username ? "Connector offline" : "Waiting for connector";
+  const status = !connector ? "Access authorized" : data?.connectorError ? "Paused" : online ? "Connector online" : data?.username ? "Connector offline" : "Waiting for connector";
   const webhookUrl = data && origin ? `${origin.replace(/\/$/, "")}/api/forgejo/webhook/${data.id}` : "";
 
   function run(action: () => Promise<ActionResult>, success: string, onSuccess?: () => void) {
@@ -61,7 +64,7 @@ export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: 
         else {
           onSuccess?.();
           if (result.connectorToken) setConnectorToken(result.connectorToken);
-          setMessage(result.synced !== undefined ? `${result.synced} repositories synced. Configure each repository’s webhook to start automatic reviews.` : success);
+          setMessage(result.synced !== undefined ? `${result.synced} repositories synced. Configure each repository’s webhook and enable Auto Review, then open or update a non-draft pull request. Repository preparation happens automatically.` : success);
         }
         router.refresh(); setNow(Date.now());
       } catch { setError("The request failed. Refresh the connection status before retrying."); }
@@ -87,6 +90,7 @@ export function ForgejoIntegrationCard({ data, canManage, selfHosted, appUrl }: 
         </p>
         <a className="text-primary text-sm underline underline-offset-4" href="/docs/integrations#forgejo">Compare the three Forgejo connection options</a>
         {data && <p className="break-all text-sm">{data.username ? `${data.username} · ` : ""}{data.forgejoHost} · {connector ? "Local connector" : "Direct HTTPS"}</p>}
+        {data && <IntegrationSetupPanel provider="forgejo" setupStatus={data.setupStatus} canManage={canManage} showRetry={false} />}
         {!canManage ? <p className="text-muted-foreground text-sm">An organization owner or admin can manage this connection.</p> : (
           <>
             {!data && !selfHosted && <fieldset className="space-y-2" disabled={pending}>

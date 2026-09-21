@@ -3,6 +3,9 @@ import crypto from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getRepositoryConnectionRecovery } from "@/lib/repository-connection-recovery";
+
+mock.module("server-only", () => ({}));
 
 process.env.BETTER_AUTH_URL = "https://app.test";
 process.env.GITHUB_STATE_SECRET =
@@ -16,6 +19,8 @@ let requestCookies = new Map<string, string>();
 let installationAccessible = false;
 let clientCredentialsConfigured = true;
 let existingBinding: { id: string; deletedAt: Date | null } | null = null;
+let repositoryListingFails = false;
+const setupUpdates: Array<Record<string, unknown>> = [];
 
 const TEST_PRIVATE_KEY = crypto
   .generateKeyPairSync("rsa", { modulusLength: 1024 })
@@ -94,6 +99,7 @@ globalThis.fetch = mock((input: string | URL | Request) => {
     return Promise.resolve(Response.json({ token: "installation-token" }));
   }
   if (url.startsWith("https://api.github.com/installation/repositories?")) {
+    if (repositoryListingFails) return Promise.resolve(new Response("fixture provider error", { status: 500 }));
     return Promise.resolve(Response.json({ repositories: [] }));
   }
   throw new Error(`Unexpected GitHub request in test: ${url}`);
@@ -105,12 +111,14 @@ mock.module("@octopus/db", () => ({
       findFirst: () => Promise.resolve({ organizationId: "org_victim" }),
     },
     organization: {
-      findUnique: () => Promise.resolve(existingBinding),
+      findUnique: ({ where }: { where: { githubInstallationId?: number } }) => Promise.resolve(where.githubInstallationId ? existingBinding : { githubInstallationId: boundInstallationId }),
       update: organizationUpdate,
+      updateMany: async ({ data }: { data: Record<string, unknown> }) => { setupUpdates.push(data); return { count: 1 }; },
     },
     repository: {
       findMany: () => Promise.resolve([]),
       upsert: () => Promise.resolve({}),
+      updateMany: () => Promise.resolve({ count: 0 }),
     },
   },
 }));
@@ -148,6 +156,8 @@ beforeEach(() => {
   installationAccessible = false;
   clientCredentialsConfigured = true;
   existingBinding = null;
+  repositoryListingFails = false;
+  setupUpdates.length = 0;
   redisSet.mockClear();
   organizationUpdate.mockClear();
   writeAuditLog.mockClear();
@@ -253,6 +263,20 @@ describe("GitHub installation callback authorization", () => {
     expect(location.pathname).toBe("/settings/integrations");
     expect(location.searchParams.get("error")).toBeNull();
     expect(boundInstallationId).toBe(424242);
+    expect(setupUpdates.at(-1)).toMatchObject({ githubSetupStatus: { sync: { status: "ready" }, webhook: { status: "unknown" } } });
+  });
+
+  it("retains verified authorization but exposes failed repository setup", async () => {
+    const nonce = "setup-failure-nonce";
+    const state = signInstallationVerificationState({ uid: "user_victim", oid: "org_victim", rt: "/settings/integrations", nonce, installationId: 424242 });
+    requestCookies.set(GITHUB_INSTALL_STATE_COOKIE, nonce);
+    installationAccessible = true;
+    repositoryListingFails = true;
+    const response = await GET(callbackRequest({ state, code: "one-time-code" }));
+    const location = new URL(response.headers.get("location")!);
+    expect(boundInstallationId).toBe(424242);
+    expect(location.searchParams.get("setup")).toBe("attention");
+    expect(setupUpdates.at(-1)).toMatchObject({ githubSetupStatus: { sync: { status: "failed" }, webhook: { status: "unknown" } } });
   });
 
   it("clears the state nonce cookie on its own path after completion", async () => {
@@ -502,12 +526,14 @@ describe("GitHub installation UI entry points", () => {
   });
 
   it("routes web and CLI recovery links through the signed install-start endpoint", () => {
-    expect(repoTableSource).toContain(
-      'href={`/api/github/install?orgId=${encodeURIComponent(orgId)}&returnTo=${encodeURIComponent("/dashboard")}`}',
-    );
-    expect(indexingLogsSource).toContain(
-      "href={`/api/github/install?orgId=${encodeURIComponent(orgId)}&returnTo=${encodeURIComponent(`/repositories?repo=${repoId}`)}`}",
-    );
+    for (const returnTo of ["/dashboard", "/repositories?repo=repo_fixture"]) {
+      const recovery = getRepositoryConnectionRecovery("github", "org_fixture", returnTo);
+      const url = new URL(recovery.href, "https://app.test");
+      expect(url.origin).toBe("https://app.test");
+      expect(url.pathname).toBe("/api/github/install");
+      expect(url.searchParams.get("orgId")).toBe("org_fixture");
+      expect(url.searchParams.get("returnTo")).toBe(returnTo);
+    }
     expect(cliRepoStepSource).toContain(
       "`${creds.baseUrl}/api/github/install?orgId=${encodeURIComponent(creds.orgId)}&returnTo=${encodeURIComponent(\"/repositories\")}`",
     );

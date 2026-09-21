@@ -296,12 +296,11 @@ docker run -d --name octopus-forgejo-connector \
               <p>The webhook goes directly from Forgejo to Octopus Cloud. <a href="#forgejo-webhooks" className="text-cyan-400 underline underline-offset-4">Webhook and review-event details</a>.</p>
             </ForgejoSetupStep>
 
-            <ForgejoSetupStep number={7} location="In Octopus Cloud" title="Prepare your repository and enable reviews">
+            <ForgejoSetupStep number={7} location="In Octopus Cloud" title="Confirm readiness and open your first PR">
               <ol className="list-outside list-decimal space-y-3 pl-5">
                 <li>Open <a href="/repositories" className="text-cyan-400 underline underline-offset-4">Repositories</a> and click your Forgejo repository.</li>
-                <li>Indexing may start automatically after sync. If it has not started, click <strong className="text-white">Create Index</strong>. Wait for indexing to finish.</li>
-                <li>Click <strong className="text-white">Run Analysis</strong> and wait for it to complete.</li>
-                <li>Confirm <strong className="text-white">Auto Review</strong> is on in the same repository panel; enable it if needed. The switch is unavailable until indexing and analysis finish.</li>
+                <li>Confirm <strong className="text-white">Auto Review</strong> is on in the repository panel; enable it if needed. You can change this setting while preparation is running.</li>
+                <li>Octopus indexes and analyzes automatically when a review starts. You can open a PR without clicking Index now or Run Analysis. Preparation progress appears in the repository panel and the <a href="/dashboard" className="text-cyan-400 underline underline-offset-4">first-review guide</a>.</li>
               </ol>
               <div className="rounded-lg border border-cyan-400/20 bg-cyan-400/[0.04] p-4">
                 <p className="font-medium text-white">Try your first review</p>
@@ -333,7 +332,7 @@ docker run -d --name octopus-forgejo-connector \
             <li>Follow the <a href="/docs/self-hosting#forgejo" className="text-cyan-400 underline">self-hosted network, DNS and certificate setup</a> on both web and review workers.</li>
             <li>In your Octopus Settings → Integrations → Forgejo, enter the private HTTPS origin and personal access token, then click <strong className="text-[#ccc]">Connect Forgejo</strong> to connect and sync repositories.</li>
             <li>Add signed webhooks targeting your own Octopus deployment. If the target is private, allow its exact host in Forgejo&apos;s <code>[webhook] ALLOWED_HOST_LIST</code>, keeping existing entries.</li>
-            <li>In your own Octopus deployment, open Repositories and select the repository. Wait for indexing, or click Create Index if it has not started. Then click Run Analysis and confirm Auto Review is on once analysis completes.</li>
+            <li>In your own Octopus deployment, open Repositories, select the repository and confirm Auto Review is on. Open a non-draft PR; indexing and analysis run automatically. Follow Review Logs until the first review completes.</li>
           </ol>
           <P>Your Octopus deployment and configured AI services determine where reviews are processed. Use local AI services when processing must stay on your network.</P>
         </section>

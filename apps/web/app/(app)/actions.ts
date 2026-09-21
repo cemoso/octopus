@@ -565,17 +565,18 @@ export async function syncRepos(): Promise<{ synced: number; removed: number; er
 
   try {
     const result = await syncOrgRepos(orgId, { source: "manual" });
+    revalidatePath("/");
     if (result.error) return { synced: result.synced, removed: result.removed, error: result.error };
     if (result.providers.length === 0) {
       return { synced: 0, removed: 0, error: "No GitHub, Bitbucket, GitLab, or Forgejo integration linked." };
     }
-    revalidatePath("/");
     return { synced: result.synced, removed: result.removed };
   } catch (err) {
     if (err instanceof GithubRateLimitError) {
       return { synced: 0, removed: 0, error: "GitHub rate limit reached. Try again in a few minutes." };
     }
-    throw err;
+    console.error("[sync-repos] Sync failed:", err);
+    return { synced: 0, removed: 0, error: "Could not sync repositories. Try again or check Settings → Integrations." };
   }
 }
 
@@ -590,6 +591,8 @@ export async function indexRepository(repoId: string): Promise<{ error?: string 
       id: true,
       fullName: true,
       provider: true,
+      isActive: true,
+      dismissedAt: true,
       defaultBranch: true,
       installationId: true,
       indexStatus: true,
@@ -601,24 +604,47 @@ export async function indexRepository(repoId: string): Promise<{ error?: string 
           githubInstallationId: true,
           members: {
             where: { userId: user.id, deletedAt: null },
-            select: { id: true },
+            select: { role: true, scopes: true },
           },
         },
       },
     },
   });
 
-  if (!repo || repo.organization.members.length === 0) return {};
+  if (!repo || repo.organization.members.length === 0) return { error: "Repository not found." };
+  if (!hasOrgPermission(repo.organization.members[0], "repos:manage")) {
+    return { error: "Only organization owners and admins can start indexing." };
+  }
+  if (!repo.isActive || repo.dismissedAt) {
+    return { error: "This repository is disconnected or removed. Reconnect or restore it before indexing." };
+  }
 
   const installationId = repo.installationId ?? repo.organization.githubInstallationId;
   // GitHub repos need installationId; Bitbucket repos use OAuth tokens
-  if (repo.provider === "github" && !installationId) return {};
+  if (repo.provider === "github" && !installationId) {
+    return { error: "GitHub is disconnected. Reconnect it in Settings → Integrations before indexing." };
+  }
   if (repo.provider === "bitbucket") {
     const bbIntegration = await prisma.bitbucketIntegration.findUnique({
       where: { organizationId: repo.organizationId },
       select: { id: true },
     });
-    if (!bbIntegration) return {};
+    if (!bbIntegration) return { error: "Bitbucket is disconnected. Reconnect it in Settings → Integrations before indexing." };
+  }
+  if (repo.provider === "gitlab") {
+    const integration = await prisma.gitlabIntegration.findUnique({
+      where: { organizationId: repo.organizationId }, select: { id: true },
+    });
+    if (!integration) return { error: "GitLab is disconnected. Reconnect it in Settings → Integrations before indexing." };
+  }
+  if (repo.provider === "forgejo") {
+    const integration = await prisma.forgejoIntegration.findUnique({
+      where: { organizationId: repo.organizationId }, select: { id: true, username: true, connectorError: true },
+    });
+    if (!integration) return { error: "Forgejo is disconnected. Reconnect it in Settings → Integrations before indexing." };
+    if (!integration.username || integration.connectorError) {
+      return { error: "The Forgejo connection is not ready. Check its connector status in Settings → Integrations before indexing." };
+    }
   }
 
   // If stuck in "indexing" for more than 10 minutes, reset to allow re-trigger
@@ -709,14 +735,17 @@ export async function cancelIndexing(repoId: string): Promise<{ error?: string }
         select: {
           members: {
             where: { userId: user.id, deletedAt: null },
-            select: { id: true },
+            select: { role: true, scopes: true },
           },
         },
       },
     },
   });
 
-  if (!repo || repo.organization.members.length === 0) return {};
+  if (!repo || repo.organization.members.length === 0) return { error: "Repository not found." };
+  if (!hasOrgPermission(repo.organization.members[0], "repos:manage")) {
+    return { error: "Only organization owners and admins can cancel indexing." };
+  }
 
   if (repo.indexStatus !== "indexing") {
     return { error: "Repository is not currently indexing." };

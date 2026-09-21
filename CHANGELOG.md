@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-09-20
+
+### Improved
+- The dashboard now guides one repository from connection and readiness through opening a pull request to its first completed review. Automatic indexing and analysis appear as preparation progress; manual preparation is optional.
+- Integration cards distinguish authorized access, repository sync and webhook setup, with provider-specific checks and repair instructions.
+
+### Fixed
+- Auto Review displays the saved setting and remains editable during preparation. Indexing no longer turns a disabled setting back on.
+- Failed indexing, cancellation and sync actions keep their error messages visible. Recovery links open the correct Git provider settings.
+- Webhook setup checks existing repositories and preserves organization ownership and signing secrets when retrying setup.
+
+### Upgrade notes
+- Apply the additive integration setup-status and first-review completion migrations before updating review workers and the web application. Existing connections initially show unchecked setup until their next sync. The first-review milestone uses newly confirmed publication; historical reports are not backfilled. Refresh indexed help content after deployment.
+
 ## [1.2.3] - 2026-09-20
 
 ### Added

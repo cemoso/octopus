@@ -20,12 +20,14 @@ const needsIndex = {
   ],
 };
 
-export async function enqueuePendingRepositoryIndexes(organizationId: string, repositoryId?: string) {
+export async function enqueuePendingRepositoryIndexes(organizationId: string, repositoryId?: string, providers?: string[]) {
+  const eligibleProviders = ["github", "forgejo"].filter(provider => !providers || providers.includes(provider));
+  if (!eligibleProviders.length) return;
   const repos = await prisma.repository.findMany({
     where: {
       organizationId,
       ...(repositoryId ? { id: repositoryId } : {}),
-      provider: { in: ["github", "forgejo"] },
+      provider: { in: eligibleProviders },
       isActive: true,
       dismissedAt: null,
       organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },

@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { getPubbyClient } from "@/lib/pubby-client";
+import { getRepositoryConnectionRecovery } from "@/lib/repository-connection-recovery";
 import {
   IconCircleCheck,
   IconCircleX,
@@ -96,38 +97,47 @@ export function IndexingLogs({
   repoId,
   orgId,
   initialStatus,
+  provider,
 }: {
   repoId: string;
   orgId: string;
   initialStatus: string;
+  provider: string;
 }) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState(initialStatus);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const fetchedRef = useRef(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
 
-  // Fetch existing logs from Elasticsearch on mount
+  // A retry starts a new log stream. Reconcile saved logs on every status
+  // transition as well, so finishing before the subscription mounts is safe.
   useEffect(() => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
-
-    fetch(`/api/sync-logs?orgId=${orgId}&repoId=${repoId}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.logs && data.logs.length > 0) {
-          setLogs(data.logs.map((l: LogEntry) => ({
-            message: l.message,
-            level: l.level,
-            timestamp: l.timestamp,
-          })));
-        }
+    const controller = new AbortController();
+    setStatus(initialStatus);
+    setFetchError(null);
+    if (initialStatus === "indexing") setLogs([]);
+    fetch(`/api/sync-logs?orgId=${encodeURIComponent(orgId)}&repoId=${encodeURIComponent(repoId)}`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error("Unable to load indexing logs");
+        return res.json();
       })
-      .catch(() => {});
-  }, [orgId, repoId]);
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(data.logs)) throw new Error("Invalid indexing logs response");
+        setLogs((current) => {
+          const entries = new Map<number, LogEntry>();
+          for (const log of [...data.logs as LogEntry[], ...current]) entries.set(log.timestamp, log);
+          return [...entries.values()].sort((a, b) => a.timestamp - b.timestamp);
+        });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFetchError("Could not load indexing logs. You can retry loading them without restarting indexing.");
+      });
+    return () => controller.abort();
+  }, [orgId, repoId, initialStatus, reload]);
 
   useEffect(() => {
-    if (status !== "indexing") return;
-
     const pubby = getPubbyClient();
     const channel = pubby.subscribe(`presence-org-${orgId}`);
 
@@ -154,7 +164,7 @@ export function IndexingLogs({
       channel.unbind("index-log", handleLog);
       channel.unbind("index-status", handleStatus);
     };
-  }, [repoId, orgId, status]);
+  }, [repoId, orgId]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -162,17 +172,9 @@ export function IndexingLogs({
     }
   }, [logs]);
 
-  if (status !== "indexing" && logs.length === 0) return null;
-
-  const isComplete = status === "indexed" || status === "failed";
+  const isComplete = status !== "indexing";
   const displayLogs = mergeProgressLogs(logs);
-  const needsInstall =
-    status === "failed" &&
-    logs.some(
-      (log) =>
-        log.message.toLowerCase().includes("access") ||
-        log.message.toLowerCase().includes("not found"),
-    );
+  const recovery = getRepositoryConnectionRecovery(provider, orgId, `/repositories?repo=${repoId}`);
 
   // Find the index of the last info log to determine which one should spin
   let lastInfoIndex = -1;
@@ -208,6 +210,12 @@ export function IndexingLogs({
         ref={scrollRef}
         className="max-h-72 overflow-y-auto p-3 font-mono text-xs leading-relaxed"
       >
+        {fetchError && (
+          <div role="alert" className="mb-3 text-amber-300">
+            <p>{fetchError}</p>
+            <button type="button" className="mt-1 underline underline-offset-2" onClick={() => setReload((value) => value + 1)}>Retry loading logs</button>
+          </div>
+        )}
         {logs.length === 0 && status === "indexing" && (
           <div className="flex items-center gap-2 text-zinc-500">
             <IconLoader2 className="size-3.5 animate-spin" />
@@ -242,16 +250,16 @@ export function IndexingLogs({
           );
         })}
 
-        {needsInstall && (
+        {status === "failed" && (
           <div className="mt-3 border-t border-zinc-800 pt-3">
             <a
-              href={`/api/github/install?orgId=${encodeURIComponent(orgId)}&returnTo=${encodeURIComponent(`/repositories?repo=${repoId}`)}`}
+              href={recovery.href}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700"
             >
               <IconExternalLink className="size-3" />
-              Grant Access on GitHub
+              {recovery.label}
             </a>
           </div>
         )}

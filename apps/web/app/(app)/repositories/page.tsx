@@ -7,6 +7,7 @@ import { prisma } from "@octopus/db";
 import { HARDCODED_REVIEW_MODEL, HARDCODED_EMBED_MODEL } from "@/lib/ai-client";
 import { RepositoriesContent } from "./repositories-content";
 import { WELCOME_DEFERRED_REASON } from "@/lib/org-create";
+import { hasOrgPermission } from "@/lib/org-permissions";
 
 const PAGE_SIZE = 50;
 /** Repositories created in the last week are badged "New" (auto-discovery or first sync). */
@@ -33,6 +34,8 @@ export default async function RepositoriesPage({
       deletedAt: null,
     },
     select: {
+      role: true,
+      scopes: true,
       organization: {
         select: { id: true, defaultModelId: true, defaultEmbedModelId: true },
       },
@@ -248,6 +251,8 @@ export default async function RepositoriesPage({
 
   return (
     <RepositoriesContent
+      canManageRepos={hasOrgPermission(member, "repos:manage")}
+      canConfigureReviews={hasOrgPermission(member, "reviews:configure")}
       repos={mappedRepos}
       orgId={orgId}
       selectedRepoId={selectedRepoId ?? null}

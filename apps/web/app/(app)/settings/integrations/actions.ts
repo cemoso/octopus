@@ -37,6 +37,66 @@ async function getAdminOrg() {
   return { orgId: member.organizationId };
 }
 
+/** Check only the selected provider; authorization is retained if setup fails. */
+export async function retryIntegrationSetup(provider: "github" | "bitbucket" | "gitlab" | "forgejo"): Promise<{ error?: string; synced?: number }> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  if (!["github", "bitbucket", "gitlab", "forgejo"].includes(provider)) {
+    return { error: "Choose a supported code provider." };
+  }
+  try {
+    const where = { organizationId: ctx.orgId };
+    const connected = provider === "github"
+      ? (await prisma.organization.findUnique({ where: { id: ctx.orgId }, select: { githubInstallationId: true } }))?.githubInstallationId
+      : provider === "bitbucket"
+        ? await prisma.bitbucketIntegration.findUnique({ where, select: { id: true } })
+        : provider === "gitlab"
+          ? await prisma.gitlabIntegration.findUnique({ where, select: { id: true } })
+          : await prisma.forgejoIntegration.findUnique({ where, select: { id: true } });
+    if (!connected) return { error: "Connect this provider before checking setup." };
+    const { syncOrgRepos } = await import("@/lib/repo-sync");
+    const result = await syncOrgRepos(ctx.orgId, { source: "manual", providers: [provider] });
+    return { synced: result.synced, ...(result.error ? { error: result.error } : {}) };
+  } catch {
+    return { error: "Setup could not be completed. Check the provider connection and try again. Your authorization has been kept." };
+  } finally {
+    revalidatePath("/settings/integrations");
+    revalidatePath("/repositories");
+    revalidatePath("/dashboard");
+  }
+}
+
+/** Retrieve the existing signing secret only after an administrator asks for it. */
+export async function getIntegrationWebhookDetails(provider: "bitbucket" | "gitlab"): Promise<{
+  error?: string;
+  details?: { url: string; secret: string; description?: string; hookId?: string | null };
+}> {
+  const ctx = await getAdminOrg();
+  if (!ctx) return { error: "Insufficient permissions." };
+  if (provider !== "bitbucket" && provider !== "gitlab") return { error: "Choose Bitbucket or GitLab." };
+  try {
+    const appUrl = process.env.BETTER_AUTH_URL;
+    if (!appUrl) return { error: "The Octopus application URL is not configured. Ask the instance administrator to set BETTER_AUTH_URL before repairing webhooks." };
+    if (provider === "bitbucket") {
+      const integration = await prisma.bitbucketIntegration.findUnique({
+        where: { organizationId: ctx.orgId }, select: { webhookSecret: true, webhookUuid: true },
+      });
+      if (!integration?.webhookSecret) return { error: "No saved Bitbucket webhook secret was found. Reconnect Bitbucket before retrying setup." };
+      return { details: { url: `${appUrl}/api/bitbucket/webhook`, secret: integration.webhookSecret,
+        description: `Octopus Review (${ctx.orgId})`, hookId: integration.webhookUuid } };
+    }
+    const integration = await prisma.gitlabIntegration.findUnique({
+      where: { organizationId: ctx.orgId }, select: { webhookSecret: true },
+    });
+    if (!integration?.webhookSecret) return { error: "No saved GitLab webhook secret was found. Reconnect GitLab before retrying setup." };
+    const url = new URL(`${appUrl}/api/gitlab/webhook`);
+    url.searchParams.set("octopus_org", ctx.orgId);
+    return { details: { url: url.toString(), secret: integration.webhookSecret } };
+  } catch {
+    return { error: "Webhook details could not be loaded. Try again in a moment." };
+  }
+}
+
 // ── Forgejo Actions ──
 
 export async function connectForgejo(formData: FormData): Promise<{ error?: string; synced?: number }> {
@@ -152,7 +212,7 @@ export async function syncForgejo(): Promise<{ error?: string; synced?: number }
     revalidatePath("/settings/integrations");
     revalidatePath("/dashboard");
     revalidatePath("/repositories");
-    return { synced: result.synced };
+    return { synced: result.synced, ...(result.error ? { error: result.error } : {}) };
   } catch {
     revalidatePath("/settings/integrations");
     revalidatePath("/dashboard");

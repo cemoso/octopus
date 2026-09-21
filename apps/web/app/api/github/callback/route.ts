@@ -7,12 +7,10 @@ import { prisma } from "@octopus/db";
 import { auth } from "@/lib/auth";
 import {
   exchangeGithubAppUserCode,
-  listInstallationRepos,
   userCanAccessInstallation,
 } from "@/lib/github";
 import { getGithubAppConfig } from "@/lib/github-app-config";
-import { grantDeferredWelcomeCredit } from "@/lib/org-create";
-import { enqueuePendingRepositoryIndexes } from "@/lib/repository-index-job";
+import { syncOrgRepos } from "@/lib/repo-sync";
 import { getRedis } from "@/lib/redis";
 import { writeAuditLog } from "@/lib/audit";
 import {
@@ -153,58 +151,20 @@ async function bindAndSyncInstallation(
   }
 
   try {
-    const ghRepos = await listInstallationRepos(installationId);
-    const dismissedGh = new Set(
-      (
-        await prisma.repository.findMany({
-          where: {
-            organizationId,
-            provider: "github",
-            dismissedAt: { not: null },
-          },
-          select: { externalId: true },
-        })
-      ).map((repository) => repository.externalId),
-    );
-    for (const repo of ghRepos) {
-      if (dismissedGh.has(String(repo.id))) continue;
-      await prisma.repository.upsert({
-        where: {
-          provider_externalId_organizationId: {
-            provider: "github",
-            externalId: String(repo.id),
-            organizationId,
-          },
-        },
-        create: {
-          name: repo.name,
-          fullName: repo.full_name,
-          externalId: String(repo.id),
-          defaultBranch: repo.default_branch,
-          provider: "github",
-          installationId,
-          organizationId,
-        },
-        update: {
-          name: repo.name,
-          fullName: repo.full_name,
-          defaultBranch: repo.default_branch,
-          installationId,
-          isActive: true,
-          organizationId,
-        },
-      });
-    }
-    // First repo connect releases a deferred welcome grant (no-op otherwise).
-    if (ghRepos.length > 0) {
-      await grantDeferredWelcomeCredit(organizationId);
-      await enqueuePendingRepositoryIndexes(organizationId);
-    }
-  } catch (error) {
-    console.error("[github/callback] repo sync error:", error);
+    // The callback lists only the newly verified org binding, never legacy repo installations.
+    const result = await syncOrgRepos(organizationId, { source: "webhook", providers: ["github"] });
+    return { ok: true as const, setupError: result.error ?? null };
+  } catch {
+    const message = "GitHub access was authorized, but repository setup did not finish. Retry setup in Settings → Integrations.";
+    await prisma.organization.updateMany({ where: { id: organizationId, githubInstallationId: installationId }, data: {
+      githubSetupStatus: {
+        sync: { status: "failed", checkedAt: new Date().toISOString(), error: message },
+        webhook: { status: "unknown", checkedAt: null, error: null },
+      },
+    } });
+    return { ok: true as const, setupError: message };
   }
 
-  return { ok: true as const };
 }
 
 async function beginVerification(request: NextRequest, stateParam: string) {
@@ -356,9 +316,9 @@ async function finishVerification(request: NextRequest, stateParam: string) {
 
   revalidatePath("/", "layout");
   revalidatePath("/");
-  const response = NextResponse.redirect(
-    new URL(safeReturnPath(verified.payload.rt), baseUrl),
-  );
+  const returnUrl = new URL(safeReturnPath(verified.payload.rt), baseUrl);
+  if (binding.setupError) returnUrl.searchParams.set("setup", "attention");
+  const response = NextResponse.redirect(returnUrl);
   response.cookies.delete({
     name: GITHUB_INSTALL_STATE_COOKIE,
     path: "/api/github/callback",

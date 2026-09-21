@@ -1,11 +1,12 @@
+import "server-only";
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { headers, cookies } from "next/headers";
 import { prisma } from "@octopus/db";
 import { hasOrgPermission } from "@/lib/org-permissions";
 import { auth } from "@/lib/auth";
-import { listNamespaceProjects, createProjectWebhook } from "@/lib/gitlab";
-import { grantDeferredWelcomeCredit } from "@/lib/org-create";
+import { syncOrgRepos } from "@/lib/repo-sync";
+import { parseIntegrationSetupStatus } from "@/lib/integration-setup";
 import { decryptJson, encryptString } from "@/lib/crypto";
 
 const GITLAB_OAUTH_INIT_COOKIE = "gitlab_oauth_init";
@@ -171,11 +172,9 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const webhookSecret = crypto.randomBytes(32).toString("hex");
-  const debugLog: string[] = [];
-  debugLog.push(`host: ${gitlabHost}`);
-  debugLog.push(`namespace: ${namespacePath} (${namespaceName})`);
-  if (clientSecret) debugLog.push("oauth: per-org credentials");
+  // Keep existing project hooks valid when refreshing authorization.
+  const existing = await prisma.gitlabIntegration.findUnique({ where: { organizationId: orgId }, select: { webhookSecret: true } });
+  const webhookSecret = existing?.webhookSecret || crypto.randomBytes(32).toString("hex");
 
   // Persist OAuth creds (encrypted) only for self-hosted (non-env) flow,
   // so refresh can use them later.
@@ -210,81 +209,19 @@ export async function GET(request: NextRequest) {
       tokenExpiresAt,
       scopes,
       webhookSecret,
+      setupStatus: parseIntegrationSetupStatus(null),
     },
   });
-  debugLog.push("integration upserted OK");
 
-  const appUrl = process.env.BETTER_AUTH_URL || "http://localhost:3000";
-  const callbackUrl = `${appUrl}/api/gitlab/webhook`;
-  debugLog.push(`webhook target: ${callbackUrl}`);
-
-  let projectCount = 0;
-  let hookCount = 0;
+  let setupFailed = false;
   try {
-    const projects = await listNamespaceProjects(orgId, namespacePath);
-    projectCount = projects.length;
-    const dismissedGl = new Set(
-      (
-        await prisma.repository.findMany({
-          where: { organizationId: orgId, provider: "gitlab", dismissedAt: { not: null } },
-          select: { externalId: true },
-        })
-      ).map((r) => r.externalId),
-    );
-    for (const project of projects) {
-      if (dismissedGl.has(String(project.id))) continue;
-      await prisma.repository.upsert({
-        where: {
-          provider_externalId_organizationId: {
-            provider: "gitlab",
-            externalId: String(project.id),
-            organizationId: orgId,
-          },
-        },
-        create: {
-          name: project.name,
-          fullName: project.path_with_namespace,
-          externalId: String(project.id),
-          defaultBranch: project.default_branch ?? "main",
-          provider: "gitlab",
-          isActive: true,
-          organizationId: orgId,
-        },
-        update: {
-          name: project.name,
-          fullName: project.path_with_namespace,
-          defaultBranch: project.default_branch ?? "main",
-          isActive: true,
-        },
-      });
-
-      try {
-        const hookId = await createProjectWebhook(
-          orgId,
-          project.path_with_namespace,
-          callbackUrl,
-          webhookSecret,
-        );
-        if (hookId) hookCount += 1;
-      } catch (err) {
-        console.warn(`[gitlab-callback] Hook creation failed for ${project.path_with_namespace}:`, err);
-      }
-    }
-    // First repo connect releases a deferred welcome grant (no-op otherwise).
-    if (projects.length > 0) {
-      await grantDeferredWelcomeCredit(orgId);
-    }
-    debugLog.push(`projects synced: ${projectCount}`);
-    debugLog.push(`hooks created: ${hookCount}`);
-    console.log(`[gitlab-callback] Synced ${projectCount} projects, ${hookCount} hooks for ${namespacePath}`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    debugLog.push(`project sync FAILED: ${msg}`);
-    console.error("[gitlab-callback] Project sync failed:", err);
+    const result = await syncOrgRepos(orgId, { source: "manual", providers: ["gitlab"] });
+    setupFailed = Boolean(result.error);
+  } catch {
+    setupFailed = true;
   }
-
-  const debugParam = encodeURIComponent(JSON.stringify(debugLog));
-  return NextResponse.redirect(
-    new URL(`/settings/integrations?success=gitlab&gl_debug=${debugParam}`, baseUrl),
-  );
+  return NextResponse.redirect(new URL(
+    `/settings/integrations?authorized=gitlab${setupFailed ? "&setup=attention" : ""}`,
+    baseUrl,
+  ));
 }

@@ -2,7 +2,7 @@ import "server-only";
 import { isReviewRequestVersion } from "@/lib/review-status-state";
 import { randomUUID } from "node:crypto";
 import { deliverReviewAttempt } from "@/lib/review-attempt-delivery";
-import { saveReviewAttempt, updateCurrentReview, hasReviewAttempt } from "@/lib/review-attempt";
+import { saveReviewAttempt, updateCurrentReview, hasReviewAttempt, recordFirstReviewCompletion } from "@/lib/review-attempt";
 import { publishReviewSummary } from "@/lib/review-summary-comment";
 import { unknownReviewCoverage, applyReviewCoverage, coverageSummary, reviewCheckResult } from "@/lib/review-coverage";
 import { prisma, type Prisma } from "@octopus/db";
@@ -240,6 +240,7 @@ export async function handleLargeReviewResult(
     }
     if (!await stillCurrent()) return;
     // 7. Pubby + event bus
+    await recordFirstReviewCompletion(pr.id, coverage.headSha, coverage.reviewRequestVersion, reviewBody);
     await pubby
       .trigger(`presence-org-${org.id}`, "review-status", {
         repoId: repo.id,

@@ -26,9 +26,12 @@ import {
 import { IconBrandGithub } from "@tabler/icons-react";
 import { disconnectGitHub } from "./actions";
 import { trackEvent } from "@/lib/analytics";
+import { IntegrationSetupPanel } from "./integration-setup-panel";
+import type { IntegrationSetupStatus } from "@/lib/integration-setup";
 
 type GitHubData = {
   repoCount: number;
+  setupStatus?: IntegrationSetupStatus;
 } | null;
 
 type GitHubError = GitHubInstallErrorCode | null;
@@ -40,11 +43,13 @@ export function GitHubIntegrationCard({
   appSlug,
   isSelfHosted = false,
   error,
+  canManage = false,
 }: {
   data: GitHubData;
   appSlug: string | null;
   isSelfHosted?: boolean;
   error?: GitHubError;
+  canManage?: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const router = useRouter();
@@ -96,7 +101,7 @@ export function GitHubIntegrationCard({
     return (
       <>
         {errorDialog}
-        <Card>
+        <Card id="github" className="min-w-0 scroll-mt-6">
           <CardHeader>
             <div className="flex items-center gap-3">
               <div className="flex size-10 items-center justify-center">
@@ -111,7 +116,7 @@ export function GitHubIntegrationCard({
             </div>
           </CardHeader>
           <CardContent>
-            {appSlug ? (
+            {!canManage ? <p className="text-muted-foreground text-sm">An organization owner or admin can connect GitHub.</p> : appSlug ? (
               <Button asChild>
                 <a
                   href={INSTALL_URL}
@@ -187,9 +192,9 @@ export function GitHubIntegrationCard({
   return (
     <>
       {errorDialog}
-      <Card>
+      <Card id="github" className="min-w-0 scroll-mt-6">
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="flex size-10 items-center justify-center">
                 <IconBrandGithub className="size-6 text-[#24292f] dark:text-white" />
@@ -202,12 +207,13 @@ export function GitHubIntegrationCard({
               </div>
             </div>
             <Badge variant="secondary" className="text-green-700 bg-green-100">
-              Connected
+              Access authorized
             </Badge>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="border-t pt-4 flex items-center gap-2">
+        <CardContent className="space-y-4">
+          <IntegrationSetupPanel provider="github" setupStatus={data.setupStatus} canManage={canManage} />
+          {canManage && <div className="border-t pt-4 flex flex-wrap items-center gap-2">
             {appSlug && (
               <Button size="sm" asChild>
                 <a href={INSTALL_URL}>Manage Repos</a>
@@ -221,7 +227,7 @@ export function GitHubIntegrationCard({
             >
               Disconnect GitHub
             </Button>
-          </div>
+          </div>}
         </CardContent>
       </Card>
       <AlertDialog open={confirmDisconnectOpen} onOpenChange={setConfirmDisconnectOpen}>
