@@ -19,6 +19,10 @@ interface LogEntry {
   timestamp: number;
 }
 
+function logKey(log: LogEntry): string {
+  return JSON.stringify([log.timestamp, log.level, log.message]);
+}
+
 function LogIcon({ level, isActive }: { level: LogEntry["level"]; isActive: boolean }) {
   if (level === "success") {
     return <IconCircleCheck className="size-3.5 shrink-0 text-emerald-400" />;
@@ -126,8 +130,8 @@ export function IndexingLogs({
         if (controller.signal.aborted) return;
         if (!Array.isArray(data.logs)) throw new Error("Invalid indexing logs response");
         setLogs((current) => {
-          const entries = new Map<number, LogEntry>();
-          for (const log of [...data.logs as LogEntry[], ...current]) entries.set(log.timestamp, log);
+          const entries = new Map<string, LogEntry>();
+          for (const log of [...data.logs as LogEntry[], ...current]) entries.set(logKey(log), log);
           return [...entries.values()].sort((a, b) => a.timestamp - b.timestamp);
         });
       })
@@ -145,8 +149,7 @@ export function IndexingLogs({
       const data = raw as { repoId: string; message: string; level: LogEntry["level"]; timestamp: number };
       if (data.repoId !== repoId) return;
       setLogs((prev) => {
-        // Avoid duplicates — skip if we already have a log with the same timestamp
-        if (prev.some((l) => l.timestamp === data.timestamp)) return prev;
+        if (prev.some((l) => logKey(l) === logKey(data))) return prev;
         return [...prev, { message: data.message, level: data.level, timestamp: data.timestamp }];
       });
     };

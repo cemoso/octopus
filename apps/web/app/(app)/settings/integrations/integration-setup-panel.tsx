@@ -113,7 +113,7 @@ function WebhookRecoveryDetails({ provider }: { provider: "bitbucket" | "gitlab"
         <p className="text-muted-foreground">{provider === "bitbucket"
           ? "In the workspace webhook settings, use this URL, description and current connection secret. Enable pull request created, updated and comment-created events, and keep the webhook active."
           : "In each affected project’s webhook settings, use this URL and re-enter the current connection secret token when changing the URL. Enable merge request and comment events, keep SSL verification enabled, and enable the webhook."}</p>
-        <p className="text-muted-foreground">The URL or description identifies this connection generation. After disconnecting and reconnecting, reload these details and save both the current secret and marker together. Save your changes, then select Retry setup above. A successful configuration check still needs a pull request event to confirm delivery.</p>
+        <p className="text-muted-foreground">The URL or description identifies this connection generation. After disconnecting and reconnecting, reload these details and save both the current secret and marker together. Save your changes, then run the setup check above. A successful configuration check still needs a pull request event to confirm delivery.</p>
       </>}
       {feedback?.error && <p role="alert" className="text-destructive">{feedback.error}</p>}
       {feedback?.message && <p role="status" className="text-muted-foreground">{feedback.message}</p>}

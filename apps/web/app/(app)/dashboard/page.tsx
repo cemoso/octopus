@@ -235,9 +235,15 @@ export default async function DashboardPage({
     select: { id: true, number: true, url: true, repositoryId: true },
     orderBy: { firstReviewCompletedAt: "asc" },
   });
+  const oldestRepos = [...repos].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id));
+  const providerConnected = (provider: string) => provider === "github" ? githubConnected
+    : provider === "bitbucket" ? bitbucketConnected
+    : provider === "gitlab" ? gitlabConnected : provider === "forgejo" && forgejoConnected;
   const selectedRepo = repos.find(r => r.id === selectedId)
     ?? repos.find(r => r.id === firstCompletedReview?.repositoryId)
-    ?? [...repos].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())[0] ?? null;
+    ?? oldestRepos.find(r => providerConnected(r.provider) &&
+      (r.provider !== "github" || r.installationId === null || r.installationId === org.githubInstallationId))
+    ?? oldestRepos[0] ?? null;
   const [latestReview, completedReview] = selectedRepo && !onboardingDismissed ? await Promise.all([
     prisma.pullRequest.findFirst({
       where: { repositoryId: selectedRepo.id, repository: { organizationId: org.id } },
@@ -251,9 +257,7 @@ export default async function DashboardPage({
     }),
   ]) : [null, null];
   const selectedProvider = selectedRepo?.provider;
-  const selectedConnected = selectedProvider === "github" ? githubConnected
-    : selectedProvider === "bitbucket" ? bitbucketConnected
-    : selectedProvider === "gitlab" ? gitlabConnected : forgejoConnected;
+  const selectedConnected = selectedRepo ? providerConnected(selectedRepo.provider) : false;
   const setupStatus = selectedProvider === "github" ? org.githubSetupStatus
     : selectedProvider === "bitbucket" ? bitbucketIntegration?.setupStatus
     : selectedProvider === "gitlab" ? gitlabIntegration?.setupStatus : forgejoIntegration?.setupStatus;

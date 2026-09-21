@@ -9,11 +9,13 @@ const repo = (id: string, age: number) => ({
   indexedFiles: 0, totalFiles: 0, totalChunks: 0, totalVectors: 0, indexDurationMs: null,
   summary: null, purpose: null, analysisStatus: "none", autoReview: true, pullRequests: [],
 });
-const repositories = [repo("new", 2000), repo("first", 1000)];
+let repositories = [repo("new", 2000), repo("first", 1000)];
 type Review = { id: string; repositoryId: string; number: number; status: string; url: string; firstReviewCompletedAt: Date | null };
 let reviews: Review[] = [];
 let dismissed = false;
 let installed: number | null = 42;
+let bitbucket: { workspaceName: string; setupStatus: typeof setup } | null = null;
+let forgejo: { username: string; forgejoHost: string; setupStatus: typeof setup } | null = null;
 const calls: Array<{ where: Record<string, unknown> }> = [];
 mock.module("server-only", () => ({}));
 mock.module("next/headers", () => ({ headers: async () => new Headers(), cookies: async () => ({ get: (name: string) =>
@@ -30,8 +32,8 @@ mock.module("@octopus/db", () => ({ prisma: {
     assert.deepEqual(args.where.organization, { deletedAt: null, bannedAt: null });
     return { role: "owner", scopes: [], organization: { id: "org", githubInstallationId: installed, githubSetupStatus: setup, stripeCustomerId: null, repositories } };
   } },
-  bitbucketIntegration: { findUnique: async () => null }, gitlabIntegration: { findUnique: async () => null },
-  forgejoIntegration: { findUnique: async () => null }, linearIntegration: { findUnique: async () => null }, jiraIntegration: { findUnique: async () => null },
+  bitbucketIntegration: { findUnique: async () => bitbucket }, gitlabIntegration: { findUnique: async () => null },
+  forgejoIntegration: { findUnique: async () => forgejo }, linearIntegration: { findUnique: async () => null }, jiraIntegration: { findUnique: async () => null },
   reviewIssue: { findMany: async () => [] },
   pullRequest: { findMany: async () => [], findFirst: async (args: { where: { repository: { organizationId: string }; repositoryId?: string; firstReviewCompletedAt?: { not: null } } }) => {
     calls.push(args);
@@ -79,4 +81,32 @@ assert.ok((await render("first")).includes("Reconnect this repository"));
 dismissed = true;
 assert.ok(!(await render()).includes('aria-label="First review setup"'));
 assert.ok(calls.some(call => call.where.repositoryId === "first" && call.where.firstReviewCompletedAt));
+dismissed = false;
+reviews = [];
+for (const [provider, installation] of [["bitbucket", null], ["bitbucket", 77], ["forgejo", null]] as const) {
+  installed = installation;
+  bitbucket = provider === "bitbucket" ? { workspaceName: "team", setupStatus: setup } : null;
+  forgejo = provider === "forgejo" ? { username: "team", forgejoHost: "https://forge.example", setupStatus: setup } : null;
+  repositories = [repo("old-github", 1000), { ...repo("connected", 2000), provider }];
+  assert.ok((await render()).includes('value="connected" selected=""'), `${provider} must take priority over disconnected or mismatched GitHub`);
+  assert.ok((await render("old-github")).includes('value="old-github" selected=""'), "explicit same-org selection wins");
+  assert.ok((await render("foreign-repo")).includes('value="connected" selected=""'), "invalid selection uses the connected default");
+  reviews = [{ id: "receipt", repositoryId: "old-github", number: 8, status: "failed", url: "https://github.com/team/old-github/pull/8", firstReviewCompletedAt: new Date() }];
+  assert.ok((await render()).includes('value="old-github" selected=""'), "historical completion receipt wins over connection eligibility");
+  assert.ok((await render("connected")).includes('value="connected" selected=""'), "explicit selection wins over historical receipt");
+  reviews = [];
+}
+forgejo = null;
+bitbucket = { workspaceName: "team", setupStatus: setup };
+installed = 42;
+repositories = [repo("new-github", 3000), { ...repo("b-connected", 2000), provider: "bitbucket" }, repo("a-connected", 2000)];
+assert.ok((await render()).includes('value="a-connected" selected=""'), "oldest eligible repository ties are broken by id");
+repositories.reverse();
+assert.ok((await render()).includes('value="a-connected" selected=""'), "query update order does not affect the default");
+installed = null;
+bitbucket = null;
+repositories = [repo("b-old", 1000), repo("newest", 2000), repo("a-old", 1000)];
+assert.ok((await render()).includes('value="a-old" selected=""'), "oldest-any reconnect fallback also has a deterministic tie break");
+repositories = [];
+assert.ok((await render()).includes('aria-label="First review setup"'), "empty organizations retain the connection guide");
 console.log("Dashboard selection, provider readiness, automatic preparation and actual completion evidence passed");

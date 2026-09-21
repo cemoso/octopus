@@ -76,9 +76,14 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("recovers repository controls aft
     await page.getByRole("alert").filter({ hasText: "Fixture sync failed" }).waitFor();
     await page.evaluate(`{
       const f=window.repositoryFixture;f.repo.indexStatus='failed';
-      f.logs=[{message:'Old failed attempt',level:'error',timestamp:1}];f.refresh();
+      f.logs=[{message:'Old failed attempt',level:'error',timestamp:1},
+        {message:'Old failed attempt',level:'error',timestamp:1},
+        {message:'Check repository permissions',level:'info',timestamp:1},
+        {message:'Check repository permissions',level:'warning',timestamp:1}];f.refresh();
     }`);
     await page.getByText("Old failed attempt", { exact: true }).waitFor();
+    expect(await page.getByText("Old failed attempt", { exact: true }).count()).toBe(1);
+    expect(await page.getByText("Check repository permissions", { exact: true }).count()).toBe(2);
     expect(await page.getByRole("link", { name: "Check Bitbucket connection" }).getAttribute("href")).toBe("/settings/integrations#bitbucket");
     await page.evaluate("window.repositoryFixture.indexError=''");
     await page.getByRole("button", { name: "Retry indexing", exact: true }).click();
@@ -92,8 +97,12 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("recovers repository controls aft
     await page.evaluate(`{
       const f=window.repositoryFixture;
       f.emit('index-log',{repoId:f.repo.id,message:'Retry progress received',level:'info',timestamp:2});
+      f.emit('index-log',{repoId:f.repo.id,message:'Retry access denied',level:'error',timestamp:2});
+      f.emit('index-log',{repoId:f.repo.id,message:'Retry access denied',level:'error',timestamp:2});
+      f.emit('index-log',{repoId:f.repo.id,message:'Retry access denied',level:'warning',timestamp:2});
     }`);
     await page.getByText("Retry progress received", { exact: true }).waitFor();
+    expect(await page.getByText("Retry access denied", { exact: true }).count()).toBe(2);
     await page.getByRole("button", { name: "Cancel", exact: true }).first().click();
     await page.getByRole("alert").filter({ hasText: "Fixture cancellation failed" }).waitFor();
     await page.evaluate(`{
@@ -103,11 +112,18 @@ it.skipIf(!process.env.PLAYWRIGHT_MODULE_PATH)("recovers repository controls aft
     await page.getByRole("alert").filter({ hasText: "Could not load indexing logs" }).waitFor();
     await page.evaluate(`{
       const f=window.repositoryFixture;f.logsFail=false;
-      f.logs=[{message:'Recovered logs',level:'error',timestamp:3}];
+      f.logs=[{message:'Recovered logs',level:'error',timestamp:3},
+        {message:'Retry access denied',level:'error',timestamp:2},
+        {message:'Retry access denied',level:'warning',timestamp:2},
+        {message:'Retry progress received',level:'info',timestamp:2},
+        {message:'Reconnect to restore access',level:'info',timestamp:2}];
     }`);
     const callsBeforeLogRetry = await page.evaluate("window.repositoryFixture.indexCalls");
     await page.getByRole("button", { name: "Retry loading logs", exact: true }).click();
     await page.getByText("Recovered logs", { exact: true }).waitFor();
+    expect(await page.getByText("Retry access denied", { exact: true }).count()).toBe(2);
+    expect(await page.getByText("Retry progress received", { exact: true }).count()).toBe(1);
+    expect(await page.getByText("Reconnect to restore access", { exact: true }).count()).toBe(1);
     expect(await page.evaluate("window.repositoryFixture.indexCalls")).toBe(callsBeforeLogRetry);
     expect(await page.getByRole("alert").filter({ hasText: "Could not load indexing logs" }).count()).toBe(0);
     // A background retry does not remount RepoDetail or click its index action.
