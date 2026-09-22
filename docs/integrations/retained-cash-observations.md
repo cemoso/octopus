@@ -4,7 +4,7 @@ This additive inspection feature records what the retained credit ledger and cas
 
 ## Setup expectation
 
-Keep the existing hosted marketing source/key/activation configuration. Additionally supply server-only `UNIFIED_ADS_CASH_EXPECTED_BINDING` as JSON with exact keys:
+Keep the existing [hosted business-event configuration](../unified-ads-conversions.md#configuration-and-activation). Every operation, including `read`, requires enabled delivery configuration and a valid server-only `UNIFIED_ADS_CASH_EXPECTED_BINDING`. Production refuses TEST configuration. Supply the binding as JSON with exact keys:
 
 ```
 {sourceId, environment, keyId, capabilities, project: {projectId, version}}
@@ -14,9 +14,9 @@ Values must come from independently retained owner setup, not comparison output.
 
 ## Operator operations
 
-The existing internal admin authorization protects `POST /api/admin/marketing/cash-observations`. JSON only, no query, bounded 2KiB body, no-store responses. Exact request variants:
+The existing `ADMIN_API_SECRET` bearer authorization protects `POST /api/admin/marketing/cash-observations`. JSON only, no query, bounded 2KiB body, no-store responses. Exact request variants:
 
-- `{"operation":"snapshot","from":"2026-09-20T00:00:00.000Z","to":"2026-09-21T00:00:00.000Z","predecessor":null}`: create one inventory. Interval is half-open and cannot end in the future. A predecessor inventory must have identical binding, activation and interval; the new document references its digest, never rewrites it.
+- `{"operation":"snapshot","from":"2026-09-20T00:00:00.000Z","to":"2026-09-21T00:00:00.000Z","predecessor":null}`: create one inventory. Interval is half-open, requires `from < to`, and cannot end in the future. Both timestamps must use UTC with exactly three fractional digits, as shown. A predecessor inventory must have identical binding, activation and interval; the new document references its digest, never rewrites it.
 - `{"operation":"read","id":"observation UUID"}`: read a source/environment-scoped immutable observation.
 - `{"operation":"compare","id":"inventory UUID"}`: compare declared canonical members, then append comparison evidence linked to that exact inventory digest. It cannot repair an outbox row, ingest/replay an event or change a credit balance.
 
@@ -30,7 +30,7 @@ A genuine eligible in-range refund can require its exact original payment before
 
 ## Results
 
-- A: `not_observed`, `no_declared_members`, `declared_members_matched`, or `incomplete`. Comparison uses batches of at most32 with same-key identity preflight each time, fixed HTTPS destination, no redirects/Origin/Cookie and strict ordered responses/project binding. It retains actual request/response digests and separate receiver intervals. There is no atomic whole-set receiver snapshot.
+- A: `not_observed`, `no_declared_members`, `declared_members_matched`, or `incomplete`. Comparison uses batches of at most 32 with same-key identity preflight each time, fixed HTTPS destination, no redirects/Origin/Cookie and strict ordered responses/project binding. It retains actual request/response digests and separate receiver intervals. There is no atomic whole-set receiver snapshot.
 - B: `complete_retained_scope` only when the bounded retained snapshot has no accounting gaps; otherwise `incomplete`. An all-matched declared set can coexist with incomplete B. It is not a claim of all cash ever collected.
 - C: always `unknown` for upstream completeness.
 
@@ -38,6 +38,6 @@ No customer-zero label, advertising assignment, learning eligibility or model ad
 
 ## Validation and limits
 
-The copied immutable receiver vector packet has SHA-256 `042947da07da8014506e0926c2ef35a129b31f85bbd8e0667bd13a8839c23585`; all21 valid projections and10 rejections are exercised. Isolated PostgreSQL tests run normal capture/dispatch then the real snapshot/persistence path, check successor/immutability, and distinguish all-matched A from missing-capture B. Comparison transport injections are component evidence only. Full new retained-inventory → isolated actual receiver acceptance requires a newly coordinated receiver-owned fixture; prior destroyed protocol fixtures are not reused.
+The immutable [receiver vector packet](../../apps/web/lib/__tests__/fixtures/marketing-cash-vectors.json) owns the frozen normalization examples and source-contract digest; the [normalization tests](../../apps/web/lib/__tests__/marketing-cash-observation.test.ts) exercise every valid projection and rejection. Isolated PostgreSQL tests run normal capture/dispatch then the real snapshot/persistence path, check successor/immutability, and distinguish all-matched A from missing-capture B. Comparison transport injections are component evidence only. Full new retained-inventory → isolated actual receiver acceptance requires a newly coordinated receiver-owned fixture; prior destroyed protocol fixtures are not reused.
 
-Run pure tests with `bun test apps/web/lib/__tests__/marketing-cash-observation.test.ts`. Run DB tests with `RUN_MARKETING_DB_TESTS=1 DATABASE_URL=<local dedicated test DB> bun test apps/web/lib/__tests__/marketing-outbox.db.test.ts`; they create/drop only their owned random database. No LIVE/provider access is needed or permitted for candidate validation.
+Run pure tests with `bun test apps/web/lib/__tests__/marketing-cash-observation.test.ts`. For DB test commands and dedicated local database requirements, see [business-event validation](../unified-ads-conversions.md#validation). No LIVE/provider access is needed or permitted for candidate validation.

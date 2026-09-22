@@ -109,6 +109,34 @@ async function due(id: string) {
     expect(await prisma.marketingConversion.findMany()).toEqual(before);
   });
 
+  it("records a lost-ACK comparison without retrying or delivering the retained outbox row", async () => {
+    const observation = await import("../marketing-cash-observation");
+    const binding = { sourceId: config.sourceId, environment: "test" as const, keyId: receiptId, capabilities: ["purchases", "refunds"], project: { projectId: randomUUID(), version: 7 } };
+    const scoped = { ...config, serverKey: `uads_${receiptId}_${"a".repeat(43)}` };
+    await ledger("lost_ack", "purchase", "pi_fixture");
+    await outbox.captureMarketingConversions(config);
+    const claimed = (await outbox.claimMarketingConversion(config))!;
+    let deliveries = 0;
+    await outbox.processMarketingConversion(claimed, config, fixture().reader, withIdentity(async () => { deliveries++; throw new Error("synthetic lost acknowledgement"); }));
+    const before = await prisma.marketingConversion.findUniqueOrThrow({ where: { id: claimed.id } });
+    expect(before.status).toBe("pending"); expect(before.payload).not.toBeNull(); expect(before.receiptId).toBeNull();
+    const scope = { from: config.from.toISOString(), to: new Date().toISOString() };
+    const inventory = await observation.createCashInventory(scoped, binding, scope);
+    const methods: string[] = [];
+    const compared = await observation.compareCashInventory(scoped, binding, inventory.id, (async (input: RequestInfo | URL) => {
+      const request = input as Request; methods.push(request.method);
+      if (request.method === "GET") return Response.json({ schemaVersion: 1, sourceId: config.sourceId, environment: "test", keyId: receiptId, capabilities: binding.capabilities });
+      const body = await request.json() as { entries: {eventType: string; transactionId: string}[] };
+      return Response.json({ schemaVersion: 1, ...binding, observation: { startedAt: scope.to, completedAt: scope.to }, entries: body.entries.map(e => ({ eventType: e.eventType, transactionId: e.transactionId, status: "matched", receiptId, receivedAt: scope.to })) });
+    }) as typeof fetch);
+    expect(compared.document.A).toBe("declared_members_matched"); expect(compared.document.B).toBe("incomplete"); expect(compared.document.C).toBe("unknown");
+    expect(methods).toEqual(["GET", "POST"]); expect(deliveries).toBe(1);
+    expect(await prisma.marketingConversion.findUniqueOrThrow({ where: { id: claimed.id } })).toEqual(before);
+    let calls = 0;
+    await expect(observation.compareCashInventory(scoped, { ...binding, project: { ...binding.project, version: 8 } }, inventory.id, (async () => { calls++; throw new Error("must not send"); }) as typeof fetch)).rejects.toThrow();
+    expect(calls).toBe(0);
+  });
+
   it("captures consented visits and immutable signup/payment associations without changing billing", async () => {
     const capture = await import("../marketing-capture");
     const { VISIT_COOKIE, ATTRIBUTION_COOKIE } = await import("../marketing-consent");

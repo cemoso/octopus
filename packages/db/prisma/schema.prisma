@@ -1690,16 +1690,16 @@ model MarketingPaymentAttribution {
 
 // Bounded retained evidence; never a cash event or upstream completeness assertion.
 model MarketingCashObservation {
-  id          String   @id
+  id          String                     @id
   sourceId    String
   environment String
   kind        String
   parentId    String?
-  parent      MarketingCashObservation? @relation("CashObservationParents", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parent      MarketingCashObservation?  @relation("CashObservationParents", fields: [parentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   children    MarketingCashObservation[] @relation("CashObservationParents")
-  digest      String   @unique
-  body        String   @db.Text
-  createdAt   DateTime @default(now())
+  digest      String                     @unique
+  body        String                     @db.Text
+  createdAt   DateTime                   @default(now())
 
   @@index([sourceId, createdAt], map: "marketing_cash_observations_source_idx")
   @@map("marketing_cash_observations")

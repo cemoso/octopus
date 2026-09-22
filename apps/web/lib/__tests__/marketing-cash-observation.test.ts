@@ -59,4 +59,39 @@ describe("retained cash observation", () => {
     expect(() => validateCashComparison({ ...response, entries: [] }, binding, entries)).toThrow();
     expect(() => validateCashComparison({ ...response, entries: [{ ...response.entries[0], status: "alien" }] }, binding, entries)).toThrow();
   });
+  it("rejects invalid owner bindings before transport and rejected identities before comparison", async () => {
+    const entries = [{ eventType: "purchase" as const, transactionId: "payment_fixture", semanticDigest: "a".repeat(64), receiptId: null }];
+    for (const change of [
+      { sourceId: randomUUID() }, { environment: "live" }, { keyId: randomUUID() },
+      { capabilities: ["purchases"] }, { capabilities: ["purchases", "refunds", "refunds"] },
+      { project: { projectId: binding.project.projectId } },
+      { project: { ...binding.project, version: 0 } },
+      { project: { ...binding.project, version: "7" } },
+    ]) {
+      let calls = 0;
+      await expect(compareCashBatch(config, { ...binding, ...change } as typeof binding, entries, (async () => { calls++; throw Error("must not send"); }) as typeof fetch)).rejects.toThrow();
+      expect(calls).toBe(0);
+    }
+    for (const change of [{ sourceId: randomUUID() }, { environment: "live" }, { keyId: randomUUID() }, { capabilities: ["purchases"] }]) {
+      const methods: string[] = [];
+      await expect(compareCashBatch(config, binding, entries, (async (input: RequestInfo | URL) => {
+        methods.push((input as Request).method);
+        return Response.json({ schemaVersion: 1, sourceId: binding.sourceId, environment: binding.environment, keyId, capabilities: binding.capabilities, ...change });
+      }) as typeof fetch)).rejects.toThrow();
+      expect(methods).toEqual(["GET"]);
+    }
+  });
+  it("requires exact ordered comparison replies with independent project and receipt authority", () => {
+    const entries = ["one", "two"].map(transactionId => ({ eventType: "purchase" as const, transactionId, semanticDigest: "a".repeat(64), receiptId: randomUUID() }));
+    const response = { schemaVersion: 1, ...binding, observation: { startedAt: date.toISOString(), completedAt: date.toISOString() }, entries: entries.map(e => ({ eventType: e.eventType, transactionId: e.transactionId, status: "matched", receiptId: e.receiptId, receivedAt: date.toISOString() })) };
+    expect(validateCashComparison(response, binding, entries)).toEqual(response);
+    for (const change of [
+      { project: { projectId: binding.project.projectId } }, { project: { ...binding.project, version: binding.project.version + 1 } },
+      { project: { ...binding.project, projectId: randomUUID() } }, { sourceId: randomUUID() }, { environment: "live" }, { keyId: randomUUID() },
+      { capabilities: ["purchases"] }, { entries: [...response.entries].reverse() },
+      { entries: [response.entries[0]] }, { entries: [response.entries[0], response.entries[0]] },
+      { entries: [{ ...response.entries[0], receiptId: randomUUID() }, response.entries[1]] },
+      { observation: { startedAt: date.toISOString(), completedAt: "2026-09-21T00:00:00.000Z" } },
+    ]) expect(() => validateCashComparison({ ...response, ...change }, binding, entries)).toThrow();
+  });
 });
