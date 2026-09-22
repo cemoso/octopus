@@ -53,6 +53,7 @@ async function due(id: string) {
     await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260915140000_marketing_conversion_outbox/migration.sql", import.meta.url), "utf8"));
     await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260917100000_marketing_tracking_outbox/migration.sql", import.meta.url), "utf8"));
     await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260917110000_marketing_capture/migration.sql", import.meta.url), "utf8"));
+    await db.query(await readFile(new URL("../../../../packages/db/prisma/migrations/20260922140000_marketing_cash_observations/migration.sql", import.meta.url), "utf8"));
     await db.query('CREATE TABLE organizations (id TEXT PRIMARY KEY, "stripeCustomerId" TEXT, name TEXT, "billingEmail" TEXT, slug TEXT)');
     process.env.DATABASE_URL = testUrl;
     mock.module("server-only", () => ({}));
@@ -70,6 +71,42 @@ async function due(id: string) {
   }, 30_000);
   beforeEach(async () => {
     await db.query("TRUNCATE organizations, marketing_payment_attributions, marketing_conversions, users, credit_transactions");
+  });
+
+  it("persists immutable retained observations after actual capture/dispatch and supersedes late facts", async () => {
+    const observation = await import("../marketing-cash-observation");
+    const binding = { sourceId: config.sourceId, environment: "test" as const, keyId: receiptId, capabilities: ["purchases", "refunds"], project: { projectId: randomUUID(), version: 7 } };
+    const scoped = { ...config, serverKey: `uads_${receiptId}_${"a".repeat(43)}` };
+    await ledger("observed_cash", "purchase", "pi_fixture");
+    await outbox.captureMarketingConversions(config);
+    const captured = (await outbox.claimMarketingConversion(config))!;
+    const f = fixture();
+    await outbox.processMarketingConversion(captured, config, f.reader, withIdentity(async () => received()));
+    const scope = { from: config.from.toISOString(), to: new Date().toISOString() };
+    const first = await observation.createCashInventory(scoped, binding, scope);
+    expect(first.document.B).toBe("complete_retained_scope");
+    expect(first.document.members).toHaveLength(1);
+    await expect(db.query('UPDATE marketing_cash_observations SET body=$1 WHERE id=$2', ["{}", first.id])).rejects.toThrow();
+    await expect(db.query('DELETE FROM marketing_cash_observations WHERE id=$1', [first.id])).rejects.toThrow();
+    // A newly committed eligible ledger row is missing capture even though all old members were delivered.
+    await ledger("late_cash", "purchase", "pi_late");
+    const second = await observation.createCashInventory(scoped, binding, scope, first.id);
+    expect(second.document.B).toBe("incomplete");
+    expect(second.document.predecessorDigest).toBe(first.digest);
+    expect(second.document.gaps.some((g: {code: string}) => g.code === "missing_outbox")).toBe(true);
+    expect((await observation.getCashObservation(scoped, first.id)).digest).toBe(first.digest);
+    expect((await observation.getCashObservation(scoped, first.id)).document).toEqual(first.document);
+    const before = await prisma.marketingConversion.findMany();
+    const compared = await observation.compareCashInventory(scoped, binding, second.id, (async (input: RequestInfo | URL) => {
+      const request = input as Request;
+      if (request.method === "GET") return Response.json({ schemaVersion: 1, sourceId: config.sourceId, environment: "test", keyId: receiptId, capabilities: binding.capabilities });
+      const body = await request.json() as { entries: {eventType: string; transactionId: string}[] };
+      return Response.json({ schemaVersion: 1, ...binding, observation: { startedAt: scope.to, completedAt: scope.to }, entries: body.entries.map(e => ({ eventType: e.eventType, transactionId: e.transactionId, status: "matched", receiptId, receivedAt: scope.to })) });
+    }) as typeof fetch);
+    expect(compared.document.A).toBe("declared_members_matched");
+    expect(compared.document.B).toBe("incomplete");
+    expect(compared.document.C).toBe("unknown");
+    expect(await prisma.marketingConversion.findMany()).toEqual(before);
   });
 
   it("captures consented visits and immutable signup/payment associations without changing billing", async () => {
