@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.5] - 2026-09-22
+
+### Improved
+- Authorized operators can retain cash-delivery reconciliation snapshots and compare existing payment and refund receipts without replaying events. Missing or unresolved records remain visible as gaps.
+
+### Upgrade notes
+- Apply the additive retained-cash observation migration before rollout. Operator observation requires a separately verified source and project binding; this release starts no observation or collection job.
+
 ## [1.2.4] - 2026-09-20
 
 ### Improved
