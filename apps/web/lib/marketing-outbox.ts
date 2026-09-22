@@ -1,4 +1,5 @@
 import "server-only";
+import { readMarketingLedger } from "./marketing-ledger";
 import { randomUUID } from "node:crypto";
 import { prisma, type MarketingConversion, type Prisma } from "@octopus/db";
 import { deliverTracking, parseTrackingPayload, resolveTrackingConfig, type TrackingConfig } from "./marketing-tracking";
@@ -50,14 +51,7 @@ export async function captureMarketingConversions(config: MarketingConfig): Prom
         AND NOT EXISTS (SELECT 1 FROM marketing_conversions o
           WHERE o."sourceId" = ${config.sourceId} AND o."originKey" = 'registration:' || u.id)
       ORDER BY u."createdAt", u.id LIMIT ${CAPTURE_BATCH}`,
-    prisma.$queryRaw<Array<{ id: string; createdAt: Date; organizationId: string; stripeSessionId: string | null; stripeRefundId: string | null }>>`
-      SELECT c.id, c."createdAt", c."organizationId", c."stripeSessionId", c."stripeRefundId"
-      FROM credit_transactions c
-      WHERE c."createdAt" >= ${config.from}
-        AND (c."stripeRefundId" IS NOT NULL OR (c.type IN ('purchase', 'auto_reload', 'subscription') AND c."stripeSessionId" IS NOT NULL))
-        AND NOT EXISTS (SELECT 1 FROM marketing_conversions o
-          WHERE o."sourceId" = ${config.sourceId} AND o."originKey" = 'ledger:' || c.id)
-      ORDER BY c."createdAt", c.id LIMIT ${CAPTURE_BATCH}`,
+    readMarketingLedger(prisma, config.from, CAPTURE_BATCH, config.sourceId),
   ]);
   const rows = [
     ...users.map(user => ({ sourceId: config.sourceId, environment: config.environment, originKey: `registration:${user.id}`, kind: "registration", reference: user.id, sourceCreatedAt: user.createdAt, organizationId: null, payload: serializeConversion(registrationEvent(user.id, user.createdAt)) })),
