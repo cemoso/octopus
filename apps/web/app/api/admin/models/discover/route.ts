@@ -13,5 +13,5 @@ export async function GET(request: NextRequest) {
     const row = await prisma.systemConfig.findUnique({ where: { id: "singleton" }, select: { modelDiscovery: true } });
     return NextResponse.json(row?.modelDiscovery ?? { ok: true, checkedAt: null, providers: {} }, { headers: { "Cache-Control": "no-store" } });
   }
-  return NextResponse.json(await discoverModels(), { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json(await discoverModels(request.signal), { headers: { "Cache-Control": "no-store" } });
 }

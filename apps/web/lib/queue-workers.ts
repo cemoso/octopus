@@ -31,9 +31,9 @@ export interface ProcessReviewJob {
 }
 
 export async function registerWorkers(boss: PgBoss, config: QueueConfig): Promise<void> {
-  await boss.work("discover-models", { localConcurrency: 1 }, async () => {
+  await boss.work("discover-models", { localConcurrency: 1 }, async (jobs) => {
     const { refreshModelDiscovery } = await import("./providers/model-discovery");
-    await refreshModelDiscovery();
+    for (const job of jobs) await refreshModelDiscovery(job.signal);
   });
   await boss.work("marketing-contexts", { localConcurrency: 1 }, async () => {
     try {

@@ -11,6 +11,13 @@ for (const key of keys) delete process.env[key];
 process.env.ANTHROPIC_API_KEY = "synthetic-only";
 afterAll(() => keys.forEach((k, i) => { if (prior[i] === undefined) delete process.env[k]; else process.env[k] = prior[i]; }));
 const { refreshModelDiscovery } = await import("../providers/model-discovery");
+it("bounds full SDK body reads and pagination, and persists cancelled discovery", async () => {
+  const child = Bun.spawn(["bun", "lib/__tests__/fixtures/model-discovery-harness.ts"], {
+    cwd: import.meta.dir + "/../..", stdout: "pipe", stderr: "pipe",
+  });
+  const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+  expect({ exit, stderr, stdout: stdout.trim() }).toEqual({ exit: 0, stderr: "", stdout: "PASS discovery deadlines, pagination, cancellation and persistence" });
+});
 it("persists discovered models without creating or activating catalog rows", async () => {
   const result = await refreshModelDiscovery();
   expect(result.providers.anthropic.newUpstream).toEqual([{ id: "claude-opus-5-5", displayName: "Opus 5.5" }]);

@@ -25,14 +25,14 @@ function titleCase(id: string): string {
     .trim();
 }
 
-async function discoverAnthropic(catalog: Set<string>): Promise<ProviderResult> {
+async function discoverAnthropic(catalog: Set<string>, signal: AbortSignal): Promise<ProviderResult> {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) return { keyConfigured: false, newUpstream: [], inCatalogNotUpstream: [] };
   const client = new Anthropic({ apiKey: key, timeout: 15000, maxRetries: 0 });
   const upstream: DiscoveredModel[] = [];
   const upstreamIds = new Set<string>();
   // Auto-paginates; Anthropic's catalog is small.
-  for await (const m of client.models.list({ limit: 100 })) {
+  for await (const m of client.models.list({ limit: 100 }, { signal })) {
     if (upstream.length >= 1000) throw new Error("Provider catalog exceeds discovery limit");
     upstreamIds.add(m.id);
     upstream.push({ id: m.id, displayName: m.display_name || titleCase(m.id) });
@@ -44,11 +44,11 @@ async function discoverAnthropic(catalog: Set<string>): Promise<ProviderResult> 
   };
 }
 
-async function discoverOpenAI(catalog: Set<string>): Promise<ProviderResult> {
+async function discoverOpenAI(catalog: Set<string>, signal: AbortSignal): Promise<ProviderResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return { keyConfigured: false, newUpstream: [], inCatalogNotUpstream: [] };
   const client = new OpenAI({ apiKey: key, timeout: 15000, maxRetries: 0 });
-  const list = await client.models.list();
+  const list = await client.models.list({ signal });
   // OpenAI's list returns every id (embeddings, audio, snapshots). Keep only
   // chat-capable families and drop non-text + dated snapshots.
   const isChat = (id: string) =>
@@ -74,13 +74,12 @@ async function discoverOpenAI(catalog: Set<string>): Promise<ProviderResult> {
   };
 }
 
-async function discoverGoogle(catalog: Set<string>): Promise<ProviderResult> {
+async function discoverGoogle(catalog: Set<string>, signal: AbortSignal): Promise<ProviderResult> {
   const key = process.env.GOOGLE_API_KEY;
   if (!key) return { keyConfigured: false, newUpstream: [], inCatalogNotUpstream: [] };
   const upstreamIds = new Set<string>();
   const upstream: DiscoveredModel[] = [];
   let pageToken = "";
-  const signal = AbortSignal.timeout(15000);
   for (let page = 0; page < 5; page++) {
     const query = new URLSearchParams({ pageSize: "200", key, ...(pageToken ? { pageToken } : {}) });
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?${query}`, { cache: "no-store", signal });
@@ -103,12 +102,12 @@ async function discoverGoogle(catalog: Set<string>): Promise<ProviderResult> {
   };
 }
 
-async function discoverGrok(catalog: Set<string>): Promise<ProviderResult> {
+async function discoverGrok(catalog: Set<string>, signal: AbortSignal): Promise<ProviderResult> {
   const key = process.env.GROK_API_KEY || process.env.XAI_API_KEY;
   if (!key) return { keyConfigured: false, newUpstream: [], inCatalogNotUpstream: [] };
   // xAI is OpenAI-compatible (same as the grok provider adapter).
   const client = new OpenAI({ apiKey: key, timeout: 15000, maxRetries: 0, baseURL: "https://api.x.ai/v1" });
-  const list = await client.models.list();
+  const list = await client.models.list({ signal });
   const upstreamIds = new Set<string>();
   const upstream: DiscoveredModel[] = [];
   for (const m of list.data) {
@@ -123,12 +122,12 @@ async function discoverGrok(catalog: Set<string>): Promise<ProviderResult> {
   };
 }
 
-async function discoverAlibaba(catalog: Set<string>): Promise<ProviderResult> {
+async function discoverAlibaba(catalog: Set<string>, signal: AbortSignal): Promise<ProviderResult> {
   const key = process.env.DASHSCOPE_API_KEY;
   if (!key) return { keyConfigured: false, newUpstream: [], inCatalogNotUpstream: [] };
   // DashScope compatible-mode is OpenAI-compatible (same as the alibaba provider adapter).
   const client = new OpenAI({ apiKey: key, timeout: 15000, maxRetries: 0, baseURL: alibabaBaseUrl() });
-  const list = await client.models.list();
+  const list = await client.models.list({ signal });
   const upstreamIds = new Set<string>();
   const upstream: DiscoveredModel[] = [];
   for (const m of list.data) {
@@ -161,12 +160,12 @@ const OPENROUTER_LABS = new Set([
   "amazon",
 ]);
 
-async function discoverOpenRouter(catalog: Set<string>): Promise<ProviderResult> {
+async function discoverOpenRouter(catalog: Set<string>, signal: AbortSignal): Promise<ProviderResult> {
   const key = process.env.OPENROUTER_API_KEY;
   if (!key) return { keyConfigured: false, newUpstream: [], inCatalogNotUpstream: [] };
   const res = await fetch("https://openrouter.ai/api/v1/models", {
     headers: { Authorization: `Bearer ${key}` },
-    cache: "no-store", signal: AbortSignal.timeout(15000),
+    cache: "no-store", signal,
   });
   if (!res.ok) throw new Error(`OpenRouter models API ${res.status}`);
   const body = (await res.json()) as {
@@ -195,12 +194,14 @@ async function discoverOpenRouter(catalog: Set<string>): Promise<ProviderResult>
   };
 }
 
-export async function discoverModels() {
+export async function discoverModels(cancellation?: AbortSignal) {
   const rows = await prisma.availableModel.findMany({
     select: { modelId: true, provider: true },
   });
   const byProvider = (p: string) =>
     new Set(rows.filter((r) => r.provider === p).map((r) => r.modelId));
+  const deadline = AbortSignal.timeout(15000);
+  const signal = cancellation ? AbortSignal.any([cancellation, deadline]) : deadline;
 
   // Each provider isolated: one failing (bad key, outage) must not sink the rest.
   const settle = async (fn: () => Promise<ProviderResult>): Promise<ProviderResult> => {
@@ -217,12 +218,12 @@ export async function discoverModels() {
   };
 
   const [anthropic, openai, google, grok, openrouter, alibaba] = await Promise.all([
-    settle(() => discoverAnthropic(byProvider("anthropic"))),
-    settle(() => discoverOpenAI(byProvider("openai"))),
-    settle(() => discoverGoogle(byProvider("google"))),
-    settle(() => discoverGrok(byProvider("grok"))),
-    settle(() => discoverOpenRouter(byProvider("openrouter"))),
-    settle(() => discoverAlibaba(byProvider("alibaba"))),
+    settle(() => discoverAnthropic(byProvider("anthropic"), signal)),
+    settle(() => discoverOpenAI(byProvider("openai"), signal)),
+    settle(() => discoverGoogle(byProvider("google"), signal)),
+    settle(() => discoverGrok(byProvider("grok"), signal)),
+    settle(() => discoverOpenRouter(byProvider("openrouter"), signal)),
+    settle(() => discoverAlibaba(byProvider("alibaba"), signal)),
   ]);
 
   return {
@@ -232,8 +233,8 @@ export async function discoverModels() {
   };
 }
 
-export async function refreshModelDiscovery() {
-  const snapshot = await discoverModels();
+export async function refreshModelDiscovery(cancellation?: AbortSignal) {
+  const snapshot = await discoverModels(cancellation);
   await prisma.systemConfig.upsert({ where: { id: "singleton" },
     create: { id: "singleton", modelDiscovery: snapshot }, update: { modelDiscovery: snapshot } });
   return snapshot;
