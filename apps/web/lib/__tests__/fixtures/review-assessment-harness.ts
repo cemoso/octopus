@@ -104,6 +104,8 @@ const mixed = prepareReviewInput(mixedInput.input, { maxChars: 10000 });
 assert.equal(reviewCheckResult(mixed.coverage, false, 0).conclusion, "failure");
 output = { choices: [{ message: { content: valid }, finish_reason: "stop" }] };
 await executeCoveredReview(requestFor(mixed), mixed.coverage, "template-v1", request => openaiProvider.create(request, "fake"));
+// The review request carries the configured output budget.
+assert.equal((received as { max_completion_tokens: number }).max_completion_tokens, Number(process.argv[2] ?? 8192));
 assert.equal(mixed.coverage.assessment?.state, "completed");
 assert.equal(reviewCheckResult(mixed.coverage, false, 0).conclusion, "success");
 for (const path of assetPaths) {
@@ -534,6 +536,4 @@ assert.ok(!applyReviewCoverage(valid, excluded.coverage, "excluded").includes("*
 const empty = plan(); empty.coverage.files = []; empty.coverage.expectedFiles = 0;
 recordNoModelAssessment(empty.coverage);
 assert.equal(reviewCheckResult(empty.coverage, false, 0).conclusion, "failure");
-// The review request carries the configured output budget.
-assert.equal((received as { max_completion_tokens: number }).max_completion_tokens, 8192);
 console.log("PASS adapter completion, publication and immutable request identity");
