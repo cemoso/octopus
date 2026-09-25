@@ -2,8 +2,8 @@
  * Extended-thinking configuration for Anthropic models.
  *
  * Claude-5-family models (Fable 5, Opus 5, Mythos, …) emit extended-thinking
- * blocks that spend from the max_tokens budget BEFORE any text. The small
- * review/title budgets (8192 / 256) get consumed by thinking on hard inputs, so
+ * blocks that spend from the max_tokens budget BEFORE any text. Small caller
+ * budgets can be consumed by thinking on hard inputs, so
  * the response ends with stop_reason "max_tokens" and zero text blocks — an
  * empty review. So for these models we raise max_tokens to a floor (a ceiling,
  * not a spend — free on easy inputs) so thinking has room to finish and still

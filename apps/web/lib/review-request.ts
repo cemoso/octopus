@@ -1,5 +1,6 @@
 import type { AiCreateParams } from "@/lib/providers";
 import { stripLoneSurrogates } from "@/lib/providers/sanitize";
+import { REVIEW_MAX_TOKENS } from "@/lib/constants";
 import { coverageSummary, type ReviewCoverage } from "@/lib/review-coverage";
 import { prepareReviewComment } from "@/lib/review-comment-context";
 import { reviewVisibilityContext } from "@/lib/review-evidence";
@@ -12,7 +13,7 @@ export function createCoveredReviewRequest(options: {
   const context = prepareReviewComment(options.comment);
   return {
     model: options.model,
-    maxTokens: 8192,
+    maxTokens: REVIEW_MAX_TOKENS,
     // Repair before dispatch so adapter preservation checks compare the
     // prepared message, not its malformed UTF-16 input.
     system: stripLoneSurrogates(options.system),
