@@ -2,6 +2,7 @@ import "server-only";
 import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
+import { stripLoneSurrogates } from "./sanitize";
 
 /**
  * OpenRouter. Gateway to many models from many vendors via a single API key.
@@ -39,8 +40,8 @@ export const openrouterProvider: Provider = {
     const client = getClient(apiKey);
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-    if (params.system) messages.push({ role: "system", content: params.system });
-    for (const m of params.messages) messages.push({ role: m.role, content: m.content });
+    if (params.system) messages.push({ role: "system", content: stripLoneSurrogates(params.system) });
+    for (const m of params.messages) messages.push({ role: m.role, content: stripLoneSurrogates(m.content) });
 
     const response = await client.chat.completions.create(observeAiRequest(params, "openrouter", {
       model: params.model,

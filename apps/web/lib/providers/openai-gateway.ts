@@ -2,6 +2,7 @@ import "server-only";
 import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { AiCreateParams, AiResponse, AiProvider } from "./index";
+import { stripLoneSurrogates } from "./sanitize";
 
 /**
  * Shared implementation for OpenAI-compatible gateway providers (acp, opencode,
@@ -34,8 +35,8 @@ export async function callOpenAiGateway(
   const client = new OpenAI({ apiKey: opts.apiKey, baseURL });
 
   const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-  if (params.system) messages.push({ role: "system", content: params.system });
-  for (const m of params.messages) messages.push({ role: m.role, content: m.content });
+  if (params.system) messages.push({ role: "system", content: stripLoneSurrogates(params.system) });
+  for (const m of params.messages) messages.push({ role: m.role, content: stripLoneSurrogates(m.content) });
 
   const model = params.model.startsWith(opts.modelPrefix)
     ? params.model.slice(opts.modelPrefix.length)
