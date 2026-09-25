@@ -26,7 +26,7 @@ async function callOpenAIResponses(
 ): Promise<AiResponse> {
   const response = await client.responses.create(observeAiRequest(params, "openai", {
     model: params.model,
-    instructions: params.system,
+    instructions: params.system === undefined ? undefined : stripLoneSurrogates(params.system),
     input: params.messages.map((m) => ({ role: m.role, content: stripLoneSurrogates(m.content) })),
     max_output_tokens: params.maxTokens,
     ...(params.responseSchema

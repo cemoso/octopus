@@ -546,7 +546,8 @@ assert.equal(reviewCheckResult(empty.coverage, false, 0).conclusion, "failure");
   await executeCoveredReview(request, p.coverage, "v1", r => openaiProvider.create(r, "fake"));
   assert.equal(p.coverage.assessment?.requests[0].inputPreserved, true);
   assert.equal(p.coverage.assessment?.state, "completed");
-  assert.ok(!lone.test(JSON.stringify(received)));
+  const wire = received as { messages: { content: string }[] };
+  assert.ok(wire.messages.every(message => !lone.test(message.content)));
 }
 // The OpenAI adapter strips a lone surrogate that reaches it from another call path.
 {
@@ -555,5 +556,17 @@ assert.equal(reviewCheckResult(empty.coverage, false, 0).conclusion, "failure");
   const wire = received as { messages: { content: string }[] };
   assert.equal(wire.messages[0].content, "s �");
   assert.equal(wire.messages[1].content, "u � 😀");
+}
+// Direct Responses API callers bypass the covered-review request builder.
+{
+  output = { status: "completed", output_text: "ok" };
+  await openaiProvider.create({ model: "codex-test", maxTokens: 16, system: "s \uD83D 😀 \uDE00", messages: [{ role: "user", content: "u \uDE00 😀 \uD83D" }] }, "fake");
+  const wire = received as { instructions: string; input: { content: string }[] };
+  assert.equal(wire.instructions, "s � 😀 �");
+  assert.equal(wire.input[0].content, "u � 😀 �");
+  for (const system of [undefined, ""]) {
+    await openaiProvider.create({ model: "codex-test", maxTokens: 16, system, messages: [{ role: "user", content: "ok" }] }, "fake");
+    assert.equal((received as { instructions?: string }).instructions, system);
+  }
 }
 console.log("PASS adapter completion, publication and immutable request identity");
