@@ -1,4 +1,5 @@
 import "server-only";
+import { REVIEW_MAX_TOKENS } from "@/lib/constants";
 
 /**
  * Core review generation logic extracted from reviewer.ts.
@@ -379,7 +380,7 @@ export async function generateLocalReview(params: LocalReviewParams): Promise<Lo
     response = await createAiMessage(
       {
         model: reviewModel,
-        maxTokens: 8192,
+        maxTokens: REVIEW_MAX_TOKENS,
         system: systemPrompt,
         cacheSystem: true,
         messages: [
@@ -767,7 +768,7 @@ export async function generateBareLocalReview(
     response = await createAiMessage(
       {
         model: reviewModel,
-        maxTokens: 8192,
+        maxTokens: REVIEW_MAX_TOKENS,
         system: systemPrompt,
         cacheSystem: true,
         messages: [

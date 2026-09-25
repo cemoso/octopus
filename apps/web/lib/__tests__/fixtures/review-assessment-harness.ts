@@ -534,4 +534,6 @@ assert.ok(!applyReviewCoverage(valid, excluded.coverage, "excluded").includes("*
 const empty = plan(); empty.coverage.files = []; empty.coverage.expectedFiles = 0;
 recordNoModelAssessment(empty.coverage);
 assert.equal(reviewCheckResult(empty.coverage, false, 0).conclusion, "failure");
+// The review request carries the configured output budget.
+assert.equal((received as { max_completion_tokens: number }).max_completion_tokens, 8192);
 console.log("PASS adapter completion, publication and immutable request identity");
