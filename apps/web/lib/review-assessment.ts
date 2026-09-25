@@ -116,8 +116,23 @@ export async function executeFindingsRecovery(
   return { ...response, findings: valid ? parseFindingsFromJson(body) ?? [] : null };
 }
 
+const REVIEW_HEADING = "## 🐙 Octopus Review";
+
+/**
+ * Canonicalize two shapes that models vary without changing the meaning of the
+ * review, so validation judges structure rather than typography: a suffix on
+ * the report heading (`## 🐙 Octopus Review — PR #12`) and an Overall row whose
+ * two cells are not both bold.
+ */
+export function normalizeReviewResponse(text: string): string {
+  return text
+    .replace(/^## 🐙 Octopus Review\b[^\n]*$/gm, REVIEW_HEADING)
+    .replace(/^\|\s*(?:\*\*)?Overall(?:\*\*)?\s*\|\s*(?:\*\*)?([1-5]\/5|N\/A|Not assessed)(?:\*\*)?\s*\|([^\n]*)$/gm, "| **Overall** | **$1** |$2");
+}
+
 /** Fixed diagnostic messages only: never include untrusted response excerpts. */
 export function reviewResponseValidationError(text: string, inputComplete = true): string | null {
+  text = normalizeReviewResponse(text);
   if ((text.match(/^## 🐙 Octopus Review[ \t]*\r?$/gm) ?? []).length !== 1
     || (text.match(/^### Score[ \t]*\r?$/gm) ?? []).length !== 1
     || (text.match(/^### Summary[ \t]*\r?$/gm) ?? []).length !== 1
@@ -239,6 +254,7 @@ export async function executeCoveredReview(
   assessment.completion = response.completion ?? null;
   const validationError = reviewResponseValidationError(response.text, coverage.complete);
   assessment.responseValidation = { state: validationError === null ? "valid" : "invalid", reason: validationError };
+  if (validationError !== null) console.log(`[review-assessment] Response rejected: ${validationError}; completion=${response.completion?.reason ?? "unknown"}`);
   const observed = assessment.requests.length === 1 && assessment.requests[0].model === response.model
     && assessment.requests[0].provider === response.provider && assessment.requests[0].inputPreserved;
   const failures = [
@@ -250,5 +266,5 @@ export async function executeCoveredReview(
   assessment.reason = failures.length > 0 ? failures.join("; ")
     : coverage.complete ? "Provider completed a valid review response"
       : "Provider completed a valid response; overall score withheld because input coverage is incomplete";
-  return response;
+  return { ...response, text: normalizeReviewResponse(response.text) };
 }

@@ -113,6 +113,8 @@ A 2-3 sentence high-level summary of what this PR does and its impact on the cod
 
 Use "N/A" for categories not applicable to this PR's changes.
 
+The parser reads this structure literally. The first line of the review is exactly `## 🐙 Octopus Review`, with no PR number, title or other text on that line. Every heading above appears once, spelled as shown. The Overall row is exactly `| **Overall** | **N/5** | notes |`, with both cells bold, where N/5 is the lowest category score.
+
 ### Risk Assessment
 | Metric | Value |
 |--------|-------|
