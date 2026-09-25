@@ -534,4 +534,29 @@ assert.ok(!applyReviewCoverage(valid, excluded.coverage, "excluded").includes("*
 const empty = plan(); empty.coverage.files = []; empty.coverage.expectedFiles = 0;
 recordNoModelAssessment(empty.coverage);
 assert.equal(reviewCheckResult(empty.coverage, false, 0).conclusion, "failure");
+// Typography the validator canonicalizes: a suffix on the heading, and an Overall row without bold cells.
+for (const [name, text] of [
+  ["heading-suffix", valid.replace("## 🐙 Octopus Review", "## 🐙 Octopus Review — PR #2337")],
+  ["overall-plain", valid.replace("| **Overall** | **4/5** |", "| Overall | 4/5 |")],
+  ["overall-half-bold", valid.replace("| **Overall** | **4/5** |", "| **Overall** | 4/5 |")],
+] as const) {
+  const p = plan();
+  output = { choices: [{ message: { content: text }, finish_reason: "stop" }] };
+  const response = await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
+  assert.equal(p.coverage.assessment?.state, "completed", name);
+  assert.equal(p.coverage.assessment?.responseSha256, sha256(text), `${name}: the hash covers the response as received`);
+  assert.equal(response.text, valid, `${name}: callers get the canonical text`);
+  assert.equal(validReviewResponse(text), true, name);
+}
+// The word Overall in a notes cell is not a second Overall row.
+{
+  const p = plan();
+  const text = valid.replace("| Consistency | 5/5 | Consistent |", "| Consistency | 5/5 | Consistent overall with the module |");
+  output = { choices: [{ message: { content: text }, finish_reason: "stop" }] };
+  await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
+  assert.equal(p.coverage.assessment?.state, "completed", "overall-in-notes");
+  assert.equal(reviewResponseValidationError(valid.replace("| Consistency | 5/5 | Consistent |", "| Consistency | 5/5 | Consistent |\n| **Overall** | **5/5** | Twice |")), "Overall score missing, duplicated or malformed");
+}
+// A second heading is still a duplicate after canonicalization.
+assert.equal(reviewResponseValidationError(valid.replace("### Summary", "## 🐙 Octopus Review: again\n\n### Summary")), "Review headings missing or duplicated");
 console.log("PASS adapter completion, publication and immutable request identity");
