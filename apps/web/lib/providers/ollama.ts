@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { prisma } from "@octopus/db";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
 import { validateProviderUrl } from "./url-validation";
+import { stripLoneSurrogates } from "./sanitize";
 
 /**
  * Ollama exposes an OpenAI-compatible Chat Completions endpoint at
@@ -101,8 +102,8 @@ export const ollamaProvider: Provider = {
     const client = (await resolveOrgClient(orgId ?? null)) ?? getClient();
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-    if (params.system) messages.push({ role: "system", content: params.system });
-    for (const m of params.messages) messages.push({ role: m.role, content: m.content });
+    if (params.system) messages.push({ role: "system", content: stripLoneSurrogates(params.system) });
+    for (const m of params.messages) messages.push({ role: m.role, content: stripLoneSurrogates(m.content) });
 
     // Octopus namespaces local models as "ollama:<model>"; strip the prefix.
     const model = params.model.startsWith("ollama:") ? params.model.slice(7) : params.model;
