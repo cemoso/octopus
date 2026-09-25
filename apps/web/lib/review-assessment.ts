@@ -144,7 +144,9 @@ export function reviewResponseValidationError(text: string, inputComplete = true
     if (rows.length !== 1 || rows[0].split("|").length !== 5
       || !(inputComplete ? /^(?:[1-5]\/5|N\/A)$/ : /^N\/A$/).test(rows[0].split("|")[2].trim().replaceAll("**", ""))) return "Score category rows missing, duplicated or malformed";
   }
-  const overall = score.split("\n").filter(line => /Overall/i.test(line));
+  // Only a row whose first cell is Overall counts: a notes cell that contains the
+  // word ("consistent overall") is not a second Overall row.
+  const overall = score.split("\n").filter(line => line.split("|")[1]?.trim().replaceAll("**", "") === "Overall");
   const overallRow = inputComplete
     ? /^\|\s*\*\*Overall\*\*\s*\|\s*\*\*[1-5]\/5\*\*\s*\|[^|]+\|\s*$/
     : /^\|\s*\*\*Overall\*\*\s*\|\s*\*\*Not assessed\*\*\s*\|[^|]+\|\s*$/;

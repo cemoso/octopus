@@ -548,6 +548,15 @@ for (const [name, text] of [
   assert.equal(response.text, valid, `${name}: callers get the canonical text`);
   assert.equal(validReviewResponse(text), true, name);
 }
+// The word Overall in a notes cell is not a second Overall row.
+{
+  const p = plan();
+  const text = valid.replace("| Consistency | 5/5 | Consistent |", "| Consistency | 5/5 | Consistent overall with the module |");
+  output = { choices: [{ message: { content: text }, finish_reason: "stop" }] };
+  await executeCoveredReview(requestFor(p), p.coverage, "v1", request => openaiProvider.create(request, "fake"));
+  assert.equal(p.coverage.assessment?.state, "completed", "overall-in-notes");
+  assert.equal(reviewResponseValidationError(valid.replace("| Consistency | 5/5 | Consistent |", "| Consistency | 5/5 | Consistent |\n| **Overall** | **5/5** | Twice |")), "Overall score missing, duplicated or malformed");
+}
 // A second heading is still a duplicate after canonicalization.
 assert.equal(reviewResponseValidationError(valid.replace("### Summary", "## 🐙 Octopus Review: again\n\n### Summary")), "Review headings missing or duplicated");
 console.log("PASS adapter completion, publication and immutable request identity");
