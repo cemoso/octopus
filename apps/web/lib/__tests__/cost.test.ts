@@ -159,3 +159,8 @@ describe("formatNumber", () => {
     expect(formatNumber(0)).toBe((0).toLocaleString());
   });
 });
+
+it("prices Opus 5.5 cache reads at published $0.20 per million before markup", () => {
+  const rates = new Map([["claude-opus-5-5", { input: 4, output: 20 }]]);
+  expect(calcCost(rates, "claude-opus-5-5", 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(0.20 * 1.2, 8);
+});

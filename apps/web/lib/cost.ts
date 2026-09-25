@@ -15,6 +15,7 @@ const PRICING_CACHE_TTL = 5 * 60 * 1000;
 
 // Fallback pricing for models not yet in DB
 const FALLBACK_PRICING: Record<string, ModelPricing> = {
+  "claude-opus-5-5": { input: 4, output: 20 },
   // Claude Fable 5 is the Claude 5 frontier model; offered as the top "max"
   // review tier (2x Opus 5).
   "claude-fable-5": { input: 10, output: 50 },
@@ -126,7 +127,7 @@ export function calcCost(
   const baseCost =
     (plainInput * p.input +
       cacheWriteTokens * p.input * cacheWriteMultiplier +
-      cacheReadTokens * p.input * 0.1 +
+      cacheReadTokens * p.input * (model === "claude-opus-5-5" ? 0.05 : 0.1) +
       outputTokens * p.output) /
     1_000_000;
   return baseCost * PLATFORM_MARKUP;
