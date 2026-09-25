@@ -65,6 +65,8 @@ export async function startQueue(): Promise<PgBoss> {
   const config = await loadQueueConfig();
   console.log(`[queue] Config: timeout=${config.reviewTimeoutSeconds}s, concurrency=${config.reviewConcurrency}`);
 
+  await boss.createQueue("discover-models", { retryLimit: 0, expireInSeconds: 180 });
+
   // Create queues with retry/expiry config
   await boss.createQueue("welcome-email", {
     retryLimit: 3,
