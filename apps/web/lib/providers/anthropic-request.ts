@@ -5,9 +5,12 @@ import { resolveThinking, resolveThinkingOverride } from "./thinking";
 import { stripLoneSurrogates } from "./sanitize";
 import { VALID_EFFORTS } from "./thinking";
 
+export const usesNativeJsonOutput = (model: string) => model === "claude-opus-5-5";
+
 /** One adapter transformation for ordinary generation and measured complete reviews. */
 export function prepareAnthropicRequest(params: AiCreateParams, cacheTtl: CacheTtl): Anthropic.MessageCreateParamsStreaming {
-  const useTool = params.responseSchema !== undefined;
+  const nativeJson = usesNativeJsonOutput(params.model) && params.responseSchema !== undefined;
+  const useTool = params.responseSchema !== undefined && !nativeJson;
   const { maxTokens, thinking, outputConfig } = resolveThinking(params.model, params.maxTokens, useTool, params.effort);
   const thinkingParam = resolveThinkingOverride(params.model, params.thinking, thinking);
   return {
@@ -15,7 +18,7 @@ export function prepareAnthropicRequest(params: AiCreateParams, cacheTtl: CacheT
     // MessageStream adds this before SDK create; include it in the admitted digest.
     stream: true,
     ...(thinkingParam ? { thinking: thinkingParam } : {}),
-    ...(outputConfig ? { output_config: outputConfig } : {}),
+    ...((outputConfig || nativeJson) ? { output_config: { ...outputConfig, ...(nativeJson ? { format: { type: "json_schema" as const, schema: params.responseSchema!.schema } } : {}) } } : {}),
     system: params.system ? splitSystemForCache(stripLoneSurrogates(params.system), params.cacheSystem, cacheTtl) : undefined,
     messages: params.messages.map(message => ({ role: message.role, content: stripLoneSurrogates(message.content) })),
     ...(useTool ? {

@@ -66,8 +66,8 @@ export type ResolvedThinking = {
  * thinking + an effort level. All other models are returned with their
  * requested max_tokens unchanged (no floor — their per-model cap may be lower).
  *
- * Adaptive is applied only on the plain-text path: the forced-`tool_choice`
- * (structured output) path keeps the floor alone and leaves thinking implicit,
+ * Plain-text and native JSON-schema output allow adaptive thinking. The
+ * forced-`tool_choice` path keeps the floor alone and leaves thinking implicit
  * to avoid thinking/tool_choice interactions.
  */
 export function resolveThinking(

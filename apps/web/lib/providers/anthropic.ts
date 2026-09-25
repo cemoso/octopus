@@ -2,7 +2,7 @@ import "server-only";
 import { observeAiRequest, completionEvidence } from "./request-evidence";
 import Anthropic from "@anthropic-ai/sdk";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
-import { prepareAnthropicRequest, freezeRequest } from "./anthropic-request";
+import { prepareAnthropicRequest, freezeRequest, usesNativeJsonOutput } from "./anthropic-request";
 import { admitAnthropicReview } from "./anthropic-capacity";
 import { generationTimeout, CapacityAdmissionError, capacityReceipt, refuseCapacity, type CapacityAdmissionReceipt } from "../review-capacity";
 
@@ -31,7 +31,7 @@ export const anthropicProvider: Provider = {
   name: "anthropic",
   supportsJsonSchema: true,
   async create(params: AiCreateParams, apiKey?: string | null): Promise<AiResponse> {
-    const useTool = params.responseSchema !== undefined;
+    const useTool = params.responseSchema !== undefined && !usesNativeJsonOutput(params.model);
     let client: Anthropic;
     let body: Anthropic.MessageCreateParamsStreaming;
     let admission: CapacityAdmissionReceipt | undefined;

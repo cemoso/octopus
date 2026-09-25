@@ -1076,6 +1076,7 @@ model SystemConfig {
   blockedAuthors      Json @default("[]") // string[] of globally blocked PR author usernames
   queueConfig         Json @default("{}") // { reviewTimeoutSeconds, reviewConcurrency }
   announcements       Json @default("[]") // landing-page announcement bar entries (see lib/announcements types)
+  modelDiscovery      Json?    // last scheduled provider catalog check; no automatic activation
   latestRelease       Json?    // cached latest GitHub release for the self-hosted Updates page (see lib/releases.ts)
   blogAudioVoiceId    String?  // selected ElevenLabs voice id for blog read-aloud (see lib/elevenlabs.ts)
   // Self-hosted GitHub App created via the App Manifest flow (see lib/github-app-config.ts).

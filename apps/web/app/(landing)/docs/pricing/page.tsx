@@ -157,8 +157,8 @@ export default function PricingPage() {
           </table>
         </div>
         <P>
-          Prompt caching reduces costs: cached reads are billed at 10% of the
-          input price.
+          Prompt caching reduces costs: the cache-read discount depends on the
+          model.
         </P>
       </Section>
 

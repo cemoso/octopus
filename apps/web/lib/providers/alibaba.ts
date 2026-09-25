@@ -3,6 +3,7 @@ import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
 import { alibabaBaseUrl, alibabaRequestShape } from "./alibaba-request";
+import { stripLoneSurrogates } from "./sanitize";
 
 /**
  * Alibaba Cloud Model Studio (DashScope). OpenAI-compatible REST at
@@ -34,8 +35,8 @@ export const alibabaProvider: Provider = {
     const client = getClient(apiKey);
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
-    if (params.system) messages.push({ role: "system", content: params.system });
-    for (const m of params.messages) messages.push({ role: m.role, content: m.content });
+    if (params.system) messages.push({ role: "system", content: stripLoneSurrogates(params.system) });
+    for (const m of params.messages) messages.push({ role: m.role, content: stripLoneSurrogates(m.content) });
 
     const { maxCompletionTokens, enableThinking } = alibabaRequestShape(params);
 

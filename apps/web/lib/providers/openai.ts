@@ -2,6 +2,7 @@ import "server-only";
 import { observeAiRequest, completionEvidence } from "./request-evidence";
 import OpenAI from "openai";
 import type { Provider, AiCreateParams, AiResponse } from "./index";
+import { stripLoneSurrogates } from "./sanitize";
 
 let platformClient: OpenAI | null = null;
 
@@ -25,8 +26,8 @@ async function callOpenAIResponses(
 ): Promise<AiResponse> {
   const response = await client.responses.create(observeAiRequest(params, "openai", {
     model: params.model,
-    instructions: params.system,
-    input: params.messages.map((m) => ({ role: m.role, content: m.content })),
+    instructions: params.system === undefined ? undefined : stripLoneSurrogates(params.system),
+    input: params.messages.map((m) => ({ role: m.role, content: stripLoneSurrogates(m.content) })),
     max_output_tokens: params.maxTokens,
     ...(params.responseSchema
       ? {
@@ -79,10 +80,10 @@ export const openaiProvider: Provider = {
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [];
     if (params.system) {
-      messages.push({ role: "system", content: params.system });
+      messages.push({ role: "system", content: stripLoneSurrogates(params.system) });
     }
     for (const m of params.messages) {
-      messages.push({ role: m.role, content: m.content });
+      messages.push({ role: m.role, content: stripLoneSurrogates(m.content) });
     }
 
     const response = await client.chat.completions.create(observeAiRequest(params, "openai", {
