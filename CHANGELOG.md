@@ -11,10 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Claude Opus 5.5 is available as an opt-in review model with native structured JSON output. Existing defaults and pinned models remain unchanged.
-- Configured provider catalogs are checked daily at 07:00 UTC, with saved results and visible failures for administrator review. Discovery never enables or retires models automatically.
+- Automatic [model discovery](docs/model-discovery.md) saves provider catalog results and failures for administrator review.
 
 ### Upgrade notes
-- Apply the additive Opus 5.5 catalog and cache-pricing migration before updating the application and workers.
+- Apply the additive Opus 5.5 catalog and discovery-cache migration before updating the application and workers.
 
 ## [1.2.5] - 2026-09-22
 
