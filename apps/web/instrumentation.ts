@@ -60,6 +60,8 @@ export async function register() {
       }, 60 * 60 * 1000);
       cleanupTimer.unref?.();
 
+      // Daily provider-catalog discovery, independent of admin page visits.
+      await boss.schedule("discover-models", "0 7 * * *", {}, { tz: "UTC" });
       await boss.schedule("cleanup-forgejo-connector", "* * * * *");
 
       // Daily audit-log retention enforcement (03:00 UTC). pg-boss dedups the
