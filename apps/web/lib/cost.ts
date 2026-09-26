@@ -3,6 +3,7 @@ import "server-only";
 import { prisma } from "@octopus/db";
 import { ORG_TYPE } from "@/lib/org-types";
 import { getUtcMonthBounds } from "@/lib/billing-period";
+import type { CacheTtl } from "./providers/system-cache";
 // Keep the review-model/provider resolvers lazy so pure pricing helpers do not
 // initialize the provider stack and its configuration during module startup.
 
@@ -116,6 +117,7 @@ export function calcCost(
   cacheReadTokens: number,
   cacheWriteTokens: number,
   provider?: string,
+  cacheWriteTtl?: CacheTtl,
 ): number {
   const p = pricing.get(model);
   if (!p) return 0;
@@ -123,9 +125,10 @@ export function calcCost(
   // Keep persisted semantics intact, including old rows. Never infer the provider
   // from a model name: an OpenRouter Claude response uses inclusive input.
   const plainInput = provider === "anthropic" ? inputTokens : Math.max(inputTokens - cacheReadTokens - cacheWriteTokens, 0);
-  const cacheWriteMultiplier = provider === "openai" ? 1.25 : process.env.PROMPT_CACHE_TTL === "5m" ? 1.25 : 2;
-  const openaiReadMultiplier = /^(gpt-4o)(-mini)?(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 0.5
-    : /^(gpt-4\.1)(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/.test(model) || /^o3(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 0.25 : 0.1;
+  const ttl = provider === "anthropic" && cacheWriteTtl ? cacheWriteTtl : process.env.PROMPT_CACHE_TTL;
+  const cacheWriteMultiplier = provider === "openai" || ttl === "5m" ? 1.25 : 2;
+  const openaiReadMultiplier = /^(gpt-4o(-mini)?|gpt-4\.5-preview|o1(-mini|-preview)?|o3-mini)(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 0.5
+    : /^(gpt-4\.1(-mini|-nano)?|o3(-deep-research)?|o4-mini(-deep-research)?)(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 0.25 : 0.1;
   const cacheReadMultiplier = provider === "openai" ? openaiReadMultiplier : provider === "anthropic" && /^(claude-fable-5-1|claude-mythos-5-1)$/.test(model)
     ? 0.025 : model === "claude-opus-5-5" ? 0.05 : 0.1;
   const baseCost =
