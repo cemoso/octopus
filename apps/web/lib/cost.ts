@@ -115,19 +115,23 @@ export function calcCost(
   outputTokens: number,
   cacheReadTokens: number,
   cacheWriteTokens: number,
+  provider?: string,
 ): number {
   const p = pricing.get(model);
   if (!p) return 0;
-  // Cache-write premium tracks PROMPT_CACHE_TTL (the same env that sets the
-  // actual TTL on Anthropic review calls): a 1h cache write costs 2x base input,
-  // a 5m write 1.25x. Reviews are the dominant Anthropic path, so this keeps the
-  // billed write cost aligned with what Anthropic charges under the active TTL.
-  const cacheWriteMultiplier = process.env.PROMPT_CACHE_TTL === "5m" ? 1.25 : 2;
-  const plainInput = Math.max(inputTokens - cacheReadTokens - cacheWriteTokens, 0);
+  // Stored Anthropic input excludes cache reads/writes; OpenAI input includes them.
+  // Keep persisted semantics intact, including old rows. Never infer the provider
+  // from a model name: an OpenRouter Claude response uses inclusive input.
+  const plainInput = provider === "anthropic" ? inputTokens : Math.max(inputTokens - cacheReadTokens - cacheWriteTokens, 0);
+  const cacheWriteMultiplier = provider === "openai" ? 1.25 : process.env.PROMPT_CACHE_TTL === "5m" ? 1.25 : 2;
+  const openaiReadMultiplier = /^(gpt-4o)(-mini)?(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 0.5
+    : /^(gpt-4\.1)(-mini|-nano)?(-\d{4}-\d{2}-\d{2})?$/.test(model) || /^o3(-\d{4}-\d{2}-\d{2})?$/.test(model) ? 0.25 : 0.1;
+  const cacheReadMultiplier = provider === "openai" ? openaiReadMultiplier : provider === "anthropic" && /^(claude-fable-5-1|claude-mythos-5-1)$/.test(model)
+    ? 0.025 : model === "claude-opus-5-5" ? 0.05 : 0.1;
   const baseCost =
     (plainInput * p.input +
       cacheWriteTokens * p.input * cacheWriteMultiplier +
-      cacheReadTokens * p.input * (model === "claude-opus-5-5" ? 0.05 : 0.1) +
+      cacheReadTokens * p.input * cacheReadMultiplier +
       outputTokens * p.output) /
     1_000_000;
   return baseCost * PLATFORM_MARKUP;

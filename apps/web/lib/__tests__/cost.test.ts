@@ -164,3 +164,23 @@ it("prices Opus 5.5 cache reads at published $0.20 per million before markup", (
   const rates = new Map([["claude-opus-5-5", { input: 4, output: 20 }]]);
   expect(calcCost(rates, "claude-opus-5-5", 1_000_000, 0, 1_000_000, 0)).toBeCloseTo(0.20 * 1.2, 8);
 });
+
+
+describe("provider-native cache accounting", () => {
+  it("keeps Anthropic uncached input and inclusive gateway input distinct", () => {
+    const prices = new Map([["claude-opus-5-5", { input: 4, output: 20 }]]);
+    expect(calcCost(prices, "claude-opus-5-5", 1000, 0, 10000, 0, "anthropic")).toBeCloseTo(.006 * 1.2, 10);
+    expect(calcCost(prices, "claude-opus-5-5", 11000, 0, 10000, 0, "openrouter")).toBeCloseTo(.006 * 1.2, 10);
+  });
+  it("prices Fable 5.1 reads and simultaneous writes without double subtraction", () => {
+    const prices = new Map([["claude-fable-5-1", { input: 10, output: 50 }]]);
+    expect(calcCost(prices, "claude-fable-5-1", 1000, 100, 10000, 2000, "anthropic")).toBeCloseTo(.0425 * 1.2, 10);
+  });
+});
+
+it("uses published older OpenAI cached-input rates without changing other providers", () => {
+  for (const [model, multiplier] of [["gpt-4o", .5], ["gpt-4.1", .25], ["o3", .25], ["gpt-5.3-codex", .1]] as const) {
+    const prices = new Map([[model, { input: 10, output: 0 }]]);
+    expect(calcCost(prices, model, 1000, 0, 1000, 0, "openai")).toBeCloseTo(.01 * multiplier * 1.2, 10);
+  }
+});

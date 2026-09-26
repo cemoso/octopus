@@ -72,6 +72,7 @@ export async function logAiUsage(params: LogAiUsageParams): Promise<void> {
         params.outputTokens,
         params.cacheReadTokens ?? 0,
         params.cacheWriteTokens ?? 0,
+        params.provider,
       );
     }
 

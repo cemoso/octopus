@@ -81,6 +81,7 @@ export type AiResponse = {
   provider: AiProvider;
   model: string;
   usage: {
+    /** Provider-native: Anthropic uncached input; OpenAI-compatible total input. */
     inputTokens: number;
     outputTokens: number;
     cacheReadTokens: number;
