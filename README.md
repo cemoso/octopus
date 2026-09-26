@@ -63,7 +63,7 @@ Deploy Octopus on infrastructure you manage, with control over configuration and
 
 - **Review where you work:** summaries, inline findings and suggested fixes in GitHub, GitLab, Bitbucket and Forgejo; [CLI reviews](https://octopus-review.ai/docs/cli) for terminal workflows.
 - **Use your team's context:** indexed repository context, knowledge documents, and repo rules in `.octopus.md`, `AGENTS.md` or `CLAUDE.md`.
-- **Choose your AI provider:** organization-level model settings and support for your own API keys. See [model discovery](docs/model-discovery.md) for catalog updates.
+- **Choose your AI provider:** organization-level model settings and support for your own API keys. See [model discovery](docs/model-discovery.md) for catalog updates and [prompt caching](docs/prompt-caching.md) for switching, retention and accounting.
 - **Understand the result:** severity levels, category scores and explicit [review coverage](docs/review-coverage.md), including incomplete results.
 
 ## Contributing

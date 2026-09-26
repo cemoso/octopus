@@ -22,7 +22,7 @@ import { CACHE_BREAKPOINT, type CacheTtl } from "@/lib/providers/system-cache";
 export interface StreamChatParams {
   orgId: string;
   model: string;
-  /** Cacheable system prefix (Anthropic prompt cache); stable across turns. */
+  /** Stable instruction prefix; keep per-turn context in `system`. */
   systemCacheable?: string;
   /** Dynamic system context appended after the cacheable prefix. */
   system?: string;

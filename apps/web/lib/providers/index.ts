@@ -95,9 +95,9 @@ export type Provider = {
   supportsJsonSchema: boolean;
   /**
    * `apiKey` is the org's BYOK for providers that take one. `orgId` is the
-   * calling organisation — needed by providers that look up additional
-   * per-org config from prisma directly (ollama with org-level baseUrl
-   * override, local agent dispatch). Pure-HTTP providers can ignore both.
+   * calling organisation — needed for per-org config (ollama baseUrl
+   * override, local agent dispatch) and OpenAI cache scoping. Forward it
+   * even when the provider only makes HTTP calls.
    */
   create(
     params: AiCreateParams,
