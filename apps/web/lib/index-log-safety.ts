@@ -1,3 +1,5 @@
+import { TREE_RESTRICTION_ERROR_MESSAGE, TREE_RESTRICTION_MESSAGE } from "@/lib/repository-tree-error";
+
 const safeMessages = new Set([
   "Repository cloned successfully", "Scanning repository files...", "Processing file contents...",
   "Authenticating with GitHub...", "GitHub authentication successful", "Authenticating with GitLab...",
@@ -8,6 +10,8 @@ const safeMessages = new Set([
   "Indexing cancelled by user", "Generating repository summary with AI...", "Repository summary generated",
   "Summary generation failed (indexing still succeeded)",
   "Go to GitHub Settings → Applications → Configure to grant access",
+  TREE_RESTRICTION_MESSAGE,
+  TREE_RESTRICTION_ERROR_MESSAGE,
 ]);
 export const WITHHELD_INDEX_LOG = "Indexing message withheld for privacy.";
 const safeProgress = /^(?:Rate limited, waiting \d{1,12}s\.\.\.|GitHub returned HTTP (?:403|429), waiting \d{1,12}s before retry\.\.\.|Processed \d{1,12} files, skipped \d{1,12}(?:, created \d{1,12} chunks)?|Processing files\.\.\. \d{1,12}\/\d{1,12}|Processing local batch \d{1,12}\/\d{1,12}|Processing embedding batch \d{1,12}\/\d{1,12}\.\.\.|Found \d{1,12} total files, \d{1,12} eligible for indexing|Found \d{1,12} contributors|Generating embeddings for \d{1,12} chunks \(\d{1,12} batch(?:es)?\)\.\.\.|Generated \d{1,12} embeddings|Storing \d{1,12} vectors in database \(\d{1,12} batch(?:es)?\)\.\.\.|Successfully stored \d{1,12} vectors|Indexing complete: \d{1,12} files, \d{1,12} vectors)(?![\s\S])/;

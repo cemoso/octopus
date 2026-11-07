@@ -208,7 +208,7 @@ await assert.rejects(() => indexRepository({ repoId: "repo-1", indexAttemptId: "
 
 const sentryEvents: unknown[] = [];
 mock.module("@sentry/nextjs", () => ({ captureEvent: (event: unknown) => { sentryEvents.push(event); return "e".repeat(32); } }));
-const indexRow = { indexStatus: "indexing", indexAttemptId: "attempt-1" };
+const indexRow = { indexStatus: "indexing", indexAttemptId: "attempt-1", indexRetryAfter: null as Date | null };
 mock.module("@octopus/db", () => ({ prisma: { repository: {
   findUniqueOrThrow: async () => ({ ...indexRow }),
   updateMany: async ({ data }: { data: { indexStatus: string } }) => { Object.assign(indexRow, data); return { count: 1 }; },
@@ -218,6 +218,12 @@ const { reportBackgroundFailure } = await import("../../background-failure");
 reset();
 suppliedToken = undefined;
 responses.set("/git/trees/main?recursive=1", [451, { message: "private upstream details" }]);
+const restrictionLogs: string[] = [];
+await assert.rejects(() => indexRepository(
+  { repoId: "repo-1", indexAttemptId: "attempt-1" }, "acme/new", "main", 123,
+  message => { restrictionLogs.push(message); },
+), /Failed to fetch tree: 451/);
+assert.ok(restrictionLogs.includes("GitHub returned HTTP 451 for the repository tree. Check the repository's availability on GitHub, then retry."));
 try {
   await run();
   assert.fail("Expected the upstream refusal to fail indexing");
@@ -226,6 +232,15 @@ try {
 }
 assert.equal((sentryEvents.at(-1) as { tags: { failure_code: string } }).tags.failure_code, "http_451");
 assert.ok(!JSON.stringify(sentryEvents.at(-1)).includes("private upstream details"));
+const failureStart = Date.now();
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run, undefined, { deferTreeRestriction: true }), /Failed to fetch tree: 451/);
+assert.equal(indexRow.indexStatus, "failed");
+assert.ok(indexRow.indexRetryAfter instanceof Date, "tree 451 should defer automatic retry");
+assert.ok(indexRow.indexRetryAfter.getTime() >= failureStart + 6 * 60 * 60_000);
+reset(); indexRow.indexStatus = "indexing";
+responses.set("/git/trees/main?recursive=1", [500, {}]);
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run), /Failed to fetch tree: 500/);
+assert.equal(indexRow.indexRetryAfter, null, "other failures must not retain a tree-451 cooldown");
 for (const boundary of ["before-embedding", "after-embedding"]) {
   for (const timeout of [false, true]) {
     reset(); suppliedToken = undefined; indexRow.indexStatus = "indexing";

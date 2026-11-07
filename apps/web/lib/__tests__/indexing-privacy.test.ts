@@ -1,6 +1,7 @@
 import { expect, it } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { safeIndexLogMessage } from "../index-log-safety";
+import { TREE_RESTRICTION_ERROR_MESSAGE, TREE_RESTRICTION_MESSAGE } from "../repository-tree-error";
 for (const fixture of ["indexing-admin-privacy.ts", "indexing-failure-event-privacy.ts"]) {
   it(`keeps synthetic indexing errors private: ${fixture}`, async () => {
     const child = Bun.spawn([process.execPath, fileURLToPath(new URL(`./fixtures/${fixture}`, import.meta.url))], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
@@ -16,6 +17,8 @@ it("preserves fixed indexing status messages without exposing appended details",
     "Summary generation failed (indexing still succeeded)",
     "Go to GitHub Settings → Applications → Configure to grant access",
     "Indexing cancelled by user",
+    TREE_RESTRICTION_MESSAGE,
+    TREE_RESTRICTION_ERROR_MESSAGE,
   ]) {
     expect(safeIndexLogMessage(message)).toBe(message);
     expect(safeIndexLogMessage(`${message} synthetic-secret`)).toBe("Indexing message withheld for privacy.");

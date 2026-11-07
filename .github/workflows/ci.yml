@@ -155,8 +155,8 @@ jobs:
         env:
           RUN_MARKETING_DB_TESTS: "1"
 
-      - name: Test first-index timestamps against PostgreSQL
-        run: bun test lib/__tests__/repository-index-completion.test.ts
+      - name: Test indexing completion and retry cooldown against PostgreSQL
+        run: bun test lib/__tests__/repository-index-completion.test.ts lib/__tests__/repository-index-451.db.test.ts
         working-directory: apps/web
         env:
           RUN_FIRST_INDEX_DB_TESTS: "1"

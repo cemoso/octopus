@@ -327,6 +327,7 @@ model Repository {
   indexedAt      DateTime?
   firstIndexedAt DateTime?
   indexAttemptId String?
+  indexRetryAfter DateTime? // delay automatic retries after a GitHub tree HTTP 451
   activeIndexGeneration String?
   localIndexUpload Json?
   indexedFiles   Int      @default(0)

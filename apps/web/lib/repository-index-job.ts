@@ -8,6 +8,7 @@ import type { LogLevel } from "@/lib/indexer";
 import { notifyRepositoryIndex } from "@/lib/repository-index-notifications";
 import { deleteSyncLogs, writeSyncLog } from "@/lib/elasticsearch";
 import { createAbortController, clearAbortController } from "@/lib/indexing-abort";
+import { GitHubTreeRestrictedError, TREE_RESTRICTION_MESSAGE } from "@/lib/repository-tree-error";
 
 export interface RepositoryIndexJob {
   repositoryId: string;
@@ -16,12 +17,17 @@ export interface RepositoryIndexJob {
 
 // Revisit empty snapshots as well: a repository can be discovered before its
 // first push. Failed enqueues remain eligible for the next discovery sweep.
-const needsIndex = {
+const needsIndex = (now: Date) => ({
   OR: [
-    { indexStatus: { in: ["pending", "failed"] } },
+    { indexStatus: "pending" },
+    { indexStatus: "failed", OR: [{ provider: { not: "github" } }, { indexRetryAfter: null }, { indexRetryAfter: { lte: now } }] },
     { indexStatus: "indexed", totalFiles: 0 },
   ],
-};
+});
+
+function treeRetryDeferred(repo: { provider: string; indexStatus: string; indexRetryAfter: Date | null }): boolean {
+  return repo.provider === "github" && repo.indexStatus === "failed" && !!repo.indexRetryAfter && repo.indexRetryAfter.getTime() > Date.now();
+}
 
 export async function enqueuePendingRepositoryIndexes(organizationId: string, repositoryId?: string, providers?: string[]) {
   const eligibleProviders = ["github", "forgejo"].filter(provider => !providers || providers.includes(provider));
@@ -34,7 +40,7 @@ export async function enqueuePendingRepositoryIndexes(organizationId: string, re
       isActive: true,
       dismissedAt: null,
       organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
-      ...needsIndex,
+      ...needsIndex(new Date()),
     },
     select: { id: true },
     orderBy: { indexedAt: { sort: "asc", nulls: "first" } },
@@ -68,14 +74,22 @@ export async function processRepositoryIndex(job: RepositoryIndexJob, retry?: Re
   });
   const installationId = repo?.organization.githubInstallationId;
   if (!repo || (repo.provider === "github" && (!installationId || (repo.installationId && repo.installationId !== installationId)))) return;
+  if (treeRetryDeferred(repo)) throw new GitHubTreeRestrictedError();
 
   // Share the reviewer's claim so a first PR and discovery cannot both index.
   const indexAttemptId = randomUUID();
   const claim = await prisma.repository.updateMany({
-    where: { id: repo.id, organizationId: job.organizationId, ...needsIndex },
+    where: { id: repo.id, organizationId: job.organizationId, ...needsIndex(new Date()) },
     data: { indexStatus: "indexing", indexAttemptId },
   });
-  if (!claim.count) return;
+  if (!claim.count) {
+    const current = await prisma.repository.findFirst({
+      where: { id: repo.id, organizationId: job.organizationId },
+      select: { provider: true, indexStatus: true, indexRetryAfter: true },
+    });
+    if (current && treeRetryDeferred(current)) throw new GitHubTreeRestrictedError();
+    return;
+  }
 
   const controller = createAbortController(indexAttemptId);
   // Abort before pg-boss expires the attempt, so the catch can release its claim.
@@ -94,13 +108,14 @@ export async function processRepositoryIndex(job: RepositoryIndexJob, retry?: Re
         { repoId: repo.id, indexAttemptId }, repo.fullName, repo.defaultBranch, installationId ?? 0, log,
         controller.signal, repo.provider, job.organizationId,
       );
-    }, controller.signal);
+    }, controller.signal, { deferTreeRestriction: repo.provider === "github" });
     log(`Indexing complete: ${stats.indexedFiles} files, ${stats.totalVectors} vectors`, "success");
     void notifyRepositoryIndex(channel, repo.id);
   } catch (error) {
     if (error instanceof SupersededIndexError) return;
     const isCancelled = isIndexingCancelled(controller.signal);
     log(`Indexing failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    if (!controller.signal.aborted && error instanceof GitHubTreeRestrictedError) log(TREE_RESTRICTION_MESSAGE, "warning");
     void notifyRepositoryIndex(channel, repo.id);
     if (!isCancelled) {
       reportBackgroundFailure(error, { stage: "indexing", attemptId: indexAttemptId, repositoryId: repo.id, retry,

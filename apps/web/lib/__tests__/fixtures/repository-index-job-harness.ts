@@ -8,6 +8,7 @@ const row = {
   id: "repo-1", provider: "github", organizationId: "org-1", fullName: "acme/new", defaultBranch: "main",
   installationId: 123, indexStatus: "pending", totalFiles: 0,
   indexAttemptId: null as string | null, indexedAt: null as Date | null, firstIndexedAt: null as Date | null,
+  indexRetryAfter: null as Date | null,
   organization: { githubInstallationId: 123 as number | null },
 };
 let currentRow: typeof row | null = row;
@@ -102,10 +103,10 @@ assert.equal(queries.length, 0, "invalid jobs must never issue an unscoped query
 
 await enqueuePendingRepositoryIndexes("org-1");
 assert.deepEqual(queued, [["index-repository", job, { singletonKey: "repo-1", singletonSeconds: 60 }]]);
-assert.deepEqual(queries[0].where, {
+const { OR: _indexEligibility, ...queueScope } = queries[0].where;
+assert.deepEqual(queueScope, {
   organizationId: "org-1", provider: { in: ["github", "forgejo"] }, isActive: true, dismissedAt: null,
   organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
-  OR: [{ indexStatus: { in: ["pending", "failed"] } }, { indexStatus: "indexed", totalFiles: 0 }],
 });
 
 await processRepositoryIndex(job);
@@ -200,5 +201,21 @@ await processRepositoryIndex(job);
 assert.equal(currentRow?.indexStatus, "indexing");
 assert.equal(currentRow?.indexAttemptId, "replacement");
 assert.deepEqual(notifications, ["indexing"]);
+replaceAttempt = false;
+currentRow = { ...row, indexStatus: "pending", indexRetryAfter: null };
+const { GitHubTreeRestrictedError } = await import("@/lib/repository-tree-error");
+indexFailure = new GitHubTreeRestrictedError();
+await assert.rejects(() => processRepositoryIndex(job, { retryCount: 0, retryLimit: 2 }), GitHubTreeRestrictedError);
+assert.equal(currentRow.indexStatus, "failed");
+assert.ok(currentRow.indexRetryAfter && currentRow.indexRetryAfter.getTime() > Date.now());
+const callsAfterDenial = indexCalls.length;
+await assert.rejects(() => processRepositoryIndex(job, { retryCount: 1, retryLimit: 2 }), GitHubTreeRestrictedError);
+await assert.rejects(() => processRepositoryIndex(job, { retryCount: 2, retryLimit: 2 }), GitHubTreeRestrictedError);
+assert.equal(indexCalls.length, callsAfterDenial, "queue retries must not contact GitHub during the cooldown");
+currentRow.indexRetryAfter = new Date(Date.now() - 1);
+indexFailure = null;
+await processRepositoryIndex(job);
+assert.equal(indexCalls.length, callsAfterDenial + 1, "automatic indexing must recover after the cooldown");
+assert.equal(currentRow.indexRetryAfter, null, "success clears the cooldown");
 globalThis.setTimeout = realSetTimeout;
 console.log("Repository queue, tenant, claim, empty snapshot, failure, retry and cancellation checks passed");

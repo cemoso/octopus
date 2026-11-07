@@ -14,6 +14,7 @@ import { ensureCollection, upsertChunks, deleteRepoFileChunks } from "@/lib/qdra
 import { generateSparseVectors } from "@/lib/sparse-vector";
 import { parseOctopusIgnore, type Ignore } from "@/lib/octopus-ignore";
 import { shouldIndex, chunkText, treeBlobs, MAX_FILE_SIZE, exceedsMaxFileSize } from "@/lib/index-chunking";
+import { GitHubTreeRestrictedError, TREE_RESTRICTION_ERROR_MESSAGE } from "@/lib/repository-tree-error";
 
 const execFileAsync = promisify(execFile);
 
@@ -342,6 +343,10 @@ export async function indexRepository(
         throw new Error(`Branch '${activeBranch}' not found on ${fullName}`);
       }
       onLog(`Failed to fetch tree: HTTP ${treeRes.status}`, "error");
+      if (treeRes.status === 451) {
+        onLog(TREE_RESTRICTION_ERROR_MESSAGE, "error");
+        throw new GitHubTreeRestrictedError();
+      }
       throw Object.assign(new Error(`Failed to fetch tree: ${treeRes.status}`), { status: treeRes.status });
     }
 
