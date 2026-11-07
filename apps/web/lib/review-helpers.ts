@@ -51,6 +51,7 @@ export function buildIndexWarning(indexStatus: string): string | null {
 export type IndexClaimAction =
   | { action: "run-indexing" }
   | { action: "skip-to-review" }
+  | { action: "defer-review" }
   | { action: "fail-review"; reason: string };
 
 /**
@@ -73,6 +74,9 @@ export function resolveIndexClaimWait(
   // Could not reclaim -- maybe peer just finished
   if (finalCheckStatus === "indexed") {
     return { action: "skip-to-review" };
+  }
+  if (finalCheckStatus === "indexing") {
+    return { action: "defer-review" };
   }
   // Cannot index, cannot reclaim -- unrecoverable
   return { action: "fail-review", reason: `indexing failed and could not reclaim (status: ${finalCheckStatus})` };

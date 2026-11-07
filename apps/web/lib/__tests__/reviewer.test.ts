@@ -122,6 +122,10 @@ describe("resolveIndexClaimWait", () => {
     expect(result.action).toBe("skip-to-review");
   });
 
+  it("defers review when another index starts before the reclaim", () => {
+    expect(resolveIndexClaimWait("failed", 0, "indexing").action).toBe("defer-review");
+  });
+
   it("fails review when reclaim fails and repo is still not indexed", () => {
     const result = resolveIndexClaimWait("failed", 0, "failed");
     expect(result.action).toBe("fail-review");

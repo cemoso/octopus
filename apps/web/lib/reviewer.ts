@@ -967,6 +967,17 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
         data: { indexStatus: "indexing", indexAttemptId },
       });
       let shouldRunIndexing = claimResult.count > 0;
+      const deferForIndexing = async () => {
+        console.log(`[reviewer] Repository ${repo.fullName} is being indexed by another process, re-queuing PR ${pullRequestId}`);
+        if (reviewCommentId) {
+          await providerUpdateComment(
+            reviewCommentId,
+            "> 🐙 **Octopus Review** — Repository indexing is in progress.\n>\n> This review has been re-queued and will start automatically once indexing completes.",
+          );
+        }
+        outcomeDeferred = true;
+        await deferReviewForRepository(pullRequestId, pr.headSha, pr.reviewRequestVersion);
+      };
 
       // ── Yield path: another process is already indexing ──
       // Instead of blocking this worker with a poll loop, re-queue the PR
@@ -986,15 +997,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
           }
         } else if (currentStatus === "indexing") {
           // Peer still running -- yield this worker and retry later
-          console.log(`[reviewer] Repository ${repo.fullName} is being indexed by another process, re-queuing PR ${pullRequestId}`);
-          if (reviewCommentId) {
-            await providerUpdateComment(
-              reviewCommentId,
-              "> 🐙 **Octopus Review** — Repository indexing is in progress.\n>\n> This review has been re-queued and will start automatically once indexing completes.",
-            );
-          }
-          outcomeDeferred = true;
-          await deferReviewForRepository(pullRequestId, pr.headSha, pr.reviewRequestVersion);
+          await deferForIndexing();
           return;
         } else {
           // Peer failed -- attempt conditional reclaim
@@ -1015,6 +1018,9 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
             shouldRunIndexing = true;
           } else if (decision.action === "skip-to-review") {
             console.log(`[reviewer] Repository ${repo.fullName} indexing resolved by peer, continuing with review`);
+          } else if (decision.action === "defer-review") {
+            await deferForIndexing();
+            return;
           } else {
             console.error(`[reviewer] Repository ${repo.fullName} ${decision.reason}`);
             const failed = await updateCurrentReview(pr.id, pr.headSha, pr.reviewRequestVersion, { status: "failed" });
