@@ -208,11 +208,12 @@ await assert.rejects(() => indexRepository({ repoId: "repo-1", indexAttemptId: "
 
 const sentryEvents: unknown[] = [];
 mock.module("@sentry/nextjs", () => ({ captureEvent: (event: unknown) => { sentryEvents.push(event); return "e".repeat(32); } }));
-const indexRow = { indexStatus: "indexing", indexAttemptId: "attempt-1", indexRetryAfter: null as Date | null };
-mock.module("@octopus/db", () => ({ prisma: { repository: {
+const indexRow = { indexStatus: "indexing", indexAttemptId: "attempt-1", indexRetryAfter: null as Date | null, indexRetryInstallationId: null as number | null };
+const indexDb = { repository: {
   findUniqueOrThrow: async () => ({ ...indexRow }),
-  updateMany: async ({ data }: { data: { indexStatus: string } }) => { Object.assign(indexRow, data); return { count: 1 }; },
-} } }));
+  updateMany: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(indexRow, data); return { count: 1 }; },
+}, $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(indexDb) };
+mock.module("@octopus/db", () => ({ prisma: indexDb }));
 const { runRepositoryIndex, isIndexingCancelled } = await import("../../repository-index-completion");
 const { reportBackgroundFailure } = await import("../../background-failure");
 reset();
@@ -233,13 +234,13 @@ try {
 assert.equal((sentryEvents.at(-1) as { tags: { failure_code: string } }).tags.failure_code, "http_451");
 assert.ok(!JSON.stringify(sentryEvents.at(-1)).includes("private upstream details"));
 const failureStart = Date.now();
-await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run, undefined, { deferTreeRestriction: true }), /Failed to fetch tree: 451/);
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run, undefined, { installationId: 123 }), /Failed to fetch tree: 451/);
 assert.equal(indexRow.indexStatus, "failed");
 assert.ok(indexRow.indexRetryAfter instanceof Date, "tree 451 should defer automatic retry");
 assert.ok(indexRow.indexRetryAfter.getTime() >= failureStart + 6 * 60 * 60_000);
 reset(); indexRow.indexStatus = "indexing";
 responses.set("/git/trees/main?recursive=1", [500, {}]);
-await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run, undefined, { deferTreeRestriction: true }), /Failed to fetch tree: 500/);
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run, undefined, { installationId: 123 }), /Failed to fetch tree: 500/);
 assert.equal(indexRow.indexRetryAfter, null, "other failures must not retain a tree-451 cooldown");
 const retained = new Date(Date.now() + 60_000);
 indexRow.indexStatus = "indexing"; indexRow.indexRetryAfter = retained;
@@ -247,7 +248,7 @@ await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run), /Fail
 assert.equal(indexRow.indexRetryAfter, retained, "independent credentials must preserve the installation cooldown");
 indexRow.indexStatus = "indexing";
 const cancelledAttempt = new AbortController();
-await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", async () => { cancelledAttempt.abort(); throw cancelledAttempt.signal.reason; }, cancelledAttempt.signal, { deferTreeRestriction: true }));
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", async () => { cancelledAttempt.abort(); throw cancelledAttempt.signal.reason; }, cancelledAttempt.signal, { installationId: 123 }));
 assert.equal(indexRow.indexStatus, "pending");
 assert.equal(indexRow.indexRetryAfter, retained, "cancellation must preserve the installation cooldown");
 for (const boundary of ["before-embedding", "after-embedding"]) {

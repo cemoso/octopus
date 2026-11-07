@@ -9,6 +9,7 @@ const row = {
   installationId: 123, indexStatus: "pending", totalFiles: 0,
   indexAttemptId: null as string | null, indexedAt: null as Date | null, firstIndexedAt: null as Date | null,
   indexRetryAfter: null as Date | null,
+  indexRetryInstallationId: null as number | null,
   organization: { githubInstallationId: 123 as number | null },
 };
 let currentRow: typeof row | null = row;
@@ -42,7 +43,7 @@ mock.module("@/lib/indexing-abort", () => ({
   clearAbortController: () => {},
 }));
 const update = async (args: { where: { id?: string; indexStatus?: string; indexAttemptId?: string; OR?: unknown[] }; data: Record<string, unknown> }) => {
-  (transactionActive ? writes : claims).push(args);
+  if ("indexStatus" in args.data) (transactionActive && args.data.indexStatus === "indexed" ? writes : claims).push(args);
   if (!claimCount || !currentRow || (args.where.id && args.where.id !== currentRow.id)
     || (typeof args.where.indexStatus === "string" && args.where.indexStatus !== currentRow.indexStatus)
     || (args.where.indexAttemptId !== undefined && args.where.indexAttemptId !== currentRow.indexAttemptId)) return { count: 0 };
@@ -51,6 +52,7 @@ const update = async (args: { where: { id?: string; indexStatus?: string; indexA
   return { count: 1 };
 };
 const db = {
+  organization: { findUnique: async () => ({ githubInstallationId: 123 }) },
   $executeRaw: async (_strings: TemplateStringsArray, completedAt: Date) => {
     assert.ok(transactionActive);
     assert.ok(currentRow);

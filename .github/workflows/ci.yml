@@ -156,7 +156,7 @@ jobs:
           RUN_MARKETING_DB_TESTS: "1"
 
       - name: Test indexing completion and retry cooldown against PostgreSQL
-        run: bun test lib/__tests__/repository-index-completion.test.ts lib/__tests__/repository-index-451.db.test.ts
+        run: bun test lib/__tests__/repository-index-completion.test.ts lib/__tests__/repository-index-451.db.test.ts lib/__tests__/reviewer-cooldown.db.test.ts
         working-directory: apps/web
         env:
           RUN_FIRST_INDEX_DB_TESTS: "1"

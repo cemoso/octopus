@@ -5,8 +5,9 @@ import { GitHubTreeRestrictedError } from "@/lib/repository-tree-error";
 
 const TREE_RESTRICTION_RETRY_DELAY_MS = 6 * 60 * 60_000;
 
-export const treeRestrictionEligible = (now: Date): Prisma.RepositoryWhereInput => ({
-  OR: [{ provider: { not: "github" } }, { indexRetryAfter: null }, { indexRetryAfter: { lte: now } }],
+export const treeRestrictionEligible = (now: Date, installationId: number | null): Prisma.RepositoryWhereInput => installationId === null ? {} : ({
+  OR: [{ provider: { not: "github" } }, { indexRetryAfter: null }, { indexRetryAfter: { lte: now } },
+    { indexRetryInstallationId: null }, { indexRetryInstallationId: { not: installationId } }],
 });
 
 /** A replacement attempt or cancellation owns the row now. */
@@ -24,7 +25,7 @@ export async function runRepositoryIndex(
   indexAttemptId: string,
   work: () => Promise<IndexStats>,
   signal?: AbortSignal,
-  options?: { deferTreeRestriction?: boolean },
+  options?: { installationId?: number },
 ): Promise<IndexStats> {
   const where = { id: repositoryId, indexStatus: "indexing", indexAttemptId };
   try {
@@ -45,7 +46,6 @@ export async function runRepositoryIndex(
       signal?.throwIfAborted();
       const saved = await tx.repository.updateMany({ where, data: {
         indexStatus: "indexed",
-        ...(options?.deferTreeRestriction ? { indexRetryAfter: null } : {}),
         activeIndexGeneration: indexAttemptId,
         totalFiles: stats.totalFiles, indexedFiles: stats.indexedFiles,
         totalChunks: stats.totalChunks, totalVectors: stats.totalVectors,
@@ -55,6 +55,10 @@ export async function runRepositoryIndex(
         ...(stats.resolvedDefaultBranch ? { defaultBranch: stats.resolvedDefaultBranch } : {}),
       } });
       if (saved.count !== 1) throw new SupersededIndexError();
+      if (options?.installationId) await tx.repository.updateMany({
+        where: { id: repositoryId, indexStatus: "indexed", indexAttemptId, organization: { githubInstallationId: options.installationId } },
+        data: { indexRetryAfter: null, indexRetryInstallationId: null },
+      });
       signal?.throwIfAborted();
       // Empty snapshots are valid for reviewing a first PR, but deliver no
       // indexed content. Leave existing dates unchanged.
@@ -65,13 +69,23 @@ export async function runRepositoryIndex(
     return stats;
   } catch (error) {
     // Never let an expired worker overwrite its replacement's state.
-    const released = await prisma.repository.updateMany({ where, data: {
-      indexStatus: isIndexingCancelled(signal) ? "pending" : "failed",
-      ...(options?.deferTreeRestriction && !signal?.aborted
-        ? { indexRetryAfter: error instanceof GitHubTreeRestrictedError
-          ? new Date(Date.now() + TREE_RESTRICTION_RETRY_DELAY_MS) : null }
-        : {}),
-    } });
+    const released = await prisma.$transaction(async tx => {
+      const result = await tx.repository.updateMany({ where, data: {
+        indexStatus: isIndexingCancelled(signal) ? "pending" : "failed",
+      } });
+      if (result.count && options?.installationId && !signal?.aborted) {
+        const installationId = options.installationId;
+        const restriction = error instanceof GitHubTreeRestrictedError;
+        await tx.repository.updateMany({
+          where: { id: repositoryId, indexStatus: "failed", indexAttemptId,
+            organization: { githubInstallationId: installationId } },
+          data: restriction
+            ? { indexRetryAfter: new Date(Date.now() + TREE_RESTRICTION_RETRY_DELAY_MS), indexRetryInstallationId: installationId }
+            : { indexRetryAfter: null, indexRetryInstallationId: null },
+        });
+      }
+      return result;
+    });
     if (!released.count) throw new SupersededIndexError();
     signal?.throwIfAborted();
     throw error;

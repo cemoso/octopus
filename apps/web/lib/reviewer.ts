@@ -963,7 +963,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
       // If another process is already indexing, wait for it to finish instead of starting a parallel index.
       const indexAttemptId = crypto.randomUUID();
       const claimResult = await prisma.repository.updateMany({
-        where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] }, ...treeRestrictionEligible(new Date()) },
+        where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] }, ...treeRestrictionEligible(new Date(), installationId ?? null) },
         data: { indexStatus: "indexing", indexAttemptId },
       });
       let shouldRunIndexing = claimResult.count > 0;
@@ -999,15 +999,15 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
         } else {
           // Peer failed -- attempt conditional reclaim
           const reclaimed = await prisma.repository.updateMany({
-            where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] }, ...treeRestrictionEligible(new Date()) },
+            where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] }, ...treeRestrictionEligible(new Date(), installationId ?? null) },
             data: { indexStatus: "indexing", indexAttemptId },
           });
           let finalCheckStatus: string | null = null;
           let restrictionDeferred = false;
           if (reclaimed.count === 0) {
-            const finalCheck = await prisma.repository.findUnique({ where: { id: repo.id }, select: { indexStatus: true, provider: true, indexRetryAfter: true } });
+            const finalCheck = await prisma.repository.findUnique({ where: { id: repo.id }, select: { indexStatus: true, provider: true, indexRetryAfter: true, indexRetryInstallationId: true } });
             finalCheckStatus = finalCheck?.indexStatus ?? null;
-            restrictionDeferred = finalCheck?.provider === "github" && !!finalCheck.indexRetryAfter && finalCheck.indexRetryAfter.getTime() > Date.now();
+            restrictionDeferred = finalCheck?.provider === "github" && installationId != null && finalCheck.indexRetryInstallationId === installationId && !!finalCheck.indexRetryAfter && finalCheck.indexRetryAfter.getTime() > Date.now();
           }
           const decision = resolveIndexClaimWait(currentStatus, reclaimed.count, finalCheckStatus);
           if (decision.action === "run-indexing") {
@@ -1017,14 +1017,30 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
             console.log(`[reviewer] Repository ${repo.fullName} indexing resolved by peer, continuing with review`);
           } else {
             console.error(`[reviewer] Repository ${repo.fullName} ${decision.reason}`);
-            await updateCurrentReview(pr.id, pr.headSha, pr.reviewRequestVersion, { status: "failed" });
+            const failed = await updateCurrentReview(pr.id, pr.headSha, pr.reviewRequestVersion, { status: "failed" });
+            if (!failed.count) {
+              if (checkRunId && isGitHub && installationId) {
+                await ghUpdateCheckRun(installationId, owner, repoName, checkRunId, "neutral", {
+                  title: "Review superseded", summary: "A newer review request replaced this attempt.",
+                }).catch((e) => console.error("[reviewer] Failed to update superseded check run:", e));
+              }
+              return;
+            }
             if (reviewCommentId) {
               await providerUpdateComment(
                 reviewCommentId,
                 restrictionDeferred
-                  ? `> 🐙 **Octopus Review** — ${TREE_RESTRICTION_MESSAGE}`
+                  ? `> 🐙 **Octopus Review** — ${TREE_RESTRICTION_MESSAGE}\n\n> Once indexing succeeds, re-trigger this review by commenting \`@octopusreview\`.`
                   : "> 🐙 **Octopus Review** — Repository indexing failed and could not be recovered.\n>\n> Please re-trigger the review by commenting `@octopusreview`.",
               );
+            }
+            if (checkRunId && isGitHub && installationId) {
+              await ghUpdateCheckRun(installationId, owner, repoName, checkRunId, "failure", {
+                title: "Repository indexing failed",
+                summary: restrictionDeferred
+                  ? `${TREE_RESTRICTION_MESSAGE} Once indexing succeeds, re-trigger the review by commenting @octopusreview.`
+                  : "Repository indexing failed. Re-trigger the review after indexing succeeds.",
+              }).catch((e) => console.error("[reviewer] Failed to update check run:", e));
             }
             // Terminal — the review won't run, so finalize the GitLab status
             // (leaving "running" would strand the MR).
@@ -1075,7 +1091,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
             { repoId: repo.id, indexAttemptId }, repo.fullName, repo.defaultBranch, installationId ?? 0,
             emitIndexLog, undefined, repo.provider, repo.organizationId,
           );
-        }, undefined, { deferTreeRestriction: isGitHub }).catch(async error => {
+        }, undefined, { installationId: isGitHub ? installationId ?? undefined : undefined }).catch(async error => {
           if (!(error instanceof SupersededIndexError)) {
             void notifyRepositoryIndex(indexChannel, repo.id);
           }

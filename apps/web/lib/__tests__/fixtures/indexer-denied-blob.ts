@@ -5,10 +5,11 @@ const scenario = process.argv[2];
 assert.ok(["denied-403", "denied-429", "mixed-denial", "recovered", "normal", "other-error", "retry-server-error", "completion-denied", "abort", "slow-sibling"].includes(scenario));
 mock.module("server-only", () => ({}));
 let indexStatus = "indexing";
-mock.module("@octopus/db", () => ({ prisma: { repository: {
+const db = { repository: {
   findUniqueOrThrow: async () => ({ indexStatus, indexAttemptId: "synthetic" }),
   updateMany: async ({ data }: { data: { indexStatus: string } }) => { indexStatus = data.indexStatus; return { count: 1 }; },
-} } }));
+}, $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db) };
+mock.module("@octopus/db", () => ({ prisma: db }));
 mock.module("@/lib/github", () => ({ getInstallationToken: async () => "synthetic", getRepositoryDetails: async () => null, getFileContent: async () => null }));
 mock.module("@/lib/bitbucket", () => ({}));
 mock.module("@/lib/gitlab", () => ({}));

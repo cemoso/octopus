@@ -17,8 +17,8 @@ export interface RepositoryIndexJob {
 
 // Revisit empty snapshots as well: a repository can be discovered before its
 // first push. Failed enqueues remain eligible for the next discovery sweep.
-const needsIndex = (now: Date) => ({
-  AND: [treeRestrictionEligible(now)],
+const needsIndex = (now: Date, installationId: number | null) => ({
+  AND: [treeRestrictionEligible(now, installationId)],
   OR: [
     { indexStatus: "pending" },
     { indexStatus: "failed" },
@@ -26,13 +26,15 @@ const needsIndex = (now: Date) => ({
   ],
 });
 
-function treeRetryDeferred(repo: { provider: string; indexStatus: string; indexRetryAfter: Date | null }): boolean {
-  return repo.provider === "github" && repo.indexStatus !== "indexed" && !!repo.indexRetryAfter && repo.indexRetryAfter.getTime() > Date.now();
+function treeRetryDeferred(repo: { provider: string; indexStatus: string; indexRetryAfter: Date | null; indexRetryInstallationId: number | null }, installationId: number | null): boolean {
+  return repo.provider === "github" && ["pending", "failed"].includes(repo.indexStatus) && installationId !== null && repo.indexRetryInstallationId === installationId && !!repo.indexRetryAfter && repo.indexRetryAfter.getTime() > Date.now();
 }
 
 export async function enqueuePendingRepositoryIndexes(organizationId: string, repositoryId?: string, providers?: string[]) {
   const eligibleProviders = ["github", "forgejo"].filter(provider => !providers || providers.includes(provider));
   if (!eligibleProviders.length) return;
+  const org = await prisma.organization.findUnique({ where: { id: organizationId }, select: { githubInstallationId: true } });
+  if (!org) return;
   const repos = await prisma.repository.findMany({
     where: {
       organizationId,
@@ -41,7 +43,7 @@ export async function enqueuePendingRepositoryIndexes(organizationId: string, re
       isActive: true,
       dismissedAt: null,
       organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
-      ...needsIndex(new Date()),
+      ...needsIndex(new Date(), org.githubInstallationId),
     },
     select: { id: true },
     orderBy: { indexedAt: { sort: "asc", nulls: "first" } },
@@ -75,20 +77,23 @@ export async function processRepositoryIndex(job: RepositoryIndexJob, retry?: Re
   });
   const installationId = repo?.organization.githubInstallationId;
   if (!repo || (repo.provider === "github" && (!installationId || (repo.installationId && repo.installationId !== installationId)))) return;
-  if (treeRetryDeferred(repo)) throw new GitHubTreeRestrictedError();
+  if (treeRetryDeferred(repo, installationId ?? null)) throw new GitHubTreeRestrictedError();
 
   // Share the reviewer's claim so a first PR and discovery cannot both index.
   const indexAttemptId = randomUUID();
   const claim = await prisma.repository.updateMany({
-    where: { id: repo.id, organizationId: job.organizationId, ...needsIndex(new Date()) },
+    where: { id: repo.id, organizationId: job.organizationId,
+      ...(repo.provider === "github" ? { organization: { githubInstallationId: installationId } } : {}),
+      ...needsIndex(new Date(), installationId ?? null) },
     data: { indexStatus: "indexing", indexAttemptId },
   });
   if (!claim.count) {
     const current = await prisma.repository.findFirst({
       where: { id: repo.id, organizationId: job.organizationId },
-      select: { provider: true, indexStatus: true, indexRetryAfter: true },
+      select: { provider: true, indexStatus: true, indexRetryAfter: true, indexRetryInstallationId: true,
+        organization: { select: { githubInstallationId: true } } },
     });
-    if (current && treeRetryDeferred(current)) throw new GitHubTreeRestrictedError();
+    if (current && treeRetryDeferred(current, current.organization.githubInstallationId)) throw new GitHubTreeRestrictedError();
     return;
   }
 
@@ -109,7 +114,7 @@ export async function processRepositoryIndex(job: RepositoryIndexJob, retry?: Re
         { repoId: repo.id, indexAttemptId }, repo.fullName, repo.defaultBranch, installationId ?? 0, log,
         controller.signal, repo.provider, job.organizationId,
       );
-    }, controller.signal, { deferTreeRestriction: repo.provider === "github" });
+    }, controller.signal, { installationId: repo.provider === "github" ? installationId ?? undefined : undefined });
     log(`Indexing complete: ${stats.indexedFiles} files, ${stats.totalVectors} vectors`, "success");
     void notifyRepositoryIndex(channel, repo.id);
   } catch (error) {
