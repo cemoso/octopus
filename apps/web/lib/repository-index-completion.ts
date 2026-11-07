@@ -28,13 +28,20 @@ export async function runRepositoryIndex(
   options?: { installationId?: number },
 ): Promise<IndexStats> {
   const where = { id: repositoryId, indexStatus: "indexing", indexAttemptId };
+  let binding: Prisma.RepositoryWhereInput | undefined;
   try {
     const attempt = await prisma.repository.findUniqueOrThrow({
-      where: { id: repositoryId }, select: { indexStatus: true, indexAttemptId: true },
+      where: { id: repositoryId }, select: { indexStatus: true, indexAttemptId: true, provider: true,
+        organizationId: true, installationId: true, organization: { select: { githubInstallationId: true } } },
     });
     if (attempt.indexStatus !== "indexing" || attempt.indexAttemptId !== indexAttemptId) {
       throw new SupersededIndexError();
     }
+    binding = options?.installationId && attempt.provider === "github" &&
+      (attempt.installationId ?? attempt.organization.githubInstallationId) === options.installationId
+      ? { provider: "github", organizationId: attempt.organizationId, installationId: attempt.installationId,
+        organization: { githubInstallationId: attempt.organization.githubInstallationId } }
+      : undefined;
     signal?.throwIfAborted();
     const stats = await work();
     signal?.throwIfAborted();
@@ -55,8 +62,8 @@ export async function runRepositoryIndex(
         ...(stats.resolvedDefaultBranch ? { defaultBranch: stats.resolvedDefaultBranch } : {}),
       } });
       if (saved.count !== 1) throw new SupersededIndexError();
-      if (options?.installationId) await tx.repository.updateMany({
-        where: { id: repositoryId, indexStatus: "indexed", indexAttemptId, organization: { githubInstallationId: options.installationId } },
+      if (binding) await tx.repository.updateMany({
+        where: { id: repositoryId, indexStatus: "indexed", indexAttemptId, ...binding },
         data: { indexRetryAfter: null, indexRetryInstallationId: null },
       });
       signal?.throwIfAborted();
@@ -73,12 +80,11 @@ export async function runRepositoryIndex(
       const result = await tx.repository.updateMany({ where, data: {
         indexStatus: isIndexingCancelled(signal) ? "pending" : "failed",
       } });
-      if (result.count && options?.installationId && !signal?.aborted) {
+      if (result.count && binding && options?.installationId && !signal?.aborted) {
         const installationId = options.installationId;
         const restriction = error instanceof GitHubTreeRestrictedError;
         await tx.repository.updateMany({
-          where: { id: repositoryId, indexStatus: "failed", indexAttemptId,
-            organization: { githubInstallationId: installationId } },
+          where: { id: repositoryId, indexStatus: "failed", indexAttemptId, ...binding },
           data: restriction
             ? { indexRetryAfter: new Date(Date.now() + TREE_RESTRICTION_RETRY_DELAY_MS), indexRetryInstallationId: installationId }
             : { indexRetryAfter: null, indexRetryInstallationId: null },

@@ -208,7 +208,7 @@ await assert.rejects(() => indexRepository({ repoId: "repo-1", indexAttemptId: "
 
 const sentryEvents: unknown[] = [];
 mock.module("@sentry/nextjs", () => ({ captureEvent: (event: unknown) => { sentryEvents.push(event); return "e".repeat(32); } }));
-const indexRow = { indexStatus: "indexing", indexAttemptId: "attempt-1", indexRetryAfter: null as Date | null, indexRetryInstallationId: null as number | null };
+const indexRow = { indexStatus: "indexing", indexAttemptId: "attempt-1", provider: "github", organizationId: "org-1", installationId: 123, organization: { githubInstallationId: 123 }, indexRetryAfter: null as Date | null, indexRetryInstallationId: null as number | null };
 const indexDb = { repository: {
   findUniqueOrThrow: async () => ({ ...indexRow }),
   updateMany: async ({ data }: { data: Record<string, unknown> }) => { Object.assign(indexRow, data); return { count: 1 }; },

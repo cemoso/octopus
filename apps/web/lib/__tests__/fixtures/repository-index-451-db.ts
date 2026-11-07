@@ -160,6 +160,49 @@ try {
   assert.equal(row.indexStatus, "indexed");
   assert.equal(row.indexRetryAfter?.getTime(), retained.getTime());
   const replacementInstallationId = installationId + 1;
+  for (const repoInstallationId of [installationId, null]) {
+    const credential = repoInstallationId ?? replacementInstallationId;
+    await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: replacementInstallationId } });
+    for (const outcome of ["restriction", "other", "success"] as const) {
+      const attemptId = randomUUID();
+      await prisma.repository.update({ where: { id: repo.id }, data: { provider: "github", installationId: repoInstallationId, indexStatus: "indexing", indexAttemptId: attemptId, indexRetryAfter: retained, indexRetryInstallationId: credential } });
+      const work = async () => {
+        if (outcome === "restriction") throw new GitHubTreeRestrictedError();
+        if (outcome === "other") throw new Error("other failure");
+        return stats;
+      };
+      if (outcome === "success") await runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId: credential });
+      else await assert.rejects(() => runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId: credential }));
+      row = await prisma.repository.findUniqueOrThrow({ where: { id: repo.id } });
+      assert.equal(row.indexStatus, outcome === "success" ? "indexed" : "failed");
+      if (outcome === "restriction") {
+        assert.equal(row.indexRetryInstallationId, credential);
+        assert.ok(row.indexRetryAfter && row.indexRetryAfter.getTime() > retained.getTime());
+      } else {
+        assert.equal(row.indexRetryAfter, null);
+        assert.equal(row.indexRetryInstallationId, null);
+      }
+    }
+  }
+  for (const changedBinding of ["organization", "repository"] as const) {
+    for (const outcome of ["restriction", "other", "success"] as const) {
+      const attemptId = randomUUID();
+      await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: replacementInstallationId } });
+      await prisma.repository.update({ where: { id: repo.id }, data: { installationId, indexStatus: "indexing", indexAttemptId: attemptId, indexRetryAfter: retained, indexRetryInstallationId: replacementInstallationId } });
+      const work = async () => {
+        if (changedBinding === "organization") await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: null } });
+        else await prisma.repository.update({ where: { id: repo.id }, data: { installationId: replacementInstallationId } });
+        if (outcome === "restriction") throw new GitHubTreeRestrictedError();
+        if (outcome === "other") throw new Error("other failure");
+        return stats;
+      };
+      if (outcome === "success") await runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId });
+      else await assert.rejects(() => runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId }));
+      row = await prisma.repository.findUniqueOrThrow({ where: { id: repo.id } });
+      assert.equal(row.indexRetryAfter?.getTime(), retained.getTime(), `${changedBinding} change must preserve the cooldown after ${outcome}`);
+      assert.equal(row.indexRetryInstallationId, replacementInstallationId);
+    }
+  }
   await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: replacementInstallationId } });
   await prisma.repository.update({ where: { id: repo.id }, data: { provider: "github", installationId: replacementInstallationId, indexStatus: "failed", indexRetryAfter: retained, indexRetryInstallationId: installationId } });
   queued.length = 0;
