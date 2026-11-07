@@ -1,7 +1,8 @@
 import "server-only";
 import { reportBackgroundFailure, type FailureStage } from "./background-failure";
 import { ReviewOutcomeRecorder, startReviewOutcome, deferReviewOutcome } from "@/lib/review-attempt-outcome";
-import { runRepositoryIndex, SupersededIndexError } from "@/lib/repository-index-completion";
+import { runRepositoryIndex, SupersededIndexError, treeRestrictionEligible } from "@/lib/repository-index-completion";
+import { TREE_RESTRICTION_MESSAGE } from "@/lib/repository-tree-error";
 import crypto from "node:crypto";
 import { prisma, type Prisma } from "@octopus/db";
 import { pubby } from "@/lib/pubby";
@@ -962,7 +963,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
       // If another process is already indexing, wait for it to finish instead of starting a parallel index.
       const indexAttemptId = crypto.randomUUID();
       const claimResult = await prisma.repository.updateMany({
-        where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] } },
+        where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] }, ...treeRestrictionEligible(new Date()) },
         data: { indexStatus: "indexing", indexAttemptId },
       });
       let shouldRunIndexing = claimResult.count > 0;
@@ -998,13 +999,15 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
         } else {
           // Peer failed -- attempt conditional reclaim
           const reclaimed = await prisma.repository.updateMany({
-            where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] } },
+            where: { id: repo.id, indexStatus: { notIn: ["indexed", "indexing"] }, ...treeRestrictionEligible(new Date()) },
             data: { indexStatus: "indexing", indexAttemptId },
           });
           let finalCheckStatus: string | null = null;
+          let restrictionDeferred = false;
           if (reclaimed.count === 0) {
-            const finalCheck = await prisma.repository.findUnique({ where: { id: repo.id }, select: { indexStatus: true } });
+            const finalCheck = await prisma.repository.findUnique({ where: { id: repo.id }, select: { indexStatus: true, provider: true, indexRetryAfter: true } });
             finalCheckStatus = finalCheck?.indexStatus ?? null;
+            restrictionDeferred = finalCheck?.provider === "github" && !!finalCheck.indexRetryAfter && finalCheck.indexRetryAfter.getTime() > Date.now();
           }
           const decision = resolveIndexClaimWait(currentStatus, reclaimed.count, finalCheckStatus);
           if (decision.action === "run-indexing") {
@@ -1018,7 +1021,9 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
             if (reviewCommentId) {
               await providerUpdateComment(
                 reviewCommentId,
-                "> 🐙 **Octopus Review** — Repository indexing failed and could not be recovered.\n>\n> Please re-trigger the review by commenting `@octopusreview`.",
+                restrictionDeferred
+                  ? `> 🐙 **Octopus Review** — ${TREE_RESTRICTION_MESSAGE}`
+                  : "> 🐙 **Octopus Review** — Repository indexing failed and could not be recovered.\n>\n> Please re-trigger the review by commenting `@octopusreview`.",
               );
             }
             // Terminal — the review won't run, so finalize the GitLab status
@@ -1070,7 +1075,7 @@ async function processReviewInternal(pullRequestId: string, executionWindow?: Re
             { repoId: repo.id, indexAttemptId }, repo.fullName, repo.defaultBranch, installationId ?? 0,
             emitIndexLog, undefined, repo.provider, repo.organizationId,
           );
-        }).catch(async error => {
+        }, undefined, { deferTreeRestriction: isGitHub }).catch(async error => {
           if (!(error instanceof SupersededIndexError)) {
             void notifyRepositoryIndex(indexChannel, repo.id);
           }

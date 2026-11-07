@@ -103,7 +103,7 @@ assert.equal(queries.length, 0, "invalid jobs must never issue an unscoped query
 
 await enqueuePendingRepositoryIndexes("org-1");
 assert.deepEqual(queued, [["index-repository", job, { singletonKey: "repo-1", singletonSeconds: 60 }]]);
-const { OR: _indexEligibility, ...queueScope } = queries[0].where;
+const { OR: _indexEligibility, AND: _treeEligibility, ...queueScope } = queries[0].where;
 assert.deepEqual(queueScope, {
   organizationId: "org-1", provider: { in: ["github", "forgejo"] }, isActive: true, dismissedAt: null,
   organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true },
@@ -212,6 +212,9 @@ const callsAfterDenial = indexCalls.length;
 await assert.rejects(() => processRepositoryIndex(job, { retryCount: 1, retryLimit: 2 }), GitHubTreeRestrictedError);
 await assert.rejects(() => processRepositoryIndex(job, { retryCount: 2, retryLimit: 2 }), GitHubTreeRestrictedError);
 assert.equal(indexCalls.length, callsAfterDenial, "queue retries must not contact GitHub during the cooldown");
+currentRow.indexStatus = "pending";
+await assert.rejects(() => processRepositoryIndex(job), GitHubTreeRestrictedError);
+assert.equal(indexCalls.length, callsAfterDenial, "a cancelled manual attempt must not bypass the cooldown");
 currentRow.indexRetryAfter = new Date(Date.now() - 1);
 indexFailure = null;
 await processRepositoryIndex(job);

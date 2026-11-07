@@ -239,8 +239,17 @@ assert.ok(indexRow.indexRetryAfter instanceof Date, "tree 451 should defer autom
 assert.ok(indexRow.indexRetryAfter.getTime() >= failureStart + 6 * 60 * 60_000);
 reset(); indexRow.indexStatus = "indexing";
 responses.set("/git/trees/main?recursive=1", [500, {}]);
-await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run), /Failed to fetch tree: 500/);
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run, undefined, { deferTreeRestriction: true }), /Failed to fetch tree: 500/);
 assert.equal(indexRow.indexRetryAfter, null, "other failures must not retain a tree-451 cooldown");
+const retained = new Date(Date.now() + 60_000);
+indexRow.indexStatus = "indexing"; indexRow.indexRetryAfter = retained;
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", run), /Failed to fetch tree: 500/);
+assert.equal(indexRow.indexRetryAfter, retained, "independent credentials must preserve the installation cooldown");
+indexRow.indexStatus = "indexing";
+const cancelledAttempt = new AbortController();
+await assert.rejects(() => runRepositoryIndex("repo-1", "attempt-1", async () => { cancelledAttempt.abort(); throw cancelledAttempt.signal.reason; }, cancelledAttempt.signal, { deferTreeRestriction: true }));
+assert.equal(indexRow.indexStatus, "pending");
+assert.equal(indexRow.indexRetryAfter, retained, "cancellation must preserve the installation cooldown");
 for (const boundary of ["before-embedding", "after-embedding"]) {
   for (const timeout of [false, true]) {
     reset(); suppliedToken = undefined; indexRow.indexStatus = "indexing";

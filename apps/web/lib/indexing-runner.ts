@@ -28,7 +28,7 @@ export async function runIndexingInBackground(
         { repoId, indexAttemptId }, fullName, defaultBranch, installationId, emitLog,
         abortController.signal, provider, organizationId,
       );
-    }, abortController.signal);
+    }, abortController.signal, { deferTreeRestriction: provider === "github" });
 
     emitLog(`Indexing completed for ${fullName}`, "success");
 

@@ -1,7 +1,7 @@
 import "server-only";
 import { reportBackgroundFailure, type RetryState } from "./background-failure";
 import { randomUUID } from "node:crypto";
-import { runRepositoryIndex, SupersededIndexError, isIndexingCancelled } from "@/lib/repository-index-completion";
+import { runRepositoryIndex, SupersededIndexError, isIndexingCancelled, treeRestrictionEligible } from "@/lib/repository-index-completion";
 import { prisma } from "@octopus/db";
 import { enqueue } from "@/lib/queue";
 import type { LogLevel } from "@/lib/indexer";
@@ -18,15 +18,16 @@ export interface RepositoryIndexJob {
 // Revisit empty snapshots as well: a repository can be discovered before its
 // first push. Failed enqueues remain eligible for the next discovery sweep.
 const needsIndex = (now: Date) => ({
+  AND: [treeRestrictionEligible(now)],
   OR: [
     { indexStatus: "pending" },
-    { indexStatus: "failed", OR: [{ provider: { not: "github" } }, { indexRetryAfter: null }, { indexRetryAfter: { lte: now } }] },
+    { indexStatus: "failed" },
     { indexStatus: "indexed", totalFiles: 0 },
   ],
 });
 
 function treeRetryDeferred(repo: { provider: string; indexStatus: string; indexRetryAfter: Date | null }): boolean {
-  return repo.provider === "github" && repo.indexStatus === "failed" && !!repo.indexRetryAfter && repo.indexRetryAfter.getTime() > Date.now();
+  return repo.provider === "github" && repo.indexStatus !== "indexed" && !!repo.indexRetryAfter && repo.indexRetryAfter.getTime() > Date.now();
 }
 
 export async function enqueuePendingRepositoryIndexes(organizationId: string, repositoryId?: string, providers?: string[]) {

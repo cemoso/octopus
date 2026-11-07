@@ -5,6 +5,10 @@ import { GitHubTreeRestrictedError } from "@/lib/repository-tree-error";
 
 const TREE_RESTRICTION_RETRY_DELAY_MS = 6 * 60 * 60_000;
 
+export const treeRestrictionEligible = (now: Date): Prisma.RepositoryWhereInput => ({
+  OR: [{ provider: { not: "github" } }, { indexRetryAfter: null }, { indexRetryAfter: { lte: now } }],
+});
+
 /** A replacement attempt or cancellation owns the row now. */
 export class SupersededIndexError extends Error {
   constructor() { super("Indexing attempt is no longer current"); }
@@ -41,7 +45,7 @@ export async function runRepositoryIndex(
       signal?.throwIfAborted();
       const saved = await tx.repository.updateMany({ where, data: {
         indexStatus: "indexed",
-        indexRetryAfter: null,
+        ...(options?.deferTreeRestriction ? { indexRetryAfter: null } : {}),
         activeIndexGeneration: indexAttemptId,
         totalFiles: stats.totalFiles, indexedFiles: stats.indexedFiles,
         totalChunks: stats.totalChunks, totalVectors: stats.totalVectors,
@@ -63,9 +67,10 @@ export async function runRepositoryIndex(
     // Never let an expired worker overwrite its replacement's state.
     const released = await prisma.repository.updateMany({ where, data: {
       indexStatus: isIndexingCancelled(signal) ? "pending" : "failed",
-      ...(!signal?.aborted && error instanceof GitHubTreeRestrictedError
-        ? options?.deferTreeRestriction ? { indexRetryAfter: new Date(Date.now() + TREE_RESTRICTION_RETRY_DELAY_MS) } : {}
-        : { indexRetryAfter: null }),
+      ...(options?.deferTreeRestriction && !signal?.aborted
+        ? { indexRetryAfter: error instanceof GitHubTreeRestrictedError
+          ? new Date(Date.now() + TREE_RESTRICTION_RETRY_DELAY_MS) : null }
+        : {}),
     } });
     if (!released.count) throw new SupersededIndexError();
     signal?.throwIfAborted();
