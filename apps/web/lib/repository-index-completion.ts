@@ -40,7 +40,7 @@ export async function runRepositoryIndex(
     binding = options?.installationId && attempt.provider === "github" &&
       (attempt.installationId ?? attempt.organization.githubInstallationId) === options.installationId
       ? { provider: "github", organizationId: attempt.organizationId, installationId: attempt.installationId,
-        organization: { githubInstallationId: attempt.organization.githubInstallationId } }
+        ...(attempt.installationId === null ? { organization: { githubInstallationId: attempt.organization.githubInstallationId } } : {}) }
       : undefined;
     signal?.throwIfAborted();
     const stats = await work();

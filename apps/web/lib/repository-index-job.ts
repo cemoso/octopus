@@ -77,23 +77,29 @@ export async function processRepositoryIndex(job: RepositoryIndexJob, retry?: Re
   });
   const installationId = repo?.organization.githubInstallationId;
   if (!repo || (repo.provider === "github" && (!installationId || (repo.installationId && repo.installationId !== installationId)))) return;
-  if (treeRetryDeferred(repo, installationId ?? null)) throw new GitHubTreeRestrictedError();
 
   // Share the reviewer's claim so a first PR and discovery cannot both index.
   const indexAttemptId = randomUUID();
   const claim = await prisma.repository.updateMany({
-    where: { id: repo.id, organizationId: job.organizationId,
-      ...(repo.provider === "github" ? { organization: { githubInstallationId: installationId } } : {}),
+    where: { id: repo.id, organizationId: job.organizationId, provider: repo.provider,
+      isActive: true, dismissedAt: null, installationId: repo.installationId,
+      organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true,
+        ...(repo.provider === "github" ? { githubInstallationId: installationId } : {}) },
       ...needsIndex(new Date(), installationId ?? null) },
     data: { indexStatus: "indexing", indexAttemptId },
   });
   if (!claim.count) {
-    const current = await prisma.repository.findFirst({
-      where: { id: repo.id, organizationId: job.organizationId },
-      select: { provider: true, indexStatus: true, indexRetryAfter: true, indexRetryInstallationId: true,
-        organization: { select: { githubInstallationId: true } } },
+    await prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT id FROM repositories WHERE id = ${repo.id} AND "organizationId" = ${job.organizationId} FOR UPDATE`;
+      const current = await tx.repository.findFirst({
+        where: { id: repo.id, organizationId: job.organizationId, provider: { in: ["github", "forgejo"] },
+          isActive: true, dismissedAt: null, organization: { deletedAt: null, bannedAt: null, autoDiscoverRepos: true } },
+        select: { provider: true, installationId: true, indexStatus: true, indexRetryAfter: true, indexRetryInstallationId: true,
+          organization: { select: { githubInstallationId: true } } },
+      });
+      if (current && (!current.installationId || current.installationId === current.organization.githubInstallationId) &&
+          treeRetryDeferred(current, current.organization.githubInstallationId)) throw new GitHubTreeRestrictedError();
     });
-    if (current && treeRetryDeferred(current, current.organization.githubInstallationId)) throw new GitHubTreeRestrictedError();
     return;
   }
 

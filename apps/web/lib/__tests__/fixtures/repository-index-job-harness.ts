@@ -42,17 +42,19 @@ mock.module("@/lib/indexing-abort", () => ({
   createAbortController: () => { controller = new AbortController(); return controller; },
   clearAbortController: () => {},
 }));
-const update = async (args: { where: { id?: string; indexStatus?: string; indexAttemptId?: string; OR?: unknown[] }; data: Record<string, unknown> }) => {
+const update = async (args: { where: { id?: string; indexStatus?: string; indexAttemptId?: string; OR?: unknown[]; AND?: unknown[] }; data: Record<string, unknown> }) => {
   if ("indexStatus" in args.data) (transactionActive && args.data.indexStatus === "indexed" ? writes : claims).push(args);
   if (!claimCount || !currentRow || (args.where.id && args.where.id !== currentRow.id)
     || (typeof args.where.indexStatus === "string" && args.where.indexStatus !== currentRow.indexStatus)
     || (args.where.indexAttemptId !== undefined && args.where.indexAttemptId !== currentRow.indexAttemptId)) return { count: 0 };
   if (args.where.OR && !(["pending", "failed"].includes(currentRow.indexStatus) || (currentRow.indexStatus === "indexed" && currentRow.totalFiles === 0))) return { count: 0 };
+  if (args.where.AND && currentRow.provider === "github" && currentRow.indexRetryInstallationId === currentRow.organization.githubInstallationId && currentRow.indexRetryAfter && currentRow.indexRetryAfter.getTime() > Date.now()) return { count: 0 };
   Object.assign(currentRow, args.data);
   return { count: 1 };
 };
 const db = {
   organization: { findUnique: async () => ({ githubInstallationId: 123 }) },
+  $queryRaw: async () => [],
   $executeRaw: async (_strings: TemplateStringsArray, completedAt: Date) => {
     assert.ok(transactionActive);
     assert.ok(currentRow);

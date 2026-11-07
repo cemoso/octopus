@@ -184,23 +184,34 @@ try {
       }
     }
   }
-  for (const changedBinding of ["organization", "repository"] as const) {
+  for (const changedBinding of ["legacy-organization", "fallback-organization", "repository"] as const) {
     for (const outcome of ["restriction", "other", "success"] as const) {
       const attemptId = randomUUID();
       await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: replacementInstallationId } });
-      await prisma.repository.update({ where: { id: repo.id }, data: { installationId, indexStatus: "indexing", indexAttemptId: attemptId, indexRetryAfter: retained, indexRetryInstallationId: replacementInstallationId } });
+      const credential = changedBinding === "fallback-organization" ? replacementInstallationId : installationId;
+      await prisma.repository.update({ where: { id: repo.id }, data: { installationId: changedBinding === "fallback-organization" ? null : installationId, indexStatus: "indexing", indexAttemptId: attemptId, indexRetryAfter: retained, indexRetryInstallationId: replacementInstallationId } });
       const work = async () => {
-        if (changedBinding === "organization") await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: null } });
+        if (changedBinding !== "repository") await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: null } });
         else await prisma.repository.update({ where: { id: repo.id }, data: { installationId: replacementInstallationId } });
         if (outcome === "restriction") throw new GitHubTreeRestrictedError();
         if (outcome === "other") throw new Error("other failure");
         return stats;
       };
-      if (outcome === "success") await runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId });
-      else await assert.rejects(() => runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId }));
+      if (outcome === "success") await runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId: credential });
+      else await assert.rejects(() => runRepositoryIndex(repo.id, attemptId, work, undefined, { installationId: credential }));
       row = await prisma.repository.findUniqueOrThrow({ where: { id: repo.id } });
-      assert.equal(row.indexRetryAfter?.getTime(), retained.getTime(), `${changedBinding} change must preserve the cooldown after ${outcome}`);
-      assert.equal(row.indexRetryInstallationId, replacementInstallationId);
+      if (changedBinding === "legacy-organization") {
+        if (outcome === "restriction") {
+          assert.equal(row.indexRetryInstallationId, credential);
+          assert.ok(row.indexRetryAfter && row.indexRetryAfter.getTime() > retained.getTime());
+        } else {
+          assert.equal(row.indexRetryAfter, null);
+          assert.equal(row.indexRetryInstallationId, null);
+        }
+      } else {
+        assert.equal(row.indexRetryAfter?.getTime(), retained.getTime(), `${changedBinding} change must preserve the cooldown after ${outcome}`);
+        assert.equal(row.indexRetryInstallationId, replacementInstallationId);
+      }
     }
   }
   await prisma.organization.update({ where: { id: org.id }, data: { githubInstallationId: replacementInstallationId } });
@@ -240,6 +251,46 @@ try {
   row = await prisma.repository.findUniqueOrThrow({ where: { id: repo.id } });
   assert.equal(row.indexRetryAfter?.getTime(), newerRestriction.getTime());
   assert.equal(row.indexRetryInstallationId, replacementInstallationId, "an old installation must not replace the new installation's marker");
+  await prisma.repository.update({ where: { id: repo.id }, data: { indexStatus: "failed", totalFiles: 1, indexRetryAfter: newerRestriction, indexRetryInstallationId: replacementInstallationId } });
+  let releaseManual!: () => void;
+  let manualLocked!: () => void;
+  const holdManual = new Promise<void>(resolve => { releaseManual = resolve; });
+  const readyManual = new Promise<void>(resolve => { manualLocked = resolve; });
+  const manual = prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM repositories WHERE id = ${repo.id} FOR UPDATE`;
+    await tx.repository.update({ where: { id: repo.id }, data: { indexStatus: "indexed", indexRetryAfter: null, indexRetryInstallationId: null } });
+    manualLocked();
+    await holdManual;
+  });
+  await readyManual;
+  let queueSettled = false;
+  const queuedDuringRecovery = processRepositoryIndex(data).then(() => undefined, error => error).finally(() => { queueSettled = true; });
+  await new Promise(resolve => setTimeout(resolve, 500));
+  const waitedForManual = !queueSettled;
+  releaseManual();
+  await manual;
+  const queueError = await queuedDuringRecovery;
+  assert.ok(waitedForManual, "a stale cooldown read must wait for the manual owner's state transition");
+  assert.equal(queueError, undefined, "successful manual recovery must not produce a synthetic 451");
+  await prisma.repository.update({ where: { id: repo.id }, data: { indexStatus: "pending", indexRetryAfter: null, indexRetryInstallationId: null } });
+  let releaseRemoval!: () => void;
+  let removalLocked!: () => void;
+  const holdRemoval = new Promise<void>(resolve => { releaseRemoval = resolve; });
+  const readyRemoval = new Promise<void>(resolve => { removalLocked = resolve; });
+  const removal = prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM repositories WHERE id = ${repo.id} FOR UPDATE`;
+    await tx.repository.update({ where: { id: repo.id }, data: { isActive: false } });
+    removalLocked();
+    await holdRemoval;
+  });
+  await readyRemoval;
+  const callsBeforeRemoval = calls;
+  const queuedDuringRemoval = processRepositoryIndex(data);
+  await new Promise(resolve => setTimeout(resolve, 500));
+  releaseRemoval();
+  await removal;
+  await queuedDuringRemoval;
+  assert.equal(calls, callsBeforeRemoval, "a queued job must not claim a repository removed during its initial read");
   console.log("Synthetic PostgreSQL and pg-boss cooldown checks passed");
 } finally {
   await boss.stop();
