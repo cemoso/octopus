@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.19] - 2026-11-14
+
+### Added
+
+- Each blog post now ends with links to up to three related posts.
+- Blog posts and comparison pages now show their own preview card when a link is shared, instead of one image for every page. A post with a cover image keeps it.
+
+### Changed
+
+- The homepage now opens by saying what Octopus is: AI code review for every pull request. The setup prompt is still on the first screen, with a button to copy it.
+
+### Fixed
+
+- A blog post's "last modified" date in the sitemap and in search data now changes only when the post's text is edited.
+- llms.txt named Claude Opus 5 as the Octopus Cloud default model. The default is Claude Opus 5.5.
+
+### Security
+
+- The Octopus Cloud site now tells browsers to keep using HTTPS for a year (HSTS). Self-hosted installs are not changed.
+
 ## [1.4.18] - 2026-11-14
 
 ### Fixed
