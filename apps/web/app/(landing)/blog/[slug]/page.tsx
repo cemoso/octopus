@@ -13,7 +13,7 @@ import { BlogAudioPlayer } from "@/components/blog-audio-player";
 import { BlogToc } from "@/components/blog-toc";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { IconArrowLeft } from "@tabler/icons-react";
-import { readingTimeMinutes, extractHeadings, proseWordCount } from "@/lib/blog-reading";
+import { readingTimeMinutes, extractHeadings, proseWordCount, postModifiedAt } from "@/lib/blog-reading";
 import { safeJsonLd } from "@/lib/html";
 
 const DEFAULT_OG_IMAGE = "https://octopus-review.ai/og-image.png";
@@ -86,7 +86,7 @@ export default async function BlogPostPage({
     description: post.excerpt ?? undefined,
     image: [post.coverImageUrl ?? DEFAULT_OG_IMAGE],
     datePublished: post.publishedAt?.toISOString(),
-    dateModified: (post.updatedAt ?? post.publishedAt)?.toISOString(),
+    dateModified: postModifiedAt(post)?.toISOString(),
     wordCount,
     ...(post.tags.length > 0 ? { keywords: post.tags.join(", ") } : {}),
     ...(post.category ? { articleSection: post.category } : {}),

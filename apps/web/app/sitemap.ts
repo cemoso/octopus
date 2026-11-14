@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { prisma } from "@/lib/db";
+import { postModifiedAt } from "@/lib/blog-reading";
 
 export const dynamic = "force-dynamic";
 
@@ -61,12 +62,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   try {
     const blogPosts = await prisma.blogPost.findMany({
       where: { status: "published", deletedAt: null },
-      select: { slug: true, publishedAt: true, updatedAt: true },
+      select: { slug: true, publishedAt: true, contentUpdatedAt: true },
       orderBy: { publishedAt: "desc" },
     });
 
     blogPages = blogPosts.map((post) => {
-      const modified = post.updatedAt ?? post.publishedAt;
+      const modified = postModifiedAt(post);
       return {
         url: `${SITE_URL}/blog/${post.slug}`,
         // Real, verifiable modification date, date-only (no sub-second precision).
