@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@octopus/db";
 import { revalidatePath } from "next/cache";
 import Anthropic from "@anthropic-ai/sdk";
-import { readingTimeMinutes } from "@/lib/blog-reading";
+import { changesPublishedText, readingTimeMinutes } from "@/lib/blog-reading";
 import { hashToken } from "@/lib/api-auth";
 import { hasScopes } from "@/lib/scopes";
 
@@ -369,6 +369,7 @@ export async function PATCH(request: NextRequest) {
       coverImageUrl?: string | null;
       status?: string;
       publishedAt?: Date;
+      contentUpdatedAt?: Date;
       readingTime?: number;
       audioUrl?: string | null;
       tags?: string[];
@@ -432,6 +433,9 @@ export async function PATCH(request: NextRequest) {
         { status: 400 },
       );
     }
+
+    // Only a change readers can see moves the post's "last modified" date.
+    if (changesPublishedText(post, data)) data.contentUpdatedAt = new Date();
 
     const updated = await prisma.blogPost.update({
       where: { id: post.id },

@@ -73,3 +73,25 @@ export function extractHeadings(markdown: string): TocHeading[] {
 
   return headings;
 }
+
+/** Whether an edit changes the text readers see of a post that is already published. */
+export function changesPublishedText(
+  post: { status: string; title: string; content: string; excerpt: string | null },
+  edit: { title?: string; content?: string; excerpt?: string | null },
+): boolean {
+  if (post.status !== "published") return false;
+  return (
+    (edit.title !== undefined && edit.title !== post.title) ||
+    (edit.content !== undefined && edit.content !== post.content) ||
+    (edit.excerpt !== undefined && edit.excerpt !== post.excerpt)
+  );
+}
+
+/**
+ * When a post's text last changed for readers: its last edit after
+ * publication, otherwise its publication. Used for the sitemap's lastmod and
+ * the structured data's dateModified.
+ */
+export function postModifiedAt(post: { contentUpdatedAt: Date | null; publishedAt: Date | null }): Date | null {
+  return post.contentUpdatedAt ?? post.publishedAt;
+}
