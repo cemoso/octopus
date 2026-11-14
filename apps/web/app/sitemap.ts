@@ -30,6 +30,7 @@ const STATIC_PAGES: MetadataRoute.Sitemap = [
   { url: `${SITE_URL}/docs/about`, changeFrequency: "monthly", priority: 0.8 },
   { url: `${SITE_URL}/docs/getting-started`, changeFrequency: "monthly", priority: 0.8 },
   { url: `${SITE_URL}/docs/pricing`, changeFrequency: "weekly", priority: 0.9 },
+  { url: `${SITE_URL}/docs/choosing-a-model`, changeFrequency: "monthly", priority: 0.8 },
   { url: `${SITE_URL}/docs/faq`, changeFrequency: "monthly", priority: 0.7 },
   { url: `${SITE_URL}/docs/github-action`, changeFrequency: "monthly", priority: 0.9 },
   { url: `${SITE_URL}/docs/integrations`, changeFrequency: "monthly", priority: 0.8 },

@@ -23,6 +23,7 @@ const sections: MenuSection[] = [
     items: [
       { href: "/docs/getting-started", label: "Introduction" },
       { href: "/docs/pricing", label: "Pricing" },
+      { href: "/docs/choosing-a-model", label: "Choosing a model" },
     ],
   },
   {
