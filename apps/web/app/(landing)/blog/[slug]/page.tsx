@@ -13,11 +13,11 @@ import { BlogAudioPlayer } from "@/components/blog-audio-player";
 import { BlogToc } from "@/components/blog-toc";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { IconArrowLeft } from "@tabler/icons-react";
-import { readingTimeMinutes, extractHeadings, proseWordCount } from "@/lib/blog-reading";
+import { readingTimeMinutes, extractHeadings, proseWordCount, postModifiedAt } from "@/lib/blog-reading";
 import { safeJsonLd } from "@/lib/html";
 import { relatedPosts } from "@/lib/blog-related";
 
-const DEFAULT_OG_IMAGE = "https://octopus-review.ai/og-image.png";
+import { CARD_SIZE } from "@/lib/og-card";
 
 // Every published post's tags, newest first, to pick related posts from.
 // Read on each request, so a post that is unpublished stops being listed at once.
@@ -37,6 +37,13 @@ async function getPost(slug: string) {
 
 function canonicalUrlFor(slug: string) {
   return `https://octopus-review.ai/blog/${slug}`;
+}
+
+/** The post's cover image, or a card generated from its title when it has none. */
+function socialImage(post: { slug: string; title: string; coverImageUrl: string | null }) {
+  return post.coverImageUrl
+    ? { url: post.coverImageUrl }
+    : { url: `${canonicalUrlFor(post.slug)}/card`, ...CARD_SIZE, alt: post.title };
 }
 
 export async function generateMetadata({
@@ -62,13 +69,13 @@ export async function generateMetadata({
       description: post.excerpt ?? undefined,
       type: "article",
       publishedTime: post.publishedAt?.toISOString(),
-      images: [{ url: post.coverImageUrl ?? DEFAULT_OG_IMAGE }],
+      images: [socialImage(post)],
     },
     twitter: {
       card: "summary_large_image",
       title: post.title,
       description: post.excerpt ?? undefined,
-      images: [post.coverImageUrl ?? DEFAULT_OG_IMAGE],
+      images: [socialImage(post).url],
     },
   };
 }
@@ -96,9 +103,9 @@ export default async function BlogPostPage({
     "@type": "BlogPosting",
     headline: post.title,
     description: post.excerpt ?? undefined,
-    image: [post.coverImageUrl ?? DEFAULT_OG_IMAGE],
+    image: [socialImage(post).url],
     datePublished: post.publishedAt?.toISOString(),
-    dateModified: (post.updatedAt ?? post.publishedAt)?.toISOString(),
+    dateModified: postModifiedAt(post)?.toISOString(),
     wordCount,
     ...(post.tags.length > 0 ? { keywords: post.tags.join(", ") } : {}),
     ...(post.category ? { articleSection: post.category } : {}),

@@ -1322,6 +1322,9 @@ model BlogPost {
   deletedAt     DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  // Last edit of the title, text or summary after publication. updatedAt moves
+  // on any write (tags, audio, a bulk backfill), so it cannot say this.
+  contentUpdatedAt DateTime?
 
   @@index([status, publishedAt])
   @@index([status, category])

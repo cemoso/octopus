@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { proseWordCount, readingTimeMinutes, extractHeadings } from "../blog-reading";
+import { proseWordCount, readingTimeMinutes, extractHeadings, changesPublishedText, postModifiedAt } from "../blog-reading";
 
 describe("proseWordCount", () => {
   it("counts prose words", () => {
@@ -53,5 +53,37 @@ describe("extractHeadings", () => {
     expect(extractHeadings("# Title\n#### Deep\n## Section").map((h) => h.text)).toEqual([
       "Section",
     ]);
+  });
+});
+
+describe("changesPublishedText", () => {
+  const published = { status: "published", title: "Title", content: "Body", excerpt: "Summary" };
+
+  it("is true when the title, the text or the summary of a published post changes", () => {
+    expect(changesPublishedText(published, { title: "New title" })).toBe(true);
+    expect(changesPublishedText(published, { content: "New body" })).toBe(true);
+    expect(changesPublishedText(published, { excerpt: "New summary" })).toBe(true);
+    expect(changesPublishedText(published, { excerpt: null })).toBe(true);
+  });
+
+  it("is false when the same text is sent again, or the edit touches no text", () => {
+    expect(changesPublishedText(published, { title: "Title", content: "Body", excerpt: "Summary" })).toBe(false);
+    // Tags, audio, cover image and category arrive as other fields; none of them is text.
+    expect(changesPublishedText(published, {})).toBe(false);
+  });
+
+  it("is false for a draft: its date starts when it is published", () => {
+    expect(changesPublishedText({ ...published, status: "draft" }, { content: "New body" })).toBe(false);
+  });
+});
+
+describe("postModifiedAt", () => {
+  const published = new Date("2026-03-25T10:00:00Z");
+  const edited = new Date("2026-05-02T09:30:00Z");
+
+  it("is the last text edit when there was one, otherwise the publication date", () => {
+    expect(postModifiedAt({ contentUpdatedAt: edited, publishedAt: published })).toEqual(edited);
+    expect(postModifiedAt({ contentUpdatedAt: null, publishedAt: published })).toEqual(published);
+    expect(postModifiedAt({ contentUpdatedAt: null, publishedAt: null })).toBeNull();
   });
 });
