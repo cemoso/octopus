@@ -16,7 +16,7 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { IconArrowLeft } from "@tabler/icons-react";
 import { readingTimeMinutes, extractHeadings, proseWordCount } from "@/lib/blog-reading";
 import { safeJsonLd } from "@/lib/html";
-import { relatedPosts } from "@/lib/blog-related";
+import { reconcileRelatedCandidates, relatedPosts } from "@/lib/blog-related";
 
 const DEFAULT_OG_IMAGE = "https://octopus-review.ai/og-image.png";
 
@@ -92,7 +92,21 @@ export default async function BlogPostPage({
   const headings = extractHeadings(post.content);
   const minutes = post.readingTime ?? readingTimeMinutes(post.content);
   const wordCount = proseWordCount(post.content);
-  const related = relatedPosts(slug, await getRelatedCandidates());
+  const [cachedCandidates, eligiblePosts] = await Promise.all([
+    getRelatedCandidates(),
+    prisma.blogPost.findMany({
+      where: { status: "published", deletedAt: null },
+      select: { slug: true },
+      orderBy: { publishedAt: "desc" },
+    }),
+  ]);
+  const cachedSlugs = new Set(cachedCandidates.map((candidate) => candidate.slug));
+  const missingSlugs = eligiblePosts.filter((candidate) => !cachedSlugs.has(candidate.slug)).map((candidate) => candidate.slug);
+  const newCandidates = missingSlugs.length ? await prisma.blogPost.findMany({
+    where: { slug: { in: missingSlugs }, status: "published", deletedAt: null },
+    select: { slug: true, title: true, tags: true },
+  }) : [];
+  const related = relatedPosts(slug, reconcileRelatedCandidates(eligiblePosts, cachedCandidates, newCandidates));
 
   const blogPostingJsonLd = {
     "@context": "https://schema.org",
