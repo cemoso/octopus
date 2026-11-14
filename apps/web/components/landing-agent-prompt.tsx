@@ -13,6 +13,40 @@ Follow the returned nextAction and continueWith instructions. If sign-in is requ
 
 Let octp connect this repository, start or join indexing and analysis, and check progress using retryAfterSeconds. Continue until it reports ready or a specific blocker. Report the actual repository, indexing and analysis results. Keep existing organisation settings and never print credentials. Use the browser only for the approvals I need to make.`;
 
+/** The same copy action as the prompt card, for the first screen of the page. */
+export function CopySetupPromptButton() {
+  const [copied, setCopied] = useState(false);
+
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(SETUP_PROMPT);
+      setCopied(true);
+    } catch {
+      // Clipboard blocked: take the visitor to the prompt, selected, to copy by hand.
+      const field = document.getElementById("octopus-setup-prompt") as HTMLTextAreaElement | null;
+      field?.scrollIntoView({ block: "center" });
+      field?.focus();
+      field?.select();
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={copyPrompt}
+        className="inline-flex min-h-12 items-center justify-center gap-2 rounded-full bg-primary px-6 py-3 text-sm font-semibold text-background transition-colors hover:bg-primary/90 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+      >
+        {copied ? <IconCheck className="size-4" aria-hidden="true" /> : <IconCopy className="size-4" aria-hidden="true" />}
+        {copied ? "Prompt copied" : "Copy setup prompt"}
+      </button>
+      <span role="status" className="sr-only">
+        {copied ? "Prompt copied. Paste it into your AI’s session in your project." : ""}
+      </span>
+    </>
+  );
+}
+
 export function LandingAgentPrompt() {
   const promptRef = useRef<HTMLTextAreaElement>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "manual">("idle");
