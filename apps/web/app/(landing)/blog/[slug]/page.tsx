@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ORGANIZATION_ENTITY, blogAuthorJsonLd } from "@/lib/structured-data";
 import { notFound } from "next/navigation";
+import { unstable_cache } from "next/cache";
 import Link from "@/components/link";
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
@@ -15,8 +16,21 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { IconArrowLeft } from "@tabler/icons-react";
 import { readingTimeMinutes, extractHeadings, proseWordCount } from "@/lib/blog-reading";
 import { safeJsonLd } from "@/lib/html";
+import { relatedPosts } from "@/lib/blog-related";
 
 const DEFAULT_OG_IMAGE = "https://octopus-review.ai/og-image.png";
+
+// Every published post's tags, newest first, to pick related posts from.
+const getRelatedCandidates = unstable_cache(
+  async () =>
+    prisma.blogPost.findMany({
+      where: { status: "published", deletedAt: null },
+      select: { slug: true, title: true, tags: true },
+      orderBy: { publishedAt: "desc" },
+    }),
+  ["blog-related-candidates"],
+  { revalidate: 3600 },
+);
 
 async function getPost(slug: string) {
   return prisma.blogPost.findFirst({
@@ -78,6 +92,7 @@ export default async function BlogPostPage({
   const headings = extractHeadings(post.content);
   const minutes = post.readingTime ?? readingTimeMinutes(post.content);
   const wordCount = proseWordCount(post.content);
+  const related = relatedPosts(slug, await getRelatedCandidates());
 
   const blogPostingJsonLd = {
     "@context": "https://schema.org",
@@ -214,6 +229,26 @@ export default async function BlogPostPage({
                   </Link>
                 ))}
               </div>
+            )}
+
+            {related.length > 0 && (
+              <nav aria-label="Related posts" className="mt-10 border-t border-white/[0.06] pt-6">
+                <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#888]">
+                  Related posts
+                </h2>
+                <ul>
+                  {related.map((relatedPost) => (
+                    <li key={relatedPost.slug}>
+                      <Link
+                        href={`/blog/${relatedPost.slug}`}
+                        className="block py-2 text-sm text-[#ccc] transition-colors hover:text-primary"
+                      >
+                        {relatedPost.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
             )}
           </article>
 
