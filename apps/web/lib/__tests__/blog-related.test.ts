@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { reconcileRelatedCandidates, relatedPosts } from "@/lib/blog-related";
+import { relatedPosts } from "@/lib/blog-related";
 
 // Newest first, as the page passes them.
 const posts = [
@@ -51,14 +51,3 @@ it("returns nothing for a post with no tag in common, or an unknown post", () =>
   expect(slugs("no-such-post")).toEqual([]);
 });
 
-it("scores only currently eligible posts, including newly published posts", () => {
-  const cached = [posts[0], posts[1], posts[6]];
-  const newlyPublished = posts[4];
-  const candidates = reconcileRelatedCandidates(
-    [{ slug: newlyPublished.slug }, { slug: posts[0].slug }, { slug: posts[6].slug }],
-    cached,
-    [newlyPublished],
-  );
-  expect(relatedPosts(newlyPublished.slug, candidates).map((post) => post.slug)).toEqual([posts[0].slug]);
-  expect(relatedPosts(posts[0].slug, candidates).map((post) => post.slug)).toEqual([newlyPublished.slug]);
-});

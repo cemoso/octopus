@@ -1,17 +1,5 @@
 export type RelatedCandidate = { slug: string; title: string; tags: string[] };
 
-export function reconcileRelatedCandidates(
-  eligiblePosts: { slug: string }[],
-  cachedCandidates: RelatedCandidate[],
-  newCandidates: RelatedCandidate[],
-): RelatedCandidate[] {
-  const bySlug = new Map([...cachedCandidates, ...newCandidates].map((post) => [post.slug, post]));
-  return eligiblePosts.flatMap(({ slug }) => {
-    const post = bySlug.get(slug);
-    return post ? [post] : [];
-  });
-}
-
 /** "Code Review" and "code-review" are the same tag. */
 const tagKey = (tag: string) => tag.trim().toLowerCase().replace(/\s+/g, "-");
 
