@@ -11,6 +11,7 @@ const pageNames: Record<string, string> = {
   "/docs/integrations": "Integrations",
   "/docs/self-hosting": "Self-Hosting",
   "/docs/pricing": "Pricing",
+  "/docs/choosing-a-model": "Choosing a model",
   "/docs/about": "About",
   "/docs/privacy": "Privacy Policy",
   "/docs/terms": "Terms & Conditions",

@@ -36,6 +36,7 @@ Usage-based. Free credits on signup, no subscription. Octopus Cloud bills AI usa
 - About: https://octopus-review.ai/docs/about
 - Getting started: https://octopus-review.ai/docs/getting-started
 - Pricing: https://octopus-review.ai/docs/pricing
+- Choosing a model: https://octopus-review.ai/docs/choosing-a-model
 - FAQ: https://octopus-review.ai/docs/faq
 - Integrations: https://octopus-review.ai/docs/integrations
 - CLI: https://octopus-review.ai/docs/cli
