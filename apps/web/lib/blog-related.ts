@@ -35,6 +35,7 @@ export function relatedPosts(slug: string, posts: RelatedCandidate[], limit = 3)
       post,
       score: [...new Set(post.tags.map(tagKey))]
         .filter((tag) => mine.has(tag))
+        .sort((a, b) => postsWithTag.get(a)! - postsWithTag.get(b)!)
         .reduce((sum, tag) => sum + Math.log(posts.length / postsWithTag.get(tag)!), 0),
     }))
     .filter((scored) => scored.score > 0)

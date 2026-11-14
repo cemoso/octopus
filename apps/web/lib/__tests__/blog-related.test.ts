@@ -35,6 +35,17 @@ it("keeps to the limit, never lists the post itself, and breaks ties by the give
   expect(slugs("release-notes", 2)).toEqual(["bigger-prs", "ignored-comments"]);
 });
 
+it("keeps input order when equal scores have different tag orders", () => {
+  const candidates = [
+    { slug: "current", title: "Current", tags: ["a", "b", "c"] },
+    { slug: "newer", title: "Newer", tags: ["a", "b", "c"] },
+    { slug: "older", title: "Older", tags: ["c", "b", "a"] },
+    { slug: "other-1", title: "Other 1", tags: ["b", "c"] },
+    { slug: "other-2", title: "Other 2", tags: ["b", "c"] },
+  ];
+  expect(relatedPosts("current", candidates, 2).map((post) => post.slug)).toEqual(["newer", "older"]);
+});
+
 it("returns nothing for a post with no tag in common, or an unknown post", () => {
   expect(slugs("sticker-story")).toEqual([]);
   expect(slugs("no-such-post")).toEqual([]);
