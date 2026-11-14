@@ -278,14 +278,15 @@ Self-hosting: No credits needed. Use your own API keys directly.`,
     sections: [
       {
         heading: "What changes when you change the model",
-        text: `Octopus lets you choose the model that reviews your pull requests, for a whole organisation or for a single repository.
-Cost per review: Octopus Cloud bills AI usage at 2x the provider's list price. Among the models in this guide, list prices run from $1 to $10 per 1M input tokens.
-How long a review takes: most reviews finish in 30 to 90 seconds, and a pull request with hundreds of files can take a few minutes. Higher reasoning effort means a slower review.
-How much reasoning goes into it: some models think before they answer. The Reasoning Effort setting controls how hard those models reason. Models without extended thinking ignore it.`,
+        text: `Octopus lets you choose the model that reviews your pull requests, for a whole organisation or for a single repository. This guide covers what the choice changes and what each model has cost per review. It ends with how to switch.
+Cost per review. Octopus Cloud bills AI usage at 2x the provider's list price. Among the models below, list prices run from $1 to $10 per 1M input tokens.
+How long a review takes. Most reviews finish in 30 to 90 seconds, and a pull request with hundreds of files can take a few minutes. Higher reasoning effort means a slower review.
+How much reasoning goes into it. Some models think before they answer. The Reasoning Effort setting controls how hard those models reason. Models without extended thinking ignore it.`,
       },
       {
         heading: "What each model cost per review",
-        text: `Median amounts charged per review on Octopus Cloud over the 30 days up to 14 November 2026, on platform keys and including the 2x platform rate, with the range that holds the middle half of reviews:
+        text: `These are the median amounts charged per review on Octopus Cloud over the 30 days up to 14 November 2026. They cover reviews on platform keys and include the 2x platform rate. The last column is the range that holds the middle half of reviews.
+Model | Median per review | Middle half of reviews
 Claude Haiku 4.5: $0.09 ($0.07 to $0.11).
 GPT-5.3 Codex: $0.16 ($0.15 to $0.19).
 Qwen3.8-Max: $0.17 ($0.14 to $0.22).
@@ -295,7 +296,7 @@ Claude Opus 5: $1.03 ($0.73 to $1.41).
 Claude Fable 5.2: $1.52 ($1.19 to $2.13).
 GPT-6 Astra: $1.67 ($1.54 to $2.33).
 Claude Fable 5.1: $2.38 ($1.98 to $3.10).
-This is cost data, not quality data: we have not measured which model finds more problems, so nothing here ranks the models on review quality. Each model reviewed the pull requests its own users sent it, so the figures are not a test on identical pull requests. Your figures will depend on the size of your changes.`,
+This is cost data, not quality data: we have not measured which model finds more problems, so nothing here ranks the models on review quality. Each model reviewed the pull requests its own users sent it, so the rows are not a test on identical pull requests. Your figures will depend on the size of your changes.`,
       },
       {
         heading: "Which model to pick",
@@ -311,7 +312,7 @@ If you already pay a provider, add your own API key. Octopus sends requests thro
 For the whole organisation: in Organization Defaults, pick a Review & Chat Model. Reasoning Effort is in the same card.
 For one repository: in Repository Models, find the repository and pick its Review & Chat Model. This overrides the organisation default.
 For your own key: add it under Provider Keys, next to Models in Settings.
-A repository without its own model uses the organisation default. Full guide: https://octopus-review.ai/docs/choosing-a-model.`,
+A repository without its own model uses the organisation default. Provider list prices for every model are on the pricing page.`,
       },
     ],
   },
