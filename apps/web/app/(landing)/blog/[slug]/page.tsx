@@ -15,8 +15,19 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { IconArrowLeft } from "@tabler/icons-react";
 import { readingTimeMinutes, extractHeadings, proseWordCount, postModifiedAt } from "@/lib/blog-reading";
 import { safeJsonLd } from "@/lib/html";
+import { relatedPosts } from "@/lib/blog-related";
 
 import { CARD_SIZE } from "@/lib/og-card";
+
+// Every published post's tags, newest first, to pick related posts from.
+// Read on each request, so a post that is unpublished stops being listed at once.
+function getRelatedCandidates() {
+  return prisma.blogPost.findMany({
+    where: { status: "published", deletedAt: null },
+    select: { slug: true, title: true, tags: true },
+    orderBy: { publishedAt: "desc" },
+  });
+}
 
 async function getPost(slug: string) {
   return prisma.blogPost.findFirst({
@@ -85,6 +96,7 @@ export default async function BlogPostPage({
   const headings = extractHeadings(post.content);
   const minutes = post.readingTime ?? readingTimeMinutes(post.content);
   const wordCount = proseWordCount(post.content);
+  const related = relatedPosts(slug, await getRelatedCandidates());
 
   const blogPostingJsonLd = {
     "@context": "https://schema.org",
@@ -221,6 +233,26 @@ export default async function BlogPostPage({
                   </Link>
                 ))}
               </div>
+            )}
+
+            {related.length > 0 && (
+              <nav aria-label="Related posts" className="mt-10 border-t border-white/[0.06] pt-6">
+                <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-[#888]">
+                  Related posts
+                </h2>
+                <ul>
+                  {related.map((relatedPost) => (
+                    <li key={relatedPost.slug}>
+                      <Link
+                        href={`/blog/${relatedPost.slug}`}
+                        className="block py-2 text-sm text-[#ccc] transition-colors hover:text-primary"
+                      >
+                        {relatedPost.title}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
             )}
           </article>
 
