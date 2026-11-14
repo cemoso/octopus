@@ -14,12 +14,19 @@ export function titleFontSize(title: string): number {
   return 46;
 }
 
+// Read once per process: the file does not change while the server runs.
+let logo: Promise<string> | undefined;
+function logoBase64(): Promise<string> {
+  logo ??= readFile(join(process.cwd(), "public/web-app-manifest-192x192.png")).then((file) => file.toString("base64"));
+  return logo;
+}
+
 /**
  * A 1200x630 social preview card: the page's title on the site's dark
  * background with the logo, and a short line saying where the link leads.
  */
 export async function titleCard(title: string, label: string): Promise<ImageResponse> {
-  const logo = await readFile(join(process.cwd(), "public/web-app-manifest-192x192.png"));
+  const logoData = await logoBase64();
   const shown = title.length > MAX_TITLE ? `${title.slice(0, MAX_TITLE - 1).trimEnd()}…` : title;
   return new ImageResponse(
     (
@@ -36,7 +43,7 @@ export async function titleCard(title: string, label: string): Promise<ImageResp
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12, fontSize: 38 }}>
-          <img src={`data:image/png;base64,${logo.toString("base64")}`} width={96} height={96} alt="" />
+          <img src={`data:image/png;base64,${logoData}`} width={96} height={96} alt="" />
           Octopus
         </div>
         <div style={{ display: "flex", fontSize: titleFontSize(shown), lineHeight: 1.15, letterSpacing: -1.5 }}>
