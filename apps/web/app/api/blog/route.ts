@@ -434,7 +434,7 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    // Only a change readers can see moves the post's "last modified" date.
+    // Only published text edits move the post's "last modified" date.
     if (changesPublishedText(post, data)) data.contentUpdatedAt = new Date();
 
     const updated = await prisma.blogPost.update({
